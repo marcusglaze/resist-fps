@@ -1,0 +1,115 @@
+/* Doom-like styling for game UI */
+
+/* Set base styles */
+body {
+  margin: 0;
+  overflow: hidden;
+  font-family: 'Courier New', monospace;
+  background-color: #000;
+}
+
+/* Make canvas pixelated */
+canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* Style the health display to look like Doom HUD */
+.health-display {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  height: 25px;
+  width: 200px;
+  border: 3px solid #444 !important;
+  background-color: #000 !important;
+  border-radius: 0 !important;
+  box-shadow: inset 0 0 5px #000, 0 0 5px #000;
+  overflow: hidden;
+}
+
+.health-bar {
+  background: linear-gradient(to bottom, #f00, #900) !important;
+  height: 100%;
+  transition: width 0.2s;
+}
+
+.health-text {
+  font-family: 'Courier New', monospace !important;
+  font-weight: bold !important;
+  text-shadow: 2px 2px 0 #000 !important;
+  font-size: 16px !important;
+}
+
+/* Style the crosshair to look like Doom's */
+.crosshair {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.crosshair div {
+  background-color: #f00 !important;
+}
+
+/* Style the interaction prompt */
+.interaction-prompt {
+  font-family: 'Courier New', monospace !important;
+  background-color: rgba(0, 0, 0, 0.7) !important;
+  border: 2px solid #f00;
+  padding: 8px 15px !important;
+  color: #f00 !important;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
+/* Style the status display */
+.status-display {
+  font-family: 'Courier New', monospace !important;
+  background-color: rgba(0, 0, 0, 0.8) !important;
+  border: 2px solid #444;
+  text-transform: uppercase;
+}
+
+/* Style the start button */
+#start-game {
+  background-color: #f00 !important;
+  border: 3px solid #900 !important;
+  color: #fff !important;
+  font-family: 'Impact', fantasy !important;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  transform: scaleY(1.2);
+  text-shadow: 2px 2px 0 #000;
+  box-shadow: 5px 5px 0 #000;
+  transition: all 0.1s;
+}
+
+#start-game:hover {
+  background-color: #d00 !important;
+  transform: scaleY(1.2) scale(1.05);
+}
+
+#start-game:active {
+  background-color: #900 !important;
+  transform: scaleY(1.2) scale(0.98);
+  box-shadow: 3px 3px 0 #000;
+}
+
+/* Death screen styling */
+.death-screen {
+  background-color: rgba(80, 0, 0, 0.8) !important;
+}
+
+.death-screen div {
+  font-family: 'Impact', fantasy !important;
+  letter-spacing: 5px;
+  color: #f00 !important;
+  text-shadow: 4px 4px 0 #000;
+  transform: scaleY(1.2);
+}
+
+/* Damage overlay */
+.damage-overlay {
+  background: radial-gradient(circle, rgba(255,0,0,0.3) 0%, rgba(255,0,0,0) 70%) !important;
+} 
+ 

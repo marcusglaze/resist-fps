@@ -1,0 +1,194 @@
+{
+    "metadata": {
+      "version": 4.5,
+      "type": "Object",
+      "generator": "Grok 3 by xAI"
+    },
+    "geometries": [
+      {
+        "uuid": "geom-001",
+        "type": "BoxGeometry",
+        "width": 4,
+        "height": 0.1,
+        "depth": 3,
+        "data": {
+          "attributes": {
+            "position": [
+              -2, -0.05, -1.5, 2, -0.05, -1.5, 2, -0.05, 1.5, -2, -0.05, 1.5,
+              -2, 0.05, -1.5, 2, 0.05, -1.5, 2, 0.05, 1.5, -2, 0.05, 1.5
+            ],
+            "itemSize": 3
+          },
+          "index": [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4, 0, 3, 7, 7, 4, 0, 1, 5, 6, 6, 2, 1]
+        }
+      },
+      {
+        "uuid": "geom-002",
+        "type": "BoxGeometry",
+        "width": 0.1,
+        "height": 2,
+        "depth": 0.1,
+        "data": {
+          "attributes": {
+            "position": [
+              -0.05, -1, -0.05, 0.05, -1, -0.05, 0.05, -1, 0.05, -0.05, -1, 0.05,
+              -0.05, 1, -0.05, 0.05, 1, -0.05, 0.05, 1, 0.05, -0.05, 1, 0.05
+            ],
+            "itemSize": 3
+          },
+          "index": [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4, 0, 3, 7, 7, 4, 0, 1, 5, 6, 6, 2, 1]
+        }
+      },
+      {
+        "uuid": "geom-003",
+        "type": "BoxGeometry",
+        "width": 2.5,
+        "height": 2,
+        "depth": 0.1,
+        "data": {
+          "attributes": {
+            "position": [
+              -1.25, -1, -0.05, 1.25, -1, -0.05, 1.25, -1, 0.05, -1.25, -1, 0.05,
+              -1.25, 1, -0.05, 1.25, 1, -0.05, 1.25, 1, 0.05, -1.25, 1, 0.05
+            ],
+            "itemSize": 3
+          },
+          "index": [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4, 0, 3, 7, 7, 4, 0, 1, 5, 6, 6, 2, 1]
+        }
+      },
+      {
+        "uuid": "geom-004",
+        "type": "BoxGeometry",
+        "width": 0.5,
+        "height": 2,
+        "depth": 0.1,
+        "data": {
+          "attributes": {
+            "position": [
+              -0.25, -1, -0.05, 0.25, -1, -0.05, 0.25, -1, 0.05, -0.25, -1, 0.05,
+              -0.25, 1, -0.05, 0.25, 1, -0.05, 0.25, 1, 0.05, -0.25, 1, 0.05
+            ],
+            "itemSize": 3
+          },
+          "index": [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4, 0, 3, 7, 7, 4, 0, 1, 5, 6, 6, 2, 1]
+        }
+      },
+      {
+        "uuid": "geom-005",
+        "type": "BoxGeometry",
+        "width": 2,
+        "height": 0.5,
+        "depth": 1.5,
+        "data": {
+          "attributes": {
+            "position": [
+              -1, -0.25, -0.75, 1, -0.25, -0.75, 1, -0.25, 0.75, -1, -0.25, 0.75,
+              -1, 0.25, -0.75, 1, 0.25, -0.75, 1, 0.25, 0.75, -1, 0.25, 0.75
+            ],
+            "itemSize": 3
+          },
+          "index": [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4, 0, 3, 7, 7, 4, 0, 1, 5, 6, 6, 2, 1]
+        }
+      }
+    ],
+    "materials": [
+      {
+        "uuid": "mat-001",
+        "type": "MeshLambertMaterial",
+        "color": 3119519
+      },
+      {
+        "uuid": "mat-002",
+        "type": "MeshLambertMaterial",
+        "color": 15792832
+      }
+    ],
+    "object": {
+      "uuid": "scene-001",
+      "type": "Scene",
+      "name": "AndrewsBedroom",
+      "children": [
+        {
+          "uuid": "floor-001",
+          "type": "Mesh",
+          "name": "AndrewsBedroomFloor",
+          "geometry": "geom-001",
+          "material": "mat-001",
+          "position": [2, 0, 1.5]
+        },
+        {
+          "uuid": "wall-001",
+          "type": "Mesh",
+          "name": "LeftWall",
+          "geometry": "geom-002",
+          "material": "mat-001",
+          "position": [0.05, 1, 1.5],
+          "scale": [1, 1, 30]
+        },
+        {
+          "uuid": "wall-002",
+          "type": "Mesh",
+          "name": "TopWall",
+          "geometry": "geom-002",
+          "material": "mat-001",
+          "position": [2, 1, 2.95],
+          "scale": [40, 1, 1]
+        },
+        {
+          "uuid": "wall-003",
+          "type": "Mesh",
+          "name": "RightWall",
+          "geometry": "geom-002",
+          "material": "mat-001",
+          "position": [3.95, 1, 1.5],
+          "scale": [1, 1, 30]
+        },
+        {
+          "uuid": "wall-004",
+          "type": "Mesh",
+          "name": "BottomWallLeft",
+          "geometry": "geom-003",
+          "material": "mat-001",
+          "position": [1.25, 1, 0.05]
+        },
+        {
+          "uuid": "wall-005",
+          "type": "Mesh",
+          "name": "BottomWallRight",
+          "geometry": "geom-004",
+          "material": "mat-001",
+          "position": [3.75, 1, 0.05]
+        },
+        {
+          "uuid": "furn-001",
+          "type": "Mesh",
+          "name": "Bed",
+          "geometry": "geom-005",
+          "material": "mat-002",
+          "position": [2, 0.25, 1]
+        },
+        {
+          "uuid": "light-001",
+          "type": "AmbientLight",
+          "color": 16777215,
+          "intensity": 0.5
+        },
+        {
+          "uuid": "light-002",
+          "type": "DirectionalLight",
+          "color": 16777215,
+          "intensity": 0.8,
+          "position": [2, 3, 1.5]
+        },
+        {
+          "uuid": "camera-001",
+          "type": "PerspectiveCamera",
+          "fov": 75,
+          "aspect": 1.33,
+          "near": 0.1,
+          "far": 1000,
+          "position": [2, 3, 3]
+        }
+      ]
+    }
+  }

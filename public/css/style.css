@@ -1,0 +1,62 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden; /* Prevents scrollbars */
+    font-family: Arial, sans-serif;
+}
+
+#container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+canvas {
+    display: block; /* Removes inline gap */
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.info {
+    display: none !important; /* Hide the info panel completely */
+}
+
+.crosshair {
+    /* Keep crosshair styling */
+}
+
+/* Hide all tutorial and instruction elements */
+.weapon-guide,
+.instructions,
+.tutorial,
+.info-panel,
+.help-text,
+.window-status,
+.status-display .window-status {
+    display: none !important;
+}
+
+.info h1 {
+    font-size: 24px;
+    margin-bottom: 10px;
+}
+
+.info p {
+    font-size: 16px;
+} 
+ 
