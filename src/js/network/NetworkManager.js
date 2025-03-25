@@ -441,30 +441,28 @@ export class NetworkManager {
    */
   registerServer(hostId) {
     try {
-      // Get existing server list
-      let serverList = JSON.parse(localStorage.getItem('serverList') || '[]');
-      
-      // Clean up old servers (older than 5 minutes)
-      const now = Date.now();
-      serverList = serverList.filter(server => {
-        return now - server.timestamp < 5 * 60 * 1000;
+      // Register server with the API
+      fetch('/api/servers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: hostId,
+          name: this.serverName,
+          playerCount: 1
+        }),
+      })
+      .then(response => response.json())
+      .then(data => {
+        console.log("Registered server in public list:", hostId);
+        
+        // Start the server list update interval to keep it fresh
+        this.startServerListUpdates();
+      })
+      .catch(err => {
+        console.error("Error registering server:", err);
       });
-      
-      // Add this server
-      serverList.push({
-        id: hostId,
-        name: this.serverName,
-        playerCount: 1, // Start with just the host
-        timestamp: now
-      });
-      
-      // Save back to storage
-      localStorage.setItem('serverList', JSON.stringify(serverList));
-      
-      // Start the server list update interval to keep it fresh
-      this.startServerListUpdates();
-      
-      console.log("Registered server in public list:", hostId);
     } catch (err) {
       console.error("Error registering server:", err);
     }
@@ -484,19 +482,21 @@ export class NetworkManager {
       if (!this.isHost || !this.hostId) return;
       
       try {
-        // Get existing server list
-        const serverList = JSON.parse(localStorage.getItem('serverList') || '[]');
-        
-        // Find this server
-        const serverIndex = serverList.findIndex(server => server.id === this.hostId);
-        if (serverIndex !== -1) {
-          // Update player count and timestamp
-          serverList[serverIndex].playerCount = this.remotePlayers.size + 1;
-          serverList[serverIndex].timestamp = Date.now();
-          
-          // Save back to storage
-          localStorage.setItem('serverList', JSON.stringify(serverList));
-        }
+        // Update server info with current player count
+        fetch(`/api/servers/${this.hostId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: this.serverName,
+            playerCount: this.remotePlayers.size + 1
+          }),
+        })
+        .then(response => response.json())
+        .catch(err => {
+          console.error("Error updating server list:", err);
+        });
       } catch (err) {
         console.error("Error updating server list:", err);
       }
@@ -515,16 +515,16 @@ export class NetworkManager {
     if (!this.isHost || !this.hostId) return;
     
     try {
-      // Get existing server list
-      let serverList = JSON.parse(localStorage.getItem('serverList') || '[]');
-      
-      // Remove this server
-      serverList = serverList.filter(server => server.id !== this.hostId);
-      
-      // Save back to storage
-      localStorage.setItem('serverList', JSON.stringify(serverList));
-      
-      console.log("Removed server from public list:", this.hostId);
+      // Remove server from API
+      fetch(`/api/servers/${this.hostId}`, {
+        method: 'DELETE',
+      })
+      .then(() => {
+        console.log("Removed server from public list:", this.hostId);
+      })
+      .catch(err => {
+        console.error("Error removing server from list:", err);
+      });
     } catch (err) {
       console.error("Error removing server from list:", err);
     }
@@ -532,27 +532,26 @@ export class NetworkManager {
   
   /**
    * Get the list of available servers
-   * @returns {Array} Array of server objects
+   * @returns {Promise<Array>} Promise resolving to array of server objects
    */
   getServerList() {
-    try {
-      // Get server list
-      let serverList = JSON.parse(localStorage.getItem('serverList') || '[]');
-      
-      // Clean up old servers (older than 5 minutes)
-      const now = Date.now();
-      serverList = serverList.filter(server => {
-        return now - server.timestamp < 5 * 60 * 1000;
-      });
-      
-      // Save cleaned list
-      localStorage.setItem('serverList', JSON.stringify(serverList));
-      
-      return serverList;
-    } catch (err) {
-      console.error("Error getting server list:", err);
-      return [];
-    }
+    return new Promise((resolve, reject) => {
+      try {
+        // Get server list from API
+        fetch('/api/servers')
+          .then(response => response.json())
+          .then(serverList => {
+            resolve(serverList);
+          })
+          .catch(err => {
+            console.error("Error getting server list:", err);
+            resolve([]);
+          });
+      } catch (err) {
+        console.error("Error getting server list:", err);
+        resolve([]);
+      }
+    });
   }
 
   /**
@@ -561,6 +560,23 @@ export class NetworkManager {
    */
   setServerName(name) {
     this.serverName = name;
+    
+    // If we're hosting, update the server info
+    if (this.isHost && this.hostId) {
+      fetch(`/api/servers/${this.hostId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: name,
+          playerCount: this.remotePlayers.size + 1
+        }),
+      })
+      .catch(err => {
+        console.error("Error updating server name:", err);
+      });
+    }
   }
   
   /**
@@ -615,18 +631,6 @@ export class NetworkManager {
     nameInput.style.border = '1px solid #444';
     nameInput.oninput = () => {
       this.setServerName(nameInput.value);
-      
-      // Update server name in list
-      try {
-        const serverList = JSON.parse(localStorage.getItem('serverList') || '[]');
-        const serverIndex = serverList.findIndex(server => server.id === hostId);
-        if (serverIndex !== -1) {
-          serverList[serverIndex].name = nameInput.value;
-          localStorage.setItem('serverList', JSON.stringify(serverList));
-        }
-      } catch (err) {
-        console.error("Error updating server name:", err);
-      }
     };
     dialog.appendChild(nameInput);
     
@@ -835,59 +839,80 @@ export class NetworkManager {
       // Clear current list
       serverListContainer.innerHTML = '';
       
+      // Show loading indicator
+      const loadingIndicator = document.createElement('div');
+      loadingIndicator.textContent = 'Loading servers...';
+      loadingIndicator.style.padding = '15px';
+      loadingIndicator.style.textAlign = 'center';
+      serverListContainer.appendChild(loadingIndicator);
+      
       // Get server list
-      const servers = this.getServerList();
-      
-      if (servers.length === 0) {
-        const noServers = document.createElement('div');
-        noServers.textContent = 'No active servers found. Try refreshing or host your own game!';
-        noServers.style.padding = '15px';
-        noServers.style.color = '#aaa';
-        noServers.style.textAlign = 'center';
-        serverListContainer.appendChild(noServers);
-        return;
-      }
-      
-      // Add each server to the list
-      servers.forEach(server => {
-        const serverItem = document.createElement('div');
-        serverItem.style.padding = '10px';
-        serverItem.style.margin = '5px 0';
-        serverItem.style.borderRadius = '5px';
-        serverItem.style.backgroundColor = '#333';
-        serverItem.style.cursor = 'pointer';
-        serverItem.style.transition = 'background-color 0.2s';
-        
-        // Name and player count
-        const serverInfo = document.createElement('div');
-        serverInfo.textContent = `${server.name} - ${server.playerCount} player(s) online`;
-        serverInfo.style.marginBottom = '5px';
-        serverItem.appendChild(serverInfo);
-        
-        // Server ID (truncated)
-        const serverId = document.createElement('div');
-        serverId.textContent = `ID: ${this.truncateId(server.id)}`;
-        serverId.style.fontSize = '12px';
-        serverId.style.color = '#aaa';
-        serverItem.appendChild(serverId);
-        
-        // Hover effect
-        serverItem.onmouseover = () => {
-          serverItem.style.backgroundColor = '#444';
-        };
-        
-        serverItem.onmouseout = () => {
-          serverItem.style.backgroundColor = '#333';
-        };
-        
-        // Join on click
-        serverItem.onclick = () => {
-          document.body.removeChild(modal);
-          this.joinGame(server.id);
-        };
-        
-        serverListContainer.appendChild(serverItem);
-      });
+      this.getServerList()
+        .then(servers => {
+          // Clear loading indicator
+          serverListContainer.innerHTML = '';
+          
+          if (servers.length === 0) {
+            const noServers = document.createElement('div');
+            noServers.textContent = 'No active servers found. Try refreshing or host your own game!';
+            noServers.style.padding = '15px';
+            noServers.style.color = '#aaa';
+            noServers.style.textAlign = 'center';
+            serverListContainer.appendChild(noServers);
+            return;
+          }
+          
+          // Add each server to the list
+          servers.forEach(server => {
+            const serverItem = document.createElement('div');
+            serverItem.style.padding = '10px';
+            serverItem.style.margin = '5px 0';
+            serverItem.style.borderRadius = '5px';
+            serverItem.style.backgroundColor = '#333';
+            serverItem.style.cursor = 'pointer';
+            serverItem.style.transition = 'background-color 0.2s';
+            
+            // Name and player count
+            const serverInfo = document.createElement('div');
+            serverInfo.textContent = `${server.name} - ${server.playerCount} player(s) online`;
+            serverInfo.style.marginBottom = '5px';
+            serverItem.appendChild(serverInfo);
+            
+            // Server ID (truncated)
+            const serverId = document.createElement('div');
+            serverId.textContent = `ID: ${this.truncateId(server.id)}`;
+            serverId.style.fontSize = '12px';
+            serverId.style.color = '#aaa';
+            serverItem.appendChild(serverId);
+            
+            // Hover effect
+            serverItem.onmouseover = () => {
+              serverItem.style.backgroundColor = '#444';
+            };
+            
+            serverItem.onmouseout = () => {
+              serverItem.style.backgroundColor = '#333';
+            };
+            
+            // Join on click
+            serverItem.onclick = () => {
+              document.body.removeChild(modal);
+              this.joinGame(server.id);
+            };
+            
+            serverListContainer.appendChild(serverItem);
+          });
+        })
+        .catch(error => {
+          serverListContainer.innerHTML = '';
+          const errorMessage = document.createElement('div');
+          errorMessage.textContent = 'Error loading servers. Please try again.';
+          errorMessage.style.padding = '15px';
+          errorMessage.style.color = '#f44336';
+          errorMessage.style.textAlign = 'center';
+          serverListContainer.appendChild(errorMessage);
+          console.error("Error loading servers:", error);
+        });
     }
     
     // Bind the refreshServerList function to this NetworkManager instance
