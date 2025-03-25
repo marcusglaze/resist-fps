@@ -761,9 +761,17 @@ export class Engine {
       document.body.removeChild(pauseMenu);
     }
     
-    // Unpause enemies
+    // Unpause enemies and refresh player reference
     if (this.scene.room && this.scene.room.enemyManager) {
-      this.scene.room.enemyManager.setPaused(false);
+      const enemyManager = this.scene.room.enemyManager;
+      
+      // Reset player reference in enemy manager and all enemies
+      if (this.controls) {
+        enemyManager.setPlayer(this.controls);
+      }
+      
+      // Unpause enemy manager
+      enemyManager.setPaused(false);
     }
     
     // Show mobile controls if needed

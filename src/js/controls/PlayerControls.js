@@ -109,6 +109,7 @@ export class PlayerControls {
     // Health
     this.health = 100;
     this.maxHealth = 100;
+    this.healthAccumulator = 0; // For tracking fractional health regeneration
     this.dead = false;
     this.healthRegenRate = 5; // Health regeneration per second
     this.healthRegenDelay = 5; // Seconds to wait before regenerating health
@@ -730,17 +731,29 @@ export class PlayerControls {
       // Start regenerating health
       this.isRegenerating = true;
       
-      // Calculate health increase for this frame
-      const healthIncrease = this.regenerationRate * delta;
+      // Track accumulated health to make sure we increase by whole numbers
+      if (!this.healthAccumulator) {
+        this.healthAccumulator = 0;
+      }
       
-      // Apply regeneration
-      this.health = Math.min(this.maxHealth, this.health + healthIncrease);
+      // Calculate health increase for this frame and add to accumulator
+      this.healthAccumulator += this.regenerationRate * delta;
       
-      // Update health display
-      this.updateHealthDisplay();
-      
-      // Show regeneration effect if health is actively increasing
-      if (healthIncrease > 0) {
+      // When accumulator reaches 1 or more, increase health by that many points
+      if (this.healthAccumulator >= 1) {
+        // Extract whole number (integer) part
+        const healthToAdd = Math.floor(this.healthAccumulator);
+        
+        // Keep only the fractional part in the accumulator
+        this.healthAccumulator -= healthToAdd;
+        
+        // Apply regeneration as whole number
+        this.health = Math.min(this.maxHealth, this.health + healthToAdd);
+        
+        // Update health display
+        this.updateHealthDisplay();
+        
+        // Show regeneration effect
         this.showRegenerationEffect();
       }
     } else {
@@ -1207,14 +1220,16 @@ export class PlayerControls {
   }
 
   /**
-   * Damage the player
-   * @param {number} damage - Amount of damage to inflict
+   * Take damage from enemies or environment
+   * @param {number} damage - Amount of damage to take
    */
   takeDamage(damage) {
     // Don't take damage if dead or in god mode
     if (this.isDead || this.godMode) return;
     
-    this.health = Math.max(0, this.health - damage);
+    // Convert damage to an integer and apply it
+    const damageTaken = Math.floor(damage);
+    this.health = Math.max(0, this.health - damageTaken);
     
     // Play damage sound
     this.playDamageSound();
@@ -1222,6 +1237,7 @@ export class PlayerControls {
     // Reset regeneration timer
     this.lastDamageTime = performance.now() / 1000;
     this.isRegenerating = false;
+    this.healthAccumulator = 0; // Reset health accumulator
     
     // Update health display
     this.updateHealthDisplay();
@@ -3245,6 +3261,7 @@ export class PlayerControls {
     this.lastDamageTime = 0;
     this.regenEffectActive = false;
     this.isRegenerating = false;
+    this.healthAccumulator = 0;
     
     // Update the health bar UI
     this.updateHealthDisplay();
