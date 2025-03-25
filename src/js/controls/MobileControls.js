@@ -15,6 +15,7 @@ export class MobileControls {
     this.isAiming = false;
     this.lastTouchPosition = { x: 0, y: 0 };
     this.touchStartTime = 0;
+    this.isActive = false; // Controls not active by default
     
     // Initialize if on mobile
     if (this.isMobile) {
@@ -43,6 +44,9 @@ export class MobileControls {
     
     // Add touch event listeners
     this.addTouchEventListeners();
+    
+    // Hide the controls initially (create them but don't show them yet)
+    this.toggleControls(false);
     
     // Flag for initialization
     this.isInitialized = true;
@@ -250,6 +254,11 @@ export class MobileControls {
    * @param {TouchEvent} event - Touch event
    */
   handleTouchStart(event) {
+    // Skip processing if controls are not active or game is paused
+    if (!this.isActive || (this.playerControls.gameEngine && this.playerControls.gameEngine.isPaused)) {
+      return;
+    }
+    
     event.preventDefault();
     
     // Check each touch point
@@ -312,6 +321,11 @@ export class MobileControls {
    * @param {TouchEvent} event - Touch event
    */
   handleTouchMove(event) {
+    // Skip processing if controls are not active or game is paused
+    if (!this.isActive || (this.playerControls.gameEngine && this.playerControls.gameEngine.isPaused)) {
+      return;
+    }
+    
     event.preventDefault();
     
     // Check each touch point
@@ -341,6 +355,11 @@ export class MobileControls {
    * @param {TouchEvent} event - Touch event
    */
   handleTouchEnd(event) {
+    // Skip processing if controls are not active or game is paused
+    if (!this.isActive || (this.playerControls.gameEngine && this.playerControls.gameEngine.isPaused)) {
+      return;
+    }
+    
     // If all touches are gone, reset joystick
     if (event.touches.length === 0) {
       this.resetJoystick();
@@ -614,5 +633,56 @@ export class MobileControls {
     this.touchControls.runButton.style.display = display;
     this.touchControls.prevWeaponButton.style.display = display;
     this.touchControls.nextWeaponButton.style.display = display;
+  }
+  
+  /**
+   * Enable all mobile controls
+   */
+  show() {
+    // Show the control elements
+    this.toggleControls(true);
+    
+    // Enable controls processing
+    this.isActive = true;
+    
+    console.log("Mobile controls enabled");
+  }
+  
+  /**
+   * Disable all mobile controls
+   */
+  hide() {
+    // Hide the control elements
+    this.toggleControls(false);
+    
+    // Disable controls processing
+    this.isActive = false;
+    
+    // Reset states to prevent stuck input
+    this.resetJoystick();
+    this.isDraggingJoystick = false;
+    this.isAiming = false;
+    
+    // Reset player control states
+    if (this.playerControls) {
+      this.playerControls.moveForward = false;
+      this.playerControls.moveBackward = false;
+      this.playerControls.moveLeft = false;
+      this.playerControls.moveRight = false;
+      this.playerControls.shooting = false;
+      this.playerControls.running = false;
+      
+      // Reset key states
+      if (this.playerControls.keys) {
+        this.playerControls.keys.f = false;
+      }
+      
+      // Stop weapon sound
+      if (typeof this.playerControls.stopWeaponSound === 'function') {
+        this.playerControls.stopWeaponSound();
+      }
+    }
+    
+    console.log("Mobile controls disabled");
   }
 } 

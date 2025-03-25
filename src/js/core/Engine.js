@@ -337,8 +337,10 @@ export class Engine {
    * Show mobile controls if we're on a mobile device and in-game
    */
   showMobileControlsIfNeeded() {
-    if (this.isMobileDevice() && this.isGameStarted && !this.isPaused && this.mobileControls) {
-      this.mobileControls.show();
+    if (this.isMobileDevice() && this.isGameStarted && !this.isPaused && !this.isGameOver) {
+      if (this.controls && this.controls.mobileControls) {
+        this.controls.mobileControls.show();
+      }
     }
   }
 
@@ -346,8 +348,8 @@ export class Engine {
    * Hide mobile controls
    */
   hideMobileControls() {
-    if (this.mobileControls) {
-      this.mobileControls.hide();
+    if (this.controls && this.controls.mobileControls) {
+      this.controls.mobileControls.hide();
     }
   }
 
@@ -713,7 +715,13 @@ export class Engine {
    * @param {KeyboardEvent} event 
    */
   handleKeyDown(event) {
+    // Only handle Escape if the game is active and not over
     if (event.code === 'Escape' && this.isGameStarted && !this.isGameOver) {
+      // Prevent default behavior (which exits pointer lock)
+      event.preventDefault();
+      event.stopPropagation();
+      
+      // Toggle pause state
       this.togglePause();
     }
   }
@@ -768,6 +776,11 @@ export class Engine {
       // Reset player reference in enemy manager and all enemies
       if (this.controls) {
         enemyManager.setPlayer(this.controls);
+        
+        // Explicitly update player reference for all existing enemies
+        enemyManager.enemies.forEach(enemy => {
+          enemy.setPlayer(this.controls);
+        });
       }
       
       // Unpause enemy manager
@@ -777,12 +790,11 @@ export class Engine {
     // Show mobile controls if needed
     this.showMobileControlsIfNeeded();
     
-    // Lock pointer again after a short delay
-    setTimeout(() => {
-      if (this.isGameStarted && !this.isPaused && !this.isGameOver) {
-        this.controls.lockPointer();
-      }
-    }, 100);
+    // Lock pointer immediately
+    if (this.isGameStarted && !this.isPaused && !this.isGameOver) {
+      // Force pointer lock
+      this.lockPointer();
+    }
   }
   
   /**

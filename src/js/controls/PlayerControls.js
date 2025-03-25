@@ -1540,6 +1540,21 @@ export class PlayerControls {
       this.isLocked = false;
     }
   }
+  
+  /**
+   * Release pointer lock to allow cursor movement
+   */
+  unlockPointer() {
+    if (document.exitPointerLock) {
+      document.exitPointerLock();
+    } else if (document.mozExitPointerLock) {
+      document.mozExitPointerLock();
+    } else if (document.webkitExitPointerLock) {
+      document.webkitExitPointerLock();
+    }
+    
+    this.isLocked = false;
+  }
 
   /**
    * Add points to the player's score
