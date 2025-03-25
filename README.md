@@ -1,68 +1,102 @@
-# 3D Room Explorer
+# Resist Matrix
 
-A Three.js application that lets you walk around a 3D room with windows in first-person view.
+A 3D multiplayer zombie survival game built with Three.js.
 
 ## Features
 
-- 3D room with textured walls, floor, and ceiling
-- Windows with glass panes
-- First-person controls (WASD + mouse look)
-- Modern ES6+ code with modular organization
-- Realistic lighting and shadows
+- First-person 3D gameplay
+- Zombie combat mechanics
+- Multiplayer gameplay with server hosting/joining
+- Round-based zombie spawning
+- Weapons system
+- Mystery box weapon pickups
+- Destructible windows
+- Mobile and desktop support
 
-## Project Structure
+## Development Setup
 
-```
-├── public/               # Static assets
-│   ├── index.html        # HTML entry point
-│   └── css/              # CSS styles
-├── src/                  # Source code
-│   └── js/               # JavaScript files
-│       ├── core/         # Core engine classes
-│       │   ├── Engine.js    # Main engine
-│       │   ├── Scene.js     # Scene management
-│       │   └── Renderer.js  # Rendering
-│       ├── objects/      # 3D objects
-│       │   ├── Room.js      # Room geometry
-│       │   └── Window.js    # Window geometry
-│       ├── controls/     # Player controls
-│       │   └── PlayerControls.js # First-person controls
-│       └── main.js       # Application entry point
+Clone the repository:
+
+```bash
+git clone <your-repo-url>
+cd resist-matrix
 ```
 
-## How to Run
+Install dependencies:
 
-1. Install dependencies:
-   ```
-   npm install
-   ```
+```bash
+npm install
+```
 
-2. Start the development server:
-   ```
-   npm start
-   ```
+Run the development server:
 
-3. Build for production:
-   ```
-   npm run build
-   ```
+```bash
+npm run dev
+```
+
+The game will open in your default browser at http://localhost:8080.
+
+## Build for Production
+
+```bash
+npm run build
+```
+
+This will create a `dist` folder with the bundled application.
+
+## Deployment to Heroku
+
+### Prerequisites
+
+- [Heroku CLI](https://devcenter.heroku.com/articles/heroku-cli)
+- Git
+
+### Steps
+
+1. Log in to Heroku:
+
+```bash
+heroku login
+```
+
+2. Create a new Heroku app:
+
+```bash
+heroku create your-app-name
+```
+
+3. Push your code to Heroku:
+
+```bash
+git push heroku main
+```
+
+4. Open your app:
+
+```bash
+heroku open
+```
+
+## Multiplayer Setup
+
+The game supports multiplayer via peer-to-peer connections:
+
+1. One player hosts a game by clicking "Host Game"
+2. The host shares their game ID with other players
+3. Other players join by clicking "Join Game" and entering the host ID
+4. The host starts the game when all players are connected
 
 ## Controls
 
-- **W** - Move forward
-- **A** - Move left
-- **S** - Move backward
-- **D** - Move right
-- **Mouse** - Look around (click in the scene to enable)
+- WASD: Move
+- Mouse: Look around
+- Left Click: Shoot
+- R: Reload
+- 1,2,3: Switch weapons
+- E: Interact with windows/mystery box
+- Space: Jump
+- Shift: Run
 
-## Technologies Used
+## License
 
-- Three.js
-- JavaScript (ES6+)
-- Webpack
-- Babel 
- 
- 
- 
- 
- 
+ISC 
