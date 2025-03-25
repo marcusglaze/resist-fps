@@ -33,7 +33,7 @@ server.setTimeout(30000); // 30 seconds timeout
 // Set up PeerJS server with better configuration for Heroku
 const peerServer = ExpressPeerServer(server, {
   debug: true,
-  path: '/peerjs',
+  path: '/',
   allow_discovery: true, // Enable peer discovery
   proxied: true, // Important for Heroku
   pingInterval: 20000, // Send ping every 20 seconds

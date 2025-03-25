@@ -11,7 +11,8 @@
   },
   "proxies": {
     "/peerjs/": {
-      "origin": "${URL}/peerjs/"
+      "origin": "${URL}/peerjs/",
+      "websocket": true
     }
   },
   "routes": {

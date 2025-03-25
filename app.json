@@ -7,6 +7,10 @@
     "NPM_CONFIG_PRODUCTION": {
       "description": "Set to false to install devDependencies",
       "value": "false"
+    },
+    "NODE_ENV": {
+      "description": "Node environment setting",
+      "value": "production"
     }
   },
   "buildpacks": [
