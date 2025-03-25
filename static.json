@@ -1,6 +1,19 @@
 {
-  "root": "dist/",
+  "root": "dist",
   "clean_urls": true,
+  "https_only": true,
+  "headers": {
+    "/**": {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "X-Requested-With, Content-Type, Authorization"
+    }
+  },
+  "proxies": {
+    "/peerjs/": {
+      "origin": "${URL}/peerjs/"
+    }
+  },
   "routes": {
     "/**": "index.html"
   }
