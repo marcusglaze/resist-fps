@@ -629,10 +629,16 @@ export class Engine {
   }
   
   /**
-   * Show the main menu
+   * Show the main menu and reset the game state
    */
   showMainMenu() {
-    console.log("Returning to main menu...");
+    console.log("Showing main menu");
+    
+    // Make sure to disconnect from any P2P network first
+    if (this.networkManager) {
+      console.log("Disconnecting from network before showing main menu");
+      this.networkManager.disconnect();
+    }
     
     // Reset game state flags
     this.isGameOver = false;

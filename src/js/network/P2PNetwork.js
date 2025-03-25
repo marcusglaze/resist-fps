@@ -19,12 +19,24 @@ export class P2PNetwork {
     this.stateUpdateInterval = 50; // ms between state updates
     this.peerJSLoaded = false;
     
+    // Add window close handler to ensure proper cleanup
+    window.addEventListener('beforeunload', this._handleWindowClose.bind(this));
+    
     // Load PeerJS from CDN if it's not already loaded
     if (!window.Peer) {
       this.loadPeerJS();
     } else {
       this.peerJSLoaded = true;
     }
+  }
+  
+  /**
+   * Handle window close event
+   * @private
+   */
+  _handleWindowClose() {
+    console.log("Window closing, cleaning up P2P connections");
+    this.disconnect();
   }
   
   /**
@@ -410,6 +422,20 @@ export class P2PNetwork {
         }
         break;
         
+      case 'hostDisconnect':
+        // Host is disconnecting, clean up
+        console.log("Host is disconnecting:", data.message);
+        if (!this.isHost) {
+          // If we're a client and the host is disconnecting, we should disconnect too
+          this.disconnect();
+          
+          // Show a message to the player
+          if (this.gameEngine && this.gameEngine.ui) {
+            this.gameEngine.ui.showMessage("Host disconnected", "The game host has left the game.");
+          }
+        }
+        break;
+        
       default:
         console.warn('Unknown data type received:', data.type);
     }
@@ -716,12 +742,34 @@ export class P2PNetwork {
     
     // Close all connections
     for (const conn of this.connections) {
-      conn.close();
+      try {
+        conn.close();
+      } catch (err) {
+        console.error("Error closing connection:", err);
+      }
     }
     
     // Close the peer connection
     if (this.peer) {
-      this.peer.destroy();
+      try {
+        // First emit a disconnect event to notify others that we're leaving
+        if (this.isHost && this.peer.socket && typeof this.peer.socket.send === 'function') {
+          try {
+            // Send a final message to all connected peers that we're leaving
+            this.broadcastToAll({
+              type: 'hostDisconnect',
+              message: 'Host is disconnecting'
+            });
+          } catch (e) {
+            console.error("Error sending disconnect message:", e);
+          }
+        }
+        
+        // Properly destroy the peer
+        this.peer.destroy();
+      } catch (err) {
+        console.error("Error destroying peer:", err);
+      }
       this.peer = null;
     }
     
@@ -731,6 +779,13 @@ export class P2PNetwork {
     this.hostId = null;
     this.clientId = null;
     this.isConnected = false;
+    
+    console.log("P2P network disconnected");
+    
+    // Notify the game that we've disconnected
+    if (this.onPlayerLeft && this.hostId) {
+      this.onPlayerLeft(this.hostId);
+    }
   }
   
   /**

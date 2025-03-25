@@ -345,23 +345,40 @@ export class NetworkManager {
    * Disconnect from the current multiplayer session
    */
   disconnect() {
-    if (!this.isConnected) return;
+    console.log("NetworkManager: Disconnecting from multiplayer session");
     
-    console.log("Disconnecting from multiplayer session");
-    
-    if (this.network) {
-      this.network.disconnect();
+    // Stop server list updates if running
+    if (this.serverListUpdateInterval) {
+      clearInterval(this.serverListUpdateInterval);
+      this.serverListUpdateInterval = null;
+      
+      // If we're hosting, remove our server from the list
+      if (this.isHost && this.hostId) {
+        this.unregisterServer(this.hostId);
+      }
     }
     
-    // Clean up player data
+    // Disconnect the P2P network
+    if (this.network) {
+      this.network.disconnect();
+      this.network = null;
+    }
+    
+    // Reset remote player data
     this.remotePlayers.clear();
     this.cleanupPlayerModels();
     
+    // Reset network state
+    this.hostId = null;
+    this.isHost = false;
     this.isConnected = false;
     this.isMultiplayer = false;
     this.gameMode = 'singleplayer';
     
+    // Update connection status
     this.updateConnectionStatus('Disconnected');
+    
+    console.log("NetworkManager: Successfully disconnected");
   }
   
   /**
@@ -1039,5 +1056,40 @@ export class NetworkManager {
     
     modal.appendChild(dialog);
     document.body.appendChild(modal);
+  }
+  
+  /**
+   * Unregister this server from the server list
+   * @param {string} hostId - The host ID to unregister
+   */
+  unregisterServer(hostId) {
+    console.log(`Unregistering server ${hostId} from server list`);
+    
+    // Send a request to the server to remove this host from the server list
+    try {
+      fetch('/api/servers/remove', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          hostId: hostId
+        })
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`Failed to unregister server: ${response.statusText}`);
+        }
+        return response.json();
+      })
+      .then(data => {
+        console.log("Server unregistered successfully:", data);
+      })
+      .catch(err => {
+        console.error("Failed to unregister server:", err);
+      });
+    } catch (err) {
+      console.error("Error unregistering server:", err);
+    }
   }
 } 

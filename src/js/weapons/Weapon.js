@@ -11,8 +11,8 @@ export class Weapon {
     this.cost = config.cost || 500;
     
     // Damage properties
-    this.bodyDamage = config.bodyDamage || 30;
-    this.headDamage = config.headDamage || 60;
+    this.bodyDamage = config.bodyDamage || 15;
+    this.headDamage = config.headDamage || 30;
     
     // Firing properties
     this.cooldown = config.cooldown || 0.5; // Seconds between shots

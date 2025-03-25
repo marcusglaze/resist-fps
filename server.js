@@ -142,3 +142,20 @@ setInterval(() => {
     console.error("Error during heartbeat:", err);
   }
 }, 20000); // Every 20 seconds 
+
+// Add an endpoint to remove servers from the list
+app.post('/api/servers/remove', (req, res) => {
+  const { hostId } = req.body;
+  
+  if (!hostId) {
+    return res.status(400).json({ error: 'Missing hostId parameter' });
+  }
+  
+  if (activeServers.has(hostId)) {
+    activeServers.delete(hostId);
+    console.log(`Server unregistered: ${hostId}`);
+    res.json({ success: true, id: hostId });
+  } else {
+    res.status(404).json({ error: 'Server not found' });
+  }
+}); 
