@@ -17,53 +17,82 @@ export class P2PNetwork {
     this.onError = null;
     this.lastStateSent = 0;
     this.stateUpdateInterval = 50; // ms between state updates
+    this.peerJSLoaded = false;
     
     // Load PeerJS from CDN if it's not already loaded
-    this.loadPeerJS();
+    if (!window.Peer) {
+      this.loadPeerJS();
+    } else {
+      this.peerJSLoaded = true;
+    }
   }
   
   /**
    * Load the PeerJS library dynamically
    */
   loadPeerJS() {
-    if (window.Peer) {
-      console.log("PeerJS already loaded");
-      return;
-    }
-    
-    console.log("Loading PeerJS from CDN...");
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/peerjs@1.4.7/dist/peerjs.min.js';
-    script.async = true;
-    script.onload = () => console.log("PeerJS loaded successfully");
-    script.onerror = () => console.error("Failed to load PeerJS");
-    document.head.appendChild(script);
+    return new Promise((resolve, reject) => {
+      console.log("Loading PeerJS from CDN...");
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/peerjs@1.4.7/dist/peerjs.min.js';
+      script.async = true;
+      script.onload = () => {
+        console.log("PeerJS loaded successfully");
+        this.peerJSLoaded = true;
+        resolve();
+      };
+      script.onerror = (err) => {
+        console.error("Failed to load PeerJS", err);
+        reject(new Error("Failed to load PeerJS"));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  
+  /**
+   * Wait for PeerJS to be loaded
+   */
+  waitForPeerJS() {
+    return new Promise((resolve, reject) => {
+      if (this.peerJSLoaded) {
+        resolve();
+        return;
+      }
+      
+      if (!window.Peer) {
+        const checkInterval = setInterval(() => {
+          if (window.Peer) {
+            clearInterval(checkInterval);
+            clearTimeout(timeout);
+            this.peerJSLoaded = true;
+            resolve();
+          }
+        }, 100);
+        
+        const timeout = setTimeout(() => {
+          clearInterval(checkInterval);
+          reject(new Error("PeerJS failed to load within timeout"));
+        }, 10000);
+      } else {
+        this.peerJSLoaded = true;
+        resolve();
+      }
+    });
   }
   
   /**
    * Initialize as a host
    * @returns {string} The host ID that others can use to connect
    */
-  initHost() {
-    return new Promise((resolve, reject) => {
+  async initHost() {
+    try {
       // Make sure PeerJS is loaded
-      if (!window.Peer) {
-        const checkInterval = setInterval(() => {
-          if (window.Peer) {
-            clearInterval(checkInterval);
-            this.createHost().then(resolve).catch(reject);
-          }
-        }, 100);
-        
-        // Set timeout to prevent infinite checking
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          reject(new Error("PeerJS failed to load within timeout"));
-        }, 10000);
-      } else {
-        this.createHost().then(resolve).catch(reject);
-      }
-    });
+      await this.waitForPeerJS();
+      return await this.createHost();
+    } catch (err) {
+      console.error("Error initializing host:", err);
+      throw err;
+    }
   }
   
   /**
@@ -77,8 +106,13 @@ export class P2PNetwork {
         const port = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
         const secure = window.location.protocol === 'https:';
         
+        console.log("Creating peer with host:", host, "port:", port, "secure:", secure);
+        
+        // Create a new Peer with a randomized ID (don't let the browser assign it)
+        const randomId = 'host_' + Math.random().toString(36).substring(2, 15);
+        
         // Create a new Peer using our custom server
-        this.peer = new Peer({
+        this.peer = new Peer(randomId, {
           host: host,
           port: port,
           path: '/peerjs',
@@ -157,26 +191,15 @@ export class P2PNetwork {
    * Join an existing game as a client
    * @param {string} hostId - The host's peer ID to connect to
    */
-  joinGame(hostId) {
-    return new Promise((resolve, reject) => {
+  async joinGame(hostId) {
+    try {
       // Make sure PeerJS is loaded
-      if (!window.Peer) {
-        const checkInterval = setInterval(() => {
-          if (window.Peer) {
-            clearInterval(checkInterval);
-            this.connectToHost(hostId).then(resolve).catch(reject);
-          }
-        }, 100);
-        
-        // Set timeout to prevent infinite checking
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          reject(new Error("PeerJS failed to load within timeout"));
-        }, 10000);
-      } else {
-        this.connectToHost(hostId).then(resolve).catch(reject);
-      }
-    });
+      await this.waitForPeerJS();
+      return await this.connectToHost(hostId);
+    } catch (err) {
+      console.error("Error joining game:", err);
+      throw err;
+    }
   }
   
   /**
@@ -191,8 +214,13 @@ export class P2PNetwork {
         const port = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
         const secure = window.location.protocol === 'https:';
         
+        console.log("Creating client peer with host:", host, "port:", port, "secure:", secure);
+        
+        // Create a random ID for the client
+        const randomId = 'client_' + Math.random().toString(36).substring(2, 15);
+        
         // Create a new Peer using our custom server
-        this.peer = new Peer({
+        this.peer = new Peer(randomId, {
           host: host,
           port: port,
           path: '/peerjs',
