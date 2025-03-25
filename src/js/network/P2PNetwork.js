@@ -33,7 +33,7 @@ export class P2PNetwork {
     
     console.log("Loading PeerJS from CDN...");
     const script = document.createElement('script');
-    script.src = 'https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js';
+    script.src = 'https://cdn.jsdelivr.net/npm/peerjs@1.4.7/dist/peerjs.min.js';
     script.async = true;
     script.onload = () => console.log("PeerJS loaded successfully");
     script.onerror = () => console.error("Failed to load PeerJS");
@@ -72,8 +72,19 @@ export class P2PNetwork {
   createHost() {
     return new Promise((resolve, reject) => {
       try {
-        // Create a new Peer with a random ID
-        this.peer = new Peer();
+        // Get the server's host
+        const host = window.location.hostname;
+        const port = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
+        const secure = window.location.protocol === 'https:';
+        
+        // Create a new Peer using our custom server
+        this.peer = new Peer({
+          host: host,
+          port: port,
+          path: '/peerjs',
+          secure: secure,
+          debug: 3
+        });
         
         this.peer.on('open', (id) => {
           console.log('Host ID:', id);
@@ -175,8 +186,19 @@ export class P2PNetwork {
   connectToHost(hostId) {
     return new Promise((resolve, reject) => {
       try {
-        // Create a new Peer with a random ID
-        this.peer = new Peer();
+        // Get the server's host
+        const host = window.location.hostname;
+        const port = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
+        const secure = window.location.protocol === 'https:';
+        
+        // Create a new Peer using our custom server
+        this.peer = new Peer({
+          host: host,
+          port: port,
+          path: '/peerjs',
+          secure: secure,
+          debug: 3
+        });
         
         this.peer.on('open', (id) => {
           console.log('Client ID:', id);
