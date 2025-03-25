@@ -24,17 +24,40 @@ app.use(express.json());
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Create HTTP server
+// Create HTTP server with proper timeout settings
 const server = require('http').createServer(app);
 
-// Set up PeerJS server
+// Increase server timeout for WebSocket connections
+server.setTimeout(30000); // 30 seconds timeout
+
+// Set up PeerJS server with better configuration for Heroku
 const peerServer = ExpressPeerServer(server, {
   debug: true,
-  path: '/peerjs'
+  path: '/peerjs',
+  allow_discovery: true, // Enable peer discovery
+  proxied: true, // Important for Heroku
+  pingInterval: 20000, // Send ping every 20 seconds
+  pingTimeout: 30000,  // Consider connection dead after 30 seconds without response
+  // Express traffic is allowed to be proxied
+  key: 'peerjs' // Default key that PeerJS uses
 });
 
 // Use the PeerJS server
 app.use('/peerjs', peerServer);
+
+// Add a heartbeat route to keep the Heroku dyno active
+app.get('/ping', (req, res) => {
+  res.send('pong');
+});
+
+// Log when peers connect and disconnect
+peerServer.on('connection', (client) => {
+  console.log(`Client connected: ${client.getId()}`);
+});
+
+peerServer.on('disconnect', (client) => {
+  console.log(`Client disconnected: ${client.getId()}`);
+});
 
 // API endpoint to register a server
 app.post('/api/servers', (req, res) => {
@@ -99,4 +122,18 @@ app.get('*', (req, res) => {
 
 // Listen on the specified port
 server.listen(port);
-console.log('Server started on port', port); 
+console.log('Server started on port', port);
+
+// Add a heartbeat interval to keep WebSocket connections alive
+setInterval(() => {
+  console.log("Sending heartbeat ping");
+  peerServer._clients.forEach(client => {
+    if (client.socket && client.socket.readyState === 1) { // Check if socket is OPEN
+      try {
+        client.socket.ping();
+      } catch (err) {
+        console.error("Error pinging client:", err);
+      }
+    }
+  });
+}, 20000); // Every 20 seconds 

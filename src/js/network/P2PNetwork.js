@@ -111,13 +111,29 @@ export class P2PNetwork {
         // Create a new Peer with a randomized ID (don't let the browser assign it)
         const randomId = 'host_' + Math.random().toString(36).substring(2, 15);
         
-        // Create a new Peer using our custom server
+        // Create a new Peer using our custom server with better configuration
         this.peer = new Peer(randomId, {
           host: host,
           port: port,
           path: '/peerjs',
           secure: secure,
-          debug: 3
+          debug: 3,
+          config: {
+            // Add STUN and TURN servers for connection in restrictive networks
+            'iceServers': [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' }
+            ],
+            'sdpSemantics': 'unified-plan'
+          },
+          // Reconnection parameters
+          pingInterval: 3000,   // Check connection every 3 seconds
+          retryCount: 3,        // Retry 3 times
+          retryDelay: 1000,     // 1 second between retries
+          // Use less reliable but faster connections with lower overheads
+          serialization: 'binary',
+          reliable: true        // Use reliable connections
         });
         
         this.peer.on('open', (id) => {
@@ -125,6 +141,9 @@ export class P2PNetwork {
           this.hostId = id;
           this.isHost = true;
           this.isConnected = true;
+          
+          // Keep connection alive with ping
+          this.startHeartbeat();
           
           // Set up event handler for new connections
           this.peer.on('connection', (conn) => this.handleNewConnection(conn));
@@ -134,8 +153,35 @@ export class P2PNetwork {
         
         this.peer.on('error', (err) => {
           console.error('Host peer error:', err);
-          if (this.onError) this.onError(err);
-          reject(err);
+          
+          // Handle specific errors
+          if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
+            console.log('Attempting to reconnect...');
+            // Try to destroy and recreate peer after delay
+            setTimeout(() => {
+              if (this.peer) {
+                this.peer.destroy();
+                this.peer = null;
+                this.createHost().then(resolve).catch(reject);
+              }
+            }, 2000);
+          } else {
+            if (this.onError) this.onError(err);
+            reject(err);
+          }
+        });
+        
+        this.peer.on('disconnected', () => {
+          console.log('Peer disconnected. Attempting to reconnect...');
+          
+          // Try to reconnect
+          this.peer.reconnect();
+        });
+        
+        this.peer.on('close', () => {
+          console.log('Peer connection closed.');
+          this.stopHeartbeat();
+          this.isConnected = false;
         });
       } catch (err) {
         console.error('Failed to create host:', err);
@@ -219,13 +265,29 @@ export class P2PNetwork {
         // Create a random ID for the client
         const randomId = 'client_' + Math.random().toString(36).substring(2, 15);
         
-        // Create a new Peer using our custom server
+        // Create a new Peer using our custom server with better configuration
         this.peer = new Peer(randomId, {
           host: host,
           port: port,
           path: '/peerjs',
           secure: secure,
-          debug: 3
+          debug: 3,
+          config: {
+            // Add STUN and TURN servers for connection in restrictive networks
+            'iceServers': [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' }
+            ],
+            'sdpSemantics': 'unified-plan'
+          },
+          // Reconnection parameters
+          pingInterval: 3000,   // Check connection every 3 seconds
+          retryCount: 3,        // Retry 3 times
+          retryDelay: 1000,     // 1 second between retries
+          // Use less reliable but faster connections with lower overheads
+          serialization: 'binary',
+          reliable: true        // Use reliable connections
         });
         
         this.peer.on('open', (id) => {
@@ -234,9 +296,13 @@ export class P2PNetwork {
           this.isHost = false;
           this.hostId = hostId;
           
+          // Keep connection alive with ping
+          this.startHeartbeat();
+          
           // Connect to the host
           const conn = this.peer.connect(hostId, {
-            reliable: true
+            reliable: true,
+            serialization: 'binary'
           });
           
           conn.on('open', () => {
@@ -274,8 +340,35 @@ export class P2PNetwork {
         
         this.peer.on('error', (err) => {
           console.error('Client peer error:', err);
-          if (this.onError) this.onError(err);
-          reject(err);
+          
+          // Handle specific errors
+          if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
+            console.log('Attempting to reconnect...');
+            // Try to destroy and recreate peer after delay
+            setTimeout(() => {
+              if (this.peer) {
+                this.peer.destroy();
+                this.peer = null;
+                this.connectToHost(hostId).then(resolve).catch(reject);
+              }
+            }, 2000);
+          } else {
+            if (this.onError) this.onError(err);
+            reject(err);
+          }
+        });
+        
+        this.peer.on('disconnected', () => {
+          console.log('Peer disconnected. Attempting to reconnect...');
+          
+          // Try to reconnect
+          this.peer.reconnect();
+        });
+        
+        this.peer.on('close', () => {
+          console.log('Peer connection closed.');
+          this.stopHeartbeat();
+          this.isConnected = false;
         });
       } catch (err) {
         console.error('Failed to connect to host:', err);
@@ -615,6 +708,9 @@ export class P2PNetwork {
   disconnect() {
     console.log("Disconnecting from P2P network");
     
+    // Stop heartbeat
+    this.stopHeartbeat();
+    
     // Stop state updates if hosting
     this.stopStateUpdates();
     
@@ -635,5 +731,41 @@ export class P2PNetwork {
     this.hostId = null;
     this.clientId = null;
     this.isConnected = false;
+  }
+  
+  /**
+   * Start a heartbeat to keep the WebSocket connection alive
+   */
+  startHeartbeat() {
+    // Clear any existing heartbeat
+    this.stopHeartbeat();
+    
+    // Create a new heartbeat interval
+    this.heartbeatInterval = setInterval(() => {
+      // Send a ping to the server endpoint to keep connections alive
+      fetch('/ping')
+        .then(() => console.log('Heartbeat sent'))
+        .catch(err => console.error('Heartbeat error:', err));
+      
+      // Also try to ping peers directly if available
+      if (this.peer && this.peer.socket && this.peer.socket._wsOpen()) {
+        try {
+          console.log('Sending WebSocket ping');
+          this.peer.socket.send(JSON.stringify({ type: 'HEARTBEAT' }));
+        } catch (err) {
+          console.error('Error sending WebSocket ping:', err);
+        }
+      }
+    }, 15000); // Every 15 seconds
+  }
+  
+  /**
+   * Stop the heartbeat
+   */
+  stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
   }
 } 

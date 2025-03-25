@@ -1,0 +1,17 @@
+{
+  "name": "Resist Matrix",
+  "description": "3D multiplayer zombie survival game",
+  "repository": "https://github.com/yourusername/resist-matrix",
+  "keywords": ["node", "express", "three.js", "game", "multiplayer", "peerjs"],
+  "env": {
+    "NPM_CONFIG_PRODUCTION": {
+      "description": "Set to false to install devDependencies",
+      "value": "false"
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ]
+} 
