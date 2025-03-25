@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Raycaster } from 'three';
 import { Weapon, WeaponTypes } from '../weapons/Weapon';
+import { MobileControls } from './MobileControls';
 
 /**
  * First-person controls with WASD movement and mouse look
@@ -14,6 +15,17 @@ export class PlayerControls {
     
     // Store dom element for pointer lock
     this.domElement = domElement;
+    
+    // Initialize input keys object
+    this.keys = {
+      w: false,
+      a: false,
+      s: false,
+      d: false,
+      f: false,
+      r: false
+    };
+    console.log("Input keys object initialized:", this.keys);
     
     // Audio elements for weapon sounds and other effects
     this.audioElements = {
@@ -122,6 +134,9 @@ export class PlayerControls {
     this.lockPointer = this.lockPointer.bind(this);
     this.onPointerlockChange = this.onPointerlockChange.bind(this);
     this.onMouseWheel = this.onMouseWheel.bind(this);
+    
+    // Mobile controls
+    this.mobileControls = new MobileControls(this);
     
     // Initialize
     this.init();
@@ -515,84 +530,6 @@ export class PlayerControls {
   }
 
   /**
-   * Show death screen
-   */
-  showDeathScreen() {
-    // Remove any existing death screen
-    const existingDeathScreen = document.querySelector('.death-screen');
-    if (existingDeathScreen) {
-      document.body.removeChild(existingDeathScreen);
-    }
-
-    // Create container for death screen
-    const deathScreen = document.createElement('div');
-    deathScreen.className = 'death-screen';
-    deathScreen.style.position = 'absolute';
-    deathScreen.style.top = '0';
-    deathScreen.style.left = '0';
-    deathScreen.style.width = '100%';
-    deathScreen.style.height = '100%';
-    deathScreen.style.backgroundColor = 'rgba(139, 0, 0, 0.7)';
-    deathScreen.style.display = 'flex';
-    deathScreen.style.flexDirection = 'column';
-    deathScreen.style.justifyContent = 'center';
-    deathScreen.style.alignItems = 'center';
-    deathScreen.style.color = 'white';
-    deathScreen.style.fontFamily = 'Impact, fantasy';
-    deathScreen.style.zIndex = '1000';
-    
-    // You are dead text
-    const deathText = document.createElement('div');
-    deathText.textContent = 'YOU ARE DEAD';
-    deathText.style.fontSize = '72px';
-    deathText.style.marginBottom = '20px';
-    deathText.style.textShadow = '0 0 10px #ff0000';
-    
-    // Score display
-    const scoreText = document.createElement('div');
-    scoreText.textContent = `FINAL SCORE: ${this.score}`;
-    scoreText.style.fontSize = '36px';
-    scoreText.style.marginBottom = '30px';
-    
-    // Restart button
-    const restartButton = document.createElement('button');
-    restartButton.textContent = 'RESTART';
-    restartButton.style.fontSize = '24px';
-    restartButton.style.padding = '10px 20px';
-    restartButton.style.backgroundColor = '#8B0000';
-    restartButton.style.border = '2px solid white';
-    restartButton.style.borderRadius = '5px';
-    restartButton.style.color = 'white';
-    restartButton.style.cursor = 'pointer';
-    restartButton.style.fontFamily = 'Impact, fantasy';
-    
-    // Hover effect for button
-    restartButton.style.transition = 'all 0.3s';
-    restartButton.addEventListener('mouseover', () => {
-      restartButton.style.backgroundColor = '#ff0000';
-    });
-    restartButton.addEventListener('mouseout', () => {
-      restartButton.style.backgroundColor = '#8B0000';
-    });
-    
-    // Add restart functionality
-    restartButton.addEventListener('click', () => {
-      window.location.reload();
-    });
-    
-    // Add elements to screen
-    deathScreen.appendChild(deathText);
-    deathScreen.appendChild(scoreText);
-    deathScreen.appendChild(restartButton);
-    
-    // Add to document
-    document.body.appendChild(deathScreen);
-    
-    // Store reference
-    this.deathScreenElement = deathScreen;
-  }
-
-  /**
    * Check if position is inside a wall
    * @param {Vector3} position - The position to check
    * @returns {boolean} True if position is in a wall
@@ -756,11 +693,8 @@ export class PlayerControls {
     // Keep player at constant height
     this.camera.position.y = this.height;
     
-    // Handle wall buy interactions
-    if (this.isInteracting && this.nearbyWallBuy) {
-      this.nearbyWallBuy.purchase(this);
-      this.isInteracting = false;
-    }
+    // Handle wall buy interactions - REMOVED to allow hold-to-buy mechanic to work
+    // Wall buys are now handled via the hold-to-buy mechanism in Room.js
   }
   
   /**
@@ -1363,7 +1297,7 @@ export class PlayerControls {
   }
 
   /**
-   * Handle player death
+   * Player death function
    */
   die() {
     if (this.isDead) return; // Prevent multiple calls
@@ -1399,9 +1333,6 @@ export class PlayerControls {
     if (document.pointerLockElement) {
       document.exitPointerLock();
     }
-    
-    // Show death screen
-    this.showDeathScreen();
     
     // Signal the engine that the game is over
     if (this.gameEngine) {
@@ -1448,8 +1379,15 @@ export class PlayerControls {
         this.moveRight = true;
         break;
       case 'KeyF':
-        // Interaction key for boarding windows or buying weapons
+        // For single-press interactions like window boarding
         this.isInteracting = true;
+        
+        // For hold-to-buy interactions
+        if (!this.keys) {
+          this.keys = {};
+        }
+        this.keys.f = true;
+        console.log("F key pressed - keys.f set to true for hold tracking");
         break;
       case 'KeyR':
         // Reload weapon
@@ -1476,7 +1414,11 @@ export class PlayerControls {
         this.moveRight = false;
         break;
       case 'KeyF':
-        // No action needed on key up
+        // Set interaction key to false on key up
+        if (this.keys) {
+          this.keys.f = false;
+          console.log("F key released - keys.f set to false");
+        }
         break;
     }
   }
@@ -1541,6 +1483,11 @@ export class PlayerControls {
    * Request pointer lock to capture mouse movements
    */
   lockPointer(event) {
+    // Skip if on mobile - handled by touch controls
+    if (this.mobileControls && this.mobileControls.isMobile) {
+      return;
+    }
+    
     // Only lock pointer on non-shooting clicks
     if (this.isLocked && event && event.button === 0) {
       return;
@@ -3258,5 +3205,107 @@ export class PlayerControls {
     }
     
     return null;
+  }
+
+  /**
+   * Reset player position to center of room
+   */
+  resetPosition() {
+    console.log("Resetting player position");
+    
+    // Reset to position (0,0,0) which is the center of the room
+    this.camera.position.set(0, this.height, 0);
+    this.camera.rotation.set(0, 0, 0);
+    
+    // Reset movement flags
+    this.moveForward = false;
+    this.moveBackward = false;
+    this.moveLeft = false;
+    this.moveRight = false;
+    this.running = false;
+    
+    // Reset velocity
+    this.velocity.set(0, 0, 0);
+    
+    // Reset stamina
+    this.stamina = this.maxStamina;
+  }
+  
+  /**
+   * Reset player health to maximum
+   */
+  resetHealth() {
+    console.log("Resetting player health");
+    
+    // Reset health to maximum
+    this.health = this.maxHealth;
+    
+    // Reset damage-related flags
+    this.isDead = false;
+    this.dead = false;
+    this.lastDamageTime = 0;
+    this.regenEffectActive = false;
+    this.isRegenerating = false;
+    
+    // Update the health bar UI
+    this.updateHealthDisplay();
+  }
+  
+  /**
+   * Reset player score to zero
+   */
+  resetScore() {
+    console.log("Resetting player score");
+    
+    // Reset score to zero
+    this.score = 0;
+    
+    // Update the score display
+    if (this.scoreDisplay) {
+      this.scoreDisplay.textContent = `POINTS: ${this.score}`;
+    } else {
+      // Create score display if it doesn't exist
+      this.createScoreDisplay();
+    }
+  }
+  
+  /**
+   * Reset player weapons to default loadout
+   */
+  resetWeapons() {
+    console.log("Resetting player weapons");
+    
+    // Clear existing weapons
+    this.weapons = [];
+    
+    // Add default pistol
+    const defaultPistol = new Weapon({
+      name: 'Pistol',
+      description: 'Standard issue sidearm',
+      damage: 25,
+      fireRate: 2,
+      range: 50,
+      ammo: 8,
+      maxAmmo: 8,
+      totalAmmo: 40,
+      reloadTime: 1.5,
+      cost: 0,
+      type: WeaponTypes.PISTOL
+    });
+    
+    // Initialize and add the weapon
+    defaultPistol.init();
+    this.equipWeapon(defaultPistol);
+    
+    // Set current weapon to pistol
+    this.currentWeaponIndex = 0;
+    this.activeWeapon = this.weapons[0];
+    
+    // Update weapon model and display
+    this.updateWeaponViewModel();
+    this.updateAmmoDisplay();
+    
+    // Update hand positions for the current weapon
+    this.updateHandPositions();
   }
 } 

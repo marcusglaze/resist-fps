@@ -42,9 +42,9 @@ export class Window {
     });
     
     this.boardMaterial = new THREE.MeshStandardMaterial({
-      color: 0x8B4513, // Saddle brown
-      roughness: 1.0,
-      metalness: 0.0,
+      color: 0xD2956E, // Brightened from saddle brown to a lighter tan/wood color
+      roughness: 0.8, // Reduced from 1.0 for more light reflection
+      metalness: 0.1, // Slightly increased from 0.0
       map: this.createWoodTexture()
     });
     
@@ -52,23 +52,23 @@ export class Window {
     this.damagedBoardMaterials = [
       // Light damage (66-99% health)
       new THREE.MeshStandardMaterial({
-        color: 0x8B4513,
-        roughness: 1.0,
-        metalness: 0.0,
+        color: 0xD2956E, // Brightened color
+        roughness: 0.8,
+        metalness: 0.1,
         map: this.createWoodTexture(0.2) // 20% damage
       }),
       // Medium damage (33-66% health)
       new THREE.MeshStandardMaterial({
-        color: 0x8B4513,
-        roughness: 1.0,
-        metalness: 0.0,
+        color: 0xD2956E, // Brightened color
+        roughness: 0.8,
+        metalness: 0.1,
         map: this.createWoodTexture(0.5) // 50% damage
       }),
       // Heavy damage (1-33% health)
       new THREE.MeshStandardMaterial({
-        color: 0x8B4513,
-        roughness: 1.0,
-        metalness: 0.0,
+        color: 0xC67F55, // Slightly darker than the others but still bright
+        roughness: 0.9,
+        metalness: 0.1,
         map: this.createWoodTexture(0.8) // 80% damage
       }),
     ];
@@ -111,12 +111,12 @@ export class Window {
     canvas.height = 256;
     const context = canvas.getContext('2d');
     
-    // Base wood color
-    context.fillStyle = '#8B4513';
+    // Brighter base wood color
+    context.fillStyle = '#D2956E'; // Brightened from #8B4513
     context.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Add wood grain
-    context.strokeStyle = '#704214';
+    // Add wood grain with brighter color
+    context.strokeStyle = '#A06840'; // Brightened from #704214
     context.lineWidth = 3;
     
     for (let i = 0; i < 20; i++) {
@@ -133,18 +133,18 @@ export class Window {
       context.stroke();
     }
     
-    // Add some knots
+    // Add some knots with brighter colors
     for (let i = 0; i < 5; i++) {
       const x = Math.random() * canvas.width;
       const y = Math.random() * canvas.height;
       const radius = Math.random() * 10 + 5;
       
-      context.fillStyle = '#5D3A1A';
+      context.fillStyle = '#B07A50'; // Brightened from #5D3A1A
       context.beginPath();
       context.arc(x, y, radius, 0, Math.PI * 2);
       context.fill();
       
-      context.strokeStyle = '#4A2E15';
+      context.strokeStyle = '#8A5A35'; // Brightened from #4A2E15
       context.lineWidth = 1;
       context.beginPath();
       context.arc(x, y, radius + 2, 0, Math.PI * 2);
@@ -525,5 +525,33 @@ export class Window {
   getBoardingPercentage() {
     return (this.boardsCount / this.maxBoards) * 100;
   }
+
+  /**
+   * Reset the window to its initial state
+   */
+  reset() {
+    console.log("Resetting window to initial state");
+    
+    // Clear all existing boards
+    this.boards.forEach(board => {
+      // Remove each board from the window instance
+      if (this.instance.children.includes(board)) {
+        this.instance.remove(board);
+      }
+    });
+    
+    // Reset arrays and counters
+    this.boards = [];
+    this.boardHealths = [];
+    this.boardsCount = 0;
+    
+    // Reset window state
+    this.isOpen = true;
+    
+    // Re-initialize the window
+    this.init();
+  }
 } 
+ 
+ 
  

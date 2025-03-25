@@ -14,11 +14,13 @@ export class Renderer {
     // Create the WebGL renderer with different settings based on mode
     this.instance = new THREE.WebGLRenderer({
       antialias: !this.doomMode, // Disable antialiasing for Doom-like pixelated look
-      alpha: false
+      alpha: false,
+      gammaOutput: true, // Enable gamma correction for brighter output
+      gammaFactor: 2.2 // Standard gamma correction factor
     });
     
-    // Setup shadow rendering
-    this.instance.shadowMap.enabled = true;
+    // Setup shadow rendering - only enable if not in doom mode
+    this.instance.shadowMap.enabled = !this.doomMode;
     this.instance.shadowMap.type = THREE.PCFSoftShadowMap;
     
     // Set initial size
@@ -34,8 +36,10 @@ export class Renderer {
     // Create Doom effect if enabled - use a try/catch to handle potential errors
     if (this.doomMode) {
       try {
-        console.log("Creating DoomEffect with resolution:", resolution);
-        this.doomEffect = new DoomEffect(resolution);
+        // Increase resolution for less pixelation (was 320, now using 400)
+        const enhancedResolution = 400;
+        console.log("Creating DoomEffect with resolution:", enhancedResolution);
+        this.doomEffect = new DoomEffect(enhancedResolution);
       } catch (error) {
         console.error("Error creating DoomEffect:", error);
         // Fall back to standard rendering if DoomEffect fails
@@ -81,11 +85,11 @@ export class Renderer {
       scanlines.style.left = '0';
       scanlines.style.width = '100%';
       scanlines.style.height = '100%';
-      scanlines.style.backgroundImage = 'linear-gradient(transparent 50%, rgba(0, 0, 0, 0.3) 50%)';
+      scanlines.style.backgroundImage = 'linear-gradient(transparent 50%, rgba(0, 0, 0, 0.2) 50%)'; // Reduced opacity from 0.3 to 0.2
       scanlines.style.backgroundSize = '100% 4px';
       scanlines.style.pointerEvents = 'none';
       scanlines.style.zIndex = '1000';
-      scanlines.style.opacity = '0.3';
+      scanlines.style.opacity = '0.2'; // Reduced opacity from 0.3 to 0.2
       
       // Add to DOM right after canvas
       if (this.domElement.parentNode) {
@@ -116,9 +120,16 @@ export class Renderer {
 
   /**
    * Render the scene
+   * @param {Scene} scene - The scene wrapper containing instance and camera
    */
   render(scene) {
     try {
+      // Make sure we have a valid scene and camera
+      if (!scene || !scene.instance || !scene.camera) {
+        console.error("Invalid scene or camera passed to renderer");
+        return;
+      }
+      
       if (this.doomMode && this.doomEffect) {
         // Use Doom-like effect rendering
         this.doomEffect.render(this.instance, scene.instance, scene.camera);
@@ -137,5 +148,43 @@ export class Renderer {
       }
     }
   }
+
+  /**
+   * Set Doom mode on or off
+   * @param {boolean} enabled - Whether Doom mode should be enabled
+   */
+  setDoomMode(enabled) {
+    if (this.doomMode === enabled) return;
+    
+    console.log(`Setting renderer Doom mode to: ${enabled}`);
+    this.doomMode = enabled;
+    
+    // Update renderer settings
+    this.instance.shadowMap.enabled = !this.doomMode;
+    
+    // Set pixel ratio - limit it in Doom mode for pixelated look
+    const pixelRatio = this.doomMode ? 1 : Math.min(window.devicePixelRatio, 2);
+    this.instance.setPixelRatio(pixelRatio);
+    
+    // Create or remove Doom effect
+    if (this.doomMode && !this.doomEffect) {
+      try {
+        // Create Doom effect with enhanced resolution
+        const enhancedResolution = 400;
+        console.log("Creating DoomEffect with resolution:", enhancedResolution);
+        this.doomEffect = new DoomEffect(enhancedResolution);
+      } catch (error) {
+        console.error("Error creating DoomEffect:", error);
+        this.doomMode = false;
+      }
+    } else if (!this.doomMode && this.doomEffect) {
+      // Clean up any resources if needed
+      if (typeof this.doomEffect.dispose === 'function') {
+        this.doomEffect.dispose();
+      }
+      this.doomEffect = null;
+    }
+  }
 } 
+ 
  

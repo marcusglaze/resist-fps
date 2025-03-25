@@ -7,7 +7,7 @@ import { Weapon } from '../weapons/Weapon';
 export class MysteryBox {
   constructor() {
     // Mystery box properties
-    this.cost = 10000;
+    this.cost = 1000; // Reduced from 10000 to 1000 for easier testing
     this.isActive = true;
     
     // Visual elements
@@ -37,8 +37,27 @@ export class MysteryBox {
     this.boxOpeningDuration = 3.0; // seconds
     this.weaponFloating = null; // Stores the floating weapon mesh
     
+    // New properties for enhanced box opening
+    this.boxLid = null; // Reference to the box lid for animation
+    this.boxOpenAngle = 0; // Current angle of the box lid (0 = closed, PI/2 = fully open)
+    this.boxSoundPlaying = false; // Flag to track if the box sound is playing
+    this.boxSound = null; // Reference to the audio element
+    this.weaponFloatingHeight = 0; // Current height of the floating weapon
+    this.weaponDisplayTime = 0; // Time the weapon has been displayed
+    this.weaponDisplayDuration = 5.0; // How long the player has to pick up the weapon (5 seconds)
+    this.boxState = 'closed'; // 'closed', 'opening', 'open', 'closing'
+    this.weaponReady = false; // Whether the weapon is ready to be picked up
+    
     // Player reference for weapon delivery
     this.playerToReceiveWeapon = null;
+    
+    // New properties for hold-to-buy and weapon pickup flow
+    this.isOpen = false; // Whether the box is currently open
+    this.hasWeaponAvailable = false; // Whether there's a weapon available to pick up
+    this.weaponTimeoutId = null; // For tracking the 10-second timer
+    
+    // New properties for audio handling
+    this.audioDisabled = false; // Flag to disable audio if an error occurs
   }
   
   /**
@@ -73,6 +92,14 @@ export class MysteryBox {
     // Initialize animation time
     this.time = 0;
     
+    // Ensure box is closed initially
+    this.boxState = 'closed';
+    if (this.boxLid) {
+      this.boxLid.rotation.x = 0;
+      this.boxLid.position.y = 0.8;
+      this.boxLid.position.z = 0;
+    }
+    
     console.log(`Mystery Box initialized at position ${position.x}, ${position.y}, ${position.z}`);
     
     return this;
@@ -101,11 +128,25 @@ export class MysteryBox {
       emissiveIntensity: 0.2
     });
     
-    // Main box
-    const boxGeometry = new THREE.BoxGeometry(1, 0.8, 1);
-    const boxMesh = new THREE.Mesh(boxGeometry, woodMaterial);
-    boxMesh.position.set(0, 0.4, 0);
-    boxGroup.add(boxMesh);
+    // Main box (base)
+    const baseGeometry = new THREE.BoxGeometry(1, 0.7, 1);
+    const baseMesh = new THREE.Mesh(baseGeometry, woodMaterial);
+    baseMesh.position.set(0, 0.35, 0);
+    boxGroup.add(baseMesh);
+    
+    // Create lid/top for the box that will open
+    const lidGeometry = new THREE.BoxGeometry(1, 0.1, 1);
+    const lidMesh = new THREE.Mesh(lidGeometry, woodMaterial);
+    lidMesh.position.set(0, 0.8, 0); // Position at the top of the box
+    
+    // Add lid to box group
+    boxGroup.add(lidMesh);
+    
+    // Store reference to lid for animation
+    this.boxLid = lidMesh;
+    
+    // Ensure lid is closed (redundant but just to be sure)
+    lidMesh.rotation.x = 0;
     
     // Add decorative metal trim on edges
     const edgeThickness = 0.05;
@@ -119,14 +160,20 @@ export class MysteryBox {
       return edge;
     };
     
-    // Add top edges
+    // Add top edges to the lid
     const topY = 0.8;
-    boxGroup.add(createEdge(1 + edgeThickness, edgeThickness, edgeThickness, 0, topY, -0.5 - edgeThickness/2));
-    boxGroup.add(createEdge(1 + edgeThickness, edgeThickness, edgeThickness, 0, topY, 0.5 + edgeThickness/2));
-    boxGroup.add(createEdge(1 + edgeThickness, edgeThickness, edgeThickness, -0.5 - edgeThickness/2, topY, 0, Math.PI/2));
-    boxGroup.add(createEdge(1 + edgeThickness, edgeThickness, edgeThickness, 0.5 + edgeThickness/2, topY, 0, Math.PI/2));
+    const topEdgeFront = createEdge(1 + edgeThickness, edgeThickness, edgeThickness, 0, topY, 0.5 + edgeThickness/2);
+    const topEdgeBack = createEdge(1 + edgeThickness, edgeThickness, edgeThickness, 0, topY, -0.5 - edgeThickness/2);
+    const topEdgeLeft = createEdge(1 + edgeThickness, edgeThickness, edgeThickness, -0.5 - edgeThickness/2, topY, 0, Math.PI/2);
+    const topEdgeRight = createEdge(1 + edgeThickness, edgeThickness, edgeThickness, 0.5 + edgeThickness/2, topY, 0, Math.PI/2);
     
-    // Add bottom edges
+    // Add edges to lid for animation
+    this.boxLid.add(topEdgeFront);
+    this.boxLid.add(topEdgeBack);
+    this.boxLid.add(topEdgeLeft);
+    this.boxLid.add(topEdgeRight);
+    
+    // Add bottom edges to the base
     const bottomY = 0;
     boxGroup.add(createEdge(1 + edgeThickness, edgeThickness, edgeThickness, 0, bottomY, -0.5 - edgeThickness/2));
     boxGroup.add(createEdge(1 + edgeThickness, edgeThickness, edgeThickness, 0, bottomY, 0.5 + edgeThickness/2));
@@ -135,9 +182,9 @@ export class MysteryBox {
     
     // Add vertical edges
     const createVerticalEdge = (x, z) => {
-      const edgeGeometry = new THREE.BoxGeometry(edgeThickness, 0.8, edgeThickness);
+      const edgeGeometry = new THREE.BoxGeometry(edgeThickness, 0.7, edgeThickness);
       const edge = new THREE.Mesh(edgeGeometry, metalTrimMaterial);
-      edge.position.set(x, 0.4, z);
+      edge.position.set(x, 0.35, z);
       return edge;
     };
     
@@ -162,18 +209,18 @@ export class MysteryBox {
       
       switch(side) {
         case 'front':
-          symbol.position.set(0, 0.4, 0.501);
+          symbol.position.set(0, 0.35, 0.351);
           break;
         case 'back':
-          symbol.position.set(0, 0.4, -0.501);
+          symbol.position.set(0, 0.35, -0.351);
           symbol.rotation.y = Math.PI;
           break;
         case 'left':
-          symbol.position.set(-0.501, 0.4, 0);
+          symbol.position.set(-0.351, 0.35, 0);
           symbol.rotation.y = -Math.PI/2;
           break;
         case 'right':
-          symbol.position.set(0.501, 0.4, 0);
+          symbol.position.set(0.351, 0.35, 0);
           symbol.rotation.y = Math.PI/2;
           break;
       }
@@ -202,8 +249,8 @@ export class MysteryBox {
     boxGroup.add(pedestal);
     
     // Set userData for raycasting
-    boxMesh.userData.isInteractive = true;
-    boxMesh.userData.objectType = 'mysteryBox';
+    baseMesh.userData.isInteractive = true;
+    baseMesh.userData.objectType = 'mysteryBox';
     
     return boxGroup;
   }
@@ -370,270 +417,512 @@ export class MysteryBox {
   
   /**
    * Update the mystery box
-   * @param {number} deltaTime - Time since last frame
+   * @param {number} deltaTime - Time elapsed since last update
+   * @param {Camera} camera - The player's camera for UI positioning
    */
-  update(deltaTime) {
+  update(deltaTime, camera) {
     // Update animation time
     this.time += deltaTime;
     
-    // Create a more dramatic pulsing effect from dark to bright
-    if (this.questionMark && this.questionMarkMaterial && !this.isOpening) {
-      // Calculate pulsing value - more pronounced between very dark and bright
-      const pulseValue = (Math.sin(this.time * 2) + 1) / 2; // 0 to 1 range
+    // Update box based on current state
+    switch (this.boxState) {
+      case 'opening':
+        this.updateBoxOpening(deltaTime);
+        break;
+      case 'open':
+        this.updateBoxOpen(deltaTime);
+        break;
+      case 'closing':
+        this.updateBoxClosing(deltaTime);
+        break;
+      case 'closed':
+      default:
+        this.updateBoxClosed(deltaTime);
+        break;
+    }
+    
+    // Update info panel position if visible
+    if (this.isPlayerNearby) {
+      this.updateInfoPanelPosition(camera);
+    }
+  }
+  
+  /**
+   * Update the box opening animation
+   * @param {number} deltaTime - Time elapsed since last update
+   */
+  updateBoxOpening(deltaTime) {
+    // Update box opening time
+    this.boxOpeningTime += deltaTime;
+    
+    // Calculate progress of the opening animation (0 to 1)
+    const openProgress = Math.min(this.boxOpeningTime / this.boxOpeningDuration, 1.0);
+    
+    // Animate box lid opening
+    if (this.boxLid) {
+      // Calculate lid rotation angle based on easing function (0 to PI/2)
+      this.boxOpenAngle = (Math.PI / 2) * this.easeOutBack(openProgress);
       
-      // Store current brightness for weapon quality calculation
-      this.currentWeaponQuality = pulseValue;
+      // Apply rotation to the lid (rotate around back edge)
+      this.boxLid.rotation.x = -this.boxOpenAngle;
       
-      // Apply to question mark material - go from almost black to bright blue
-      this.questionMark.children.forEach(child => {
-        if (child.material) {
-          // Adjust emissive intensity to go from very dark to bright
-          child.material.emissiveIntensity = pulseValue * 2; // 0 to 2 range
-          
-          // Change color from dark to bright
-          const colorIntensity = 0.2 + pulseValue * 0.8;
-          child.material.color.setRGB(
-            0.1 * colorIntensity, 
-            0.6 * colorIntensity, 
-            0.9 * colorIntensity
-          );
-        }
-      });
+      // Move lid pivot point to the back edge
+      this.boxLid.position.z = -0.5 + (Math.sin(this.boxOpenAngle) * 0.05);
+      this.boxLid.position.y = 0.8 - 0.05 * (1 - Math.cos(this.boxOpenAngle));
+    }
+    
+    // Hide question mark during opening
+    if (this.questionMark) {
+      this.questionMark.visible = false;
+    }
+    
+    // Play sound if not already playing
+    if (!this.boxSoundPlaying) {
+      this.playBoxSound();
+    }
+    
+    // Check if opening animation is complete
+    if (openProgress >= 1.0) {
+      this.boxState = 'open';
+      this.createFloatingWeapon();
       
-      // Update the point light intensity - more dramatic from off to very bright
-      if (this.questionMarkLight) {
-        this.questionMarkLight.intensity = pulseValue * 5; // 0 to 5 range
+      // When sound ends (7 seconds), the weapon should be ready
+      setTimeout(() => {
+        this.weaponReady = true;
+      }, 7000);
+    }
+  }
+  
+  /**
+   * Update the box open state (when lid is fully open)
+   * @param {number} deltaTime - Time elapsed since last update
+   */
+  updateBoxOpen(deltaTime) {
+    // Update weapon display time if weapon is ready
+    if (this.weaponReady) {
+      this.weaponDisplayTime += deltaTime;
+      
+      // Visual indication of time remaining
+      if (this.weaponFloating) {
+        // Keep weapon fully visible and elevated for most of the duration
+        // Only start lowering in the last 0.5 seconds
+        const timeRatio = Math.min(this.weaponDisplayTime / 10.0, 1.0); // Fixed 10-second duration
         
-        // Light color goes from dark purple to bright blue
-        const lightColor = new THREE.Color(
-          0.3 + pulseValue * 0.2,
-          0.5 + pulseValue * 0.3,
-          0.7 + pulseValue * 0.3
-        );
-        this.questionMarkLight.color = lightColor;
+        // Set fixed height - fully elevated for the entire duration
+        const startHeight = 1.2; // Height above box
+        let currentHeight = startHeight;
+        
+        // Add a floating/hovering animation to make the weapon more noticeable
+        currentHeight += Math.sin(this.time * 2) * 0.05;
+        this.weaponFloating.rotation.y += deltaTime * 0.5; // Slow rotation for emphasis
+        
+        // Update weapon position
+        this.weaponFloating.position.y = currentHeight;
+        
+        // Only start closing the lid in the last half second
+        if (this.boxLid && timeRatio > 0.95) {
+          // Map 0.95-1.0 to 0-1 for the closing animation (last half second)
+          const closingProgress = (timeRatio - 0.95) * 20; // 20 = 1/0.05
+          this.boxLid.rotation.x = -(Math.PI/2) * (1 - (closingProgress * 0.2)); // Close by up to 20%
+        }
       }
       
-      // Update the glow effect
-      if (this.questionMarkGlow) {
-        // Opacity pulses with the question mark
-        this.questionMarkGlow.material.opacity = 0.05 + pulseValue * 0.3;
-        
-        // Slowly rotate the glow for additional effect
-        this.questionMarkGlow.rotation.y += deltaTime * 0.2;
+      // If display time is up, hide the weapon and close box
+      if (this.weaponDisplayTime >= 10.0 && this.hasWeaponAvailable) {
+        this.hideWeapon();
+        this.hasWeaponAvailable = false;
+        this.isOpen = false;
+        this.boxState = 'closing';
       }
     }
     
-    // Handle box opening animation if active
-    if (this.isOpening) {
-      this.boxOpeningTime += deltaTime;
-      const progress = Math.min(this.boxOpeningTime / this.boxOpeningDuration, 1.0);
+    // If creating a weapon, handle process
+    if (this.isGeneratingWeapon && !this.weaponReady) {
+      // Track time for weapon generation (using quality for dramatic effect)
+      this.weaponGenerationTime += deltaTime;
       
-      // Animate box opening
-      this.animateBoxOpening(progress);
+      // Make weapon generation take longer based on quality
+      const generationDuration = 1.5 + (this.currentWeaponQuality * 2); // 1.5 to 3.5 seconds based on quality
       
-      // Check if animation is complete
-      if (progress >= 1.0 && !this.isGeneratingWeapon) {
-        this.completeWeaponGeneration();
+      // Only show weapon after generation is complete
+      if (this.weaponGenerationTime >= generationDuration) {
+        // Create the weapon if not already created
+        if (!this.weaponFloating) {
+          this.createFloatingWeapon();
+        }
+        
+        // Mark weapon as ready for pickup
+        this.weaponReady = true;
+        this.hasWeaponAvailable = true;
+        this.weaponDisplayTime = 0;
       }
     }
   }
   
   /**
-   * Animate the box opening
-   * @param {number} progress - Animation progress from 0 to 1
+   * Update the box closing animation
+   * @param {number} deltaTime - Time elapsed since last update
    */
-  animateBoxOpening(progress) {
-    if (!this.weaponFloating) {
-      // Create a placeholder floating weapon on first animation frame
-      this.createFloatingWeapon();
+  updateBoxClosing(deltaTime) {
+    // Update box closing time
+    this.boxOpeningTime += deltaTime;
+    
+    // Calculate progress of the closing animation (0 to 1)
+    const closeProgress = Math.min(this.boxOpeningTime / (this.boxOpeningDuration * 0.7), 1.0); // Close faster than open
+    
+    // Animate box lid closing
+    if (this.boxLid) {
+      // Calculate lid rotation angle based on easing function (PI/2 to 0)
+      this.boxOpenAngle = (Math.PI / 2) * (1 - this.easeInBack(closeProgress));
+      
+      // Apply rotation to the lid
+      this.boxLid.rotation.x = -this.boxOpenAngle;
+      
+      // Move lid pivot point back
+      this.boxLid.position.z = -0.5 + (Math.sin(this.boxOpenAngle) * 0.05);
+      this.boxLid.position.y = 0.8 - 0.05 * (1 - Math.cos(this.boxOpenAngle));
     }
     
+    // Animate weapon going back into box
     if (this.weaponFloating) {
-      // Animate the weapon floating up from the box
-      const height = Math.sin(progress * Math.PI) * 1.5;
-      this.weaponFloating.position.y = 0.8 + height;
+      // Move the weapon down into the box
+      const weaponY = 1.2 - closeProgress * 0.8;
+      this.weaponFloating.position.y = weaponY;
       
-      // Rotate the weapon slowly
-      this.weaponFloating.rotation.y += 0.03;
-      
-      // Scale the weapon for a "materializing" effect
-      if (progress < 0.5) {
-        // Scale up during first half
-        const scale = progress * 2;
-        this.weaponFloating.scale.set(scale, scale, scale);
-      }
-      
-      // Add glowing effect that intensifies
+      // Fade out the weapon
       if (this.weaponFloating.children.length > 0) {
         this.weaponFloating.children.forEach(child => {
-          if (child.material) {
-            child.material.emissive = new THREE.Color(
-              0.3 + progress * 0.7,
-              0.3 + progress * 0.7,
-              0.3 + progress * 0.7
-            );
-            child.material.emissiveIntensity = progress * 2;
+          if (child.material && child.material.opacity !== undefined) {
+            child.material.opacity = 1 - closeProgress;
           }
         });
       }
     }
     
-    // Hide question mark during animation
-    if (this.questionMark) {
-      this.questionMark.visible = false;
+    // Check if closing animation is complete
+    if (closeProgress >= 1.0) {
+      this.resetBoxState();
     }
   }
   
   /**
-   * Create a floating weapon above the box
+   * Easing function for smoother animations (ease out back)
+   * @param {number} t - Progress from 0 to 1
+   * @returns {number} Eased value
    */
-  createFloatingWeapon() {
-    const weaponGroup = new THREE.Group();
+  easeOutBack(t) {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+  }
+  
+  /**
+   * Easing function for smoother animations (ease in back)
+   * @param {number} t - Progress from 0 to 1
+   * @returns {number} Eased value
+   */
+  easeInBack(t) {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return c3 * t * t * t - c1 * t * t;
+  }
+  
+  /**
+   * Play the mystery box sound
+   */
+  playBoxSound() {
+    // Skip audio if already flagged as having an error
+    if (this.audioDisabled) {
+      return;
+    }
     
-    // Create a glowing placeholder weapon
-    const geometry = new THREE.BoxGeometry(0.1, 0.1, 0.4);
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x4fc3f7,
-      emissive: 0x4fc3f7,
-      emissiveIntensity: 0.5,
-      transparent: true,
-      opacity: 0.8
-    });
-    const weaponMesh = new THREE.Mesh(geometry, material);
-    weaponGroup.add(weaponMesh);
-    
-    // Add details based on quality
-    const quality = this.currentWeaponQuality;
-    
-    // Add more complex geometry for higher quality
-    if (quality > 0.3) {
-      // Add barrel
-      const barrelGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.5, 8);
-      const barrel = new THREE.Mesh(barrelGeometry, material);
-      barrel.rotation.z = Math.PI / 2;
-      barrel.position.set(0, 0, -0.1);
-      weaponGroup.add(barrel);
-      
-      // Add scope for higher quality
-      if (quality > 0.6) {
-        const scopeGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.15, 8);
-        const scope = new THREE.Mesh(scopeGeometry, material);
-        scope.position.set(0, 0.07, 0);
-        weaponGroup.add(scope);
+    try {
+      // Create audio element if it doesn't exist
+      if (!this.boxSound) {
+        this.boxSound = new Audio('/audio/mystery-box-buy.wav');
+        this.boxSound.volume = 0.8;
+        
+        // Add error handler to prevent future attempts if file is missing
+        this.boxSound.onerror = () => {
+          console.warn("Mystery box sound file not found. Audio disabled.");
+          this.audioDisabled = true;
+        };
       }
       
-      // Add magazine
-      const magGeometry = new THREE.BoxGeometry(0.04, 0.15, 0.06);
-      const mag = new THREE.Mesh(magGeometry, material);
-      mag.position.set(0, -0.12, 0);
-      weaponGroup.add(mag);
+      // Only play if audio is loaded
+      if (this.boxSound.readyState > 0) {
+        this.boxSound.currentTime = 0;
+        this.boxSound.play().catch(error => {
+          console.warn("Could not play mystery box sound:", error);
+          this.audioDisabled = true;
+        });
+        this.boxSoundPlaying = true;
+        
+        // Reset the flag when the sound finishes
+        this.boxSound.onended = () => {
+          this.boxSoundPlaying = false;
+        };
+      }
+    } catch (error) {
+      console.warn("Error with mystery box sound:", error);
+      this.audioDisabled = true;
     }
-    
-    // Position at the top of the box
-    weaponGroup.position.set(0, 0.8, 0);
-    weaponGroup.scale.set(0, 0, 0); // Start invisible
-    
-    // Add to scene
-    this.instance.add(weaponGroup);
-    this.weaponFloating = weaponGroup;
   }
   
   /**
-   * Complete the weapon generation and give it to the player
+   * Create a floating weapon above the mystery box
+   */
+  createFloatingWeapon() {
+    // Create a random weapon based on quality
+    const weaponType = this.generateAIWeapon(this.currentWeaponQuality);
+    
+    // Save weapon type for player delivery
+    this.weaponToGive = weaponType;
+    
+    // Create a visual representation of the weapon
+    const weaponMesh = this.createWeaponMesh(weaponType);
+    
+    // Position above the box
+    weaponMesh.position.set(0, 1.2, 0); // Start higher
+    
+    // Make weapon immediately visible
+    weaponMesh.visible = true;
+    
+    // Add weapon mesh to scene
+    this.instance.add(weaponMesh);
+    
+    // Store reference
+    this.weaponFloating = weaponMesh;
+    
+    // Add a spotlight to highlight the weapon
+    const spotlight = new THREE.SpotLight(0x4fc3f7, 2, 3, Math.PI / 6, 0.5, 1);
+    spotlight.position.set(0, 2, 0);
+    spotlight.target = weaponMesh;
+    this.instance.add(spotlight);
+    this.weaponSpotlight = spotlight;
+    
+    // Add a glowing effect around the weapon
+    const glowGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: 0x4fc3f7,
+      transparent: true,
+      opacity: 0.2,
+      side: THREE.BackSide
+    });
+    const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
+    weaponMesh.add(glowMesh);
+    this.weaponGlow = glowMesh;
+    
+    // Log that weapon was created
+    console.log("MYSTERY BOX - Created floating weapon:", weaponType.name);
+  }
+  
+  /**
+   * Complete the weapon generation and give to player
+   * @returns {boolean} Whether the weapon was successfully given
    */
   completeWeaponGeneration() {
-    if (!this.playerToReceiveWeapon) return;
+    // Reset states
+    this.isGeneratingWeapon = false;
+    this.weaponGenerationTime = 0;
+    this.weaponReady = false;
     
-    console.log("Generating mystery box weapon with quality:", this.currentWeaponQuality);
+    // Check if there's a player to receive weapon
+    if (!this.playerToReceiveWeapon) {
+      console.error('No player to receive weapon');
+      return false;
+    }
     
-    // Create a weapon based on quality
-    const weapon = this.generateAIWeapon(this.currentWeaponQuality);
+    // Get the weapon type
+    const weaponType = this.weaponToGive;
     
-    // Give the weapon to the player
-    this.playerToReceiveWeapon.equipWeapon(weapon);
+    console.log("Attempting to give weapon to player:", weaponType);
     
-    // Show success message
-    this.showWeaponObtainedMessage(weapon.name);
+    // Give the weapon to the player - check for multiple possible method names
+    if (this.playerToReceiveWeapon) {
+      let success = false;
+      
+      // First try giveWeapon method
+      if (typeof this.playerToReceiveWeapon.giveWeapon === 'function') {
+        try {
+          this.playerToReceiveWeapon.giveWeapon(weaponType);
+          console.log(`Gave weapon: ${weaponType.name} to player using giveWeapon method`);
+          success = true;
+        } catch (error) {
+          console.error("Error using giveWeapon method:", error);
+        }
+      }
+      // Then try equipWeapon method
+      else if (typeof this.playerToReceiveWeapon.equipWeapon === 'function') {
+        try {
+          this.playerToReceiveWeapon.equipWeapon(weaponType);
+          console.log(`Gave weapon: ${weaponType.name} to player using equipWeapon method`);
+          success = true;
+        } catch (error) {
+          console.error("Error using equipWeapon method:", error);
+        }
+      }
+      
+      if (success) {
+        // Remove the floating weapon
+        if (this.weaponFloating) {
+          this.instance.remove(this.weaponFloating);
+          this.weaponFloating = null;
+        }
+        
+        // Remove spotlight
+        if (this.weaponSpotlight) {
+          this.instance.remove(this.weaponSpotlight);
+          this.weaponSpotlight = null;
+        }
+        
+        // Reset player reference
+        this.playerToReceiveWeapon = null;
+        
+        return true;
+      } else {
+        console.error("Failed to give weapon to player. No suitable method found.");
+      }
+    }
     
-    // Clean up
-    this.resetBoxState();
+    return false;
   }
   
   /**
-   * Generate a random AI weapon with properties based on quality
-   * @param {number} quality - Quality value from 0 to 1
-   * @returns {Weapon} - The generated weapon
+   * Hide the weapon display from the mystery box
    */
-  generateAIWeapon(quality) {
-    // Scale quality for better distribution (emphasize middle range)
-    const scaledQuality = Math.pow(quality, 0.7);
-    
-    // Generate wacky weapon name
-    const prefixes = ["Quantum", "Hyper", "Omni", "Void", "Flux", "Nano", "Plasma", "Astral", "Cosmic", "Vortex"];
-    const types = ["Blaster", "Cannon", "Pulser", "Decimator", "Annihilator", "Disruptor", "Rifle", "Launcher", "Beamer", "Shredder"];
-    const suffixes = ["of Doom", "X9000", "Prime", "Elite", "Mk IV", "Ultra", "Omega", "Infinity", "Matrix", "Nexus"];
-    
-    // Use quality to determine complexity of name
-    let name = "";
-    if (scaledQuality < 0.3) {
-      // Simple name for low quality
-      name = `${types[Math.floor(Math.random() * types.length)]}`;
-    } else if (scaledQuality < 0.7) {
-      // Two-part name for medium quality
-      name = `${prefixes[Math.floor(Math.random() * prefixes.length)]} ${types[Math.floor(Math.random() * types.length)]}`;
-    } else {
-      // Three-part name for high quality
-      name = `${prefixes[Math.floor(Math.random() * prefixes.length)]} ${types[Math.floor(Math.random() * types.length)]} ${suffixes[Math.floor(Math.random() * suffixes.length)]}`;
+  hideWeapon() {
+    // Remove the floating weapon from the scene
+    if (this.weaponFloating) {
+      this.instance.remove(this.weaponFloating);
+      this.weaponFloating = null;
     }
     
-    // Generate weapon description
-    const adjectives = ["devastating", "extraordinary", "unstable", "powerful", "advanced", "experimental", "mysterious", "anomalous"];
-    const descriptions = ["weapon", "technology", "prototype", "armament", "creation", "invention"];
-    const effects = ["disintegrates targets", "warps reality", "freezes time", "opens dimensions", "unleashes chaos", "bends physics"];
+    // Remove spotlight
+    if (this.weaponSpotlight) {
+      this.instance.remove(this.weaponSpotlight);
+      this.weaponSpotlight = null;
+    }
     
-    const description = `An ${adjectives[Math.floor(Math.random() * adjectives.length)]} ${descriptions[Math.floor(Math.random() * descriptions.length)]} that ${effects[Math.floor(Math.random() * effects.length)]}.`;
+    // Update state
+    this.hasWeaponAvailable = false;
+    this.weaponReady = false;
     
-    // Generate weapon stats based on quality
-    const damage = Math.floor(20 + (scaledQuality * 80)); // 20-100 damage
-    const headDamage = Math.floor(damage * (1.5 + scaledQuality)); // 1.5x to 2.5x multiplier
+    // Close the box
+    this.boxState = 'closing';
+  }
+  
+  /**
+   * Take the weapon from the mystery box
+   * @param {Player} player - The player taking the weapon
+   * @returns {boolean} Whether the weapon was successfully taken
+   */
+  takeWeapon(player) {
+    // Check if there's a weapon available to take
+    if (!this.isOpen || !this.hasWeaponAvailable || !this.weaponReady) {
+      console.log('No weapon available to take');
+      return false;
+    }
     
-    // Higher quality = faster fire rate (lower cooldown)
-    const cooldown = Math.max(0.05, 0.5 - (scaledQuality * 0.45)); // 0.5 to 0.05 seconds
+    // Store reference to weapon type first
+    const weaponType = this.weaponToGive;
     
-    // Higher quality = larger magazine
-    const magazineSize = Math.floor(8 + (scaledQuality * 92)); // 8 to 100 rounds
+    // Detailed debugging information
+    console.log("MYSTERY BOX - Attempting to take weapon:", weaponType);
+    console.log("MYSTERY BOX - Weapon visual properties:", {
+      customColor: weaponType.customColor,
+      quality: weaponType.quality
+    });
+    console.log("MYSTERY BOX - Player object:", player);
     
-    // Higher quality = more ammo
-    const totalAmmo = Math.floor(magazineSize * (2 + (scaledQuality * 8))); // 2x to 10x magazine size
+    // Create a proper weapon instance with all required methods
+    const weaponInstance = new Weapon(weaponType);
+    weaponInstance.init(); // Initialize the weapon to ensure it has all methods
     
-    // Higher quality = more bullets per shot (for shotgun-like weapons)
-    const projectilesPerShot = Math.floor(1 + (scaledQuality * scaledQuality * 15)); // 1 to 16 projectiles
+    console.log("MYSTERY BOX - Created fully initialized weapon instance");
     
-    // Higher quality = better accuracy (lower spread)
-    const spread = Math.max(0.001, 0.1 - (scaledQuality * 0.099)); // 0.1 to 0.001
+    // Try to give the weapon to the player via equipWeapon method
+    let success = false;
     
-    // Configure weapon based on random features and quality
-    const weaponConfig = {
-      name: name,
-      description: description,
-      cost: 0, // Mystery box weapons are free once obtained
-      bodyDamage: damage,
-      headDamage: headDamage,
-      cooldown: cooldown,
-      magazineSize: magazineSize,
-      totalAmmo: totalAmmo,
-      automatic: scaledQuality > 0.4, // Higher quality = automatic firing
-      projectilesPerShot: projectilesPerShot,
-      spread: spread,
-      hasInfiniteAmmo: scaledQuality > 0.9, // Only the best quality weapons get infinite ammo
-      isMysteryWeapon: true
-    };
+    if (typeof player.equipWeapon === 'function') {
+      try {
+        // Use the proper weapon instance rather than just the type
+        player.equipWeapon(weaponInstance);
+        console.log("MYSTERY BOX - Successfully equipped weapon using equipWeapon");
+        success = true;
+      } catch (error) {
+        console.error("MYSTERY BOX - Error using equipWeapon:", error);
+      }
+    } else {
+      console.error("MYSTERY BOX - Player does not have equipWeapon method");
+    }
     
-    // Create the weapon
-    const weapon = new Weapon(weaponConfig);
-    console.log("Created AI weapon:", name, "with quality:", scaledQuality);
+    // Remove the floating weapon
+    if (this.weaponFloating) {
+      this.instance.remove(this.weaponFloating);
+      this.weaponFloating = null;
+    }
     
-    return weapon;
+    // Remove spotlight
+    if (this.weaponSpotlight) {
+      this.instance.remove(this.weaponSpotlight);
+      this.weaponSpotlight = null;
+    }
+    
+    // Update state
+    this.hasWeaponAvailable = false;
+    this.isOpen = false;
+    
+    // Start closing the box
+    this.boxState = 'closing';
+    
+    // Play pickup sound
+    this.playPickupSound();
+    
+    // Log final outcome
+    if (success) {
+      console.log("MYSTERY BOX - Successfully gave player the weapon:", weaponType.name);
+    } else {
+      console.error("MYSTERY BOX - FAILED to give weapon to player. No suitable method found.");
+    }
+    
+    return success;
+  }
+  
+  /**
+   * Play a sound when weapon is picked up
+   */
+  playPickupSound() {
+    // Skip audio if already flagged as having an error
+    if (this.audioDisabled) {
+      return;
+    }
+    
+    try {
+      // Create audio element if it doesn't exist
+      if (!this.pickupSound) {
+        this.pickupSound = new Audio('/audio/weapon-pickup.wav');
+        this.pickupSound.volume = 0.6;
+        
+        // Add error handler to prevent future attempts if file is missing
+        this.pickupSound.onerror = () => {
+          console.warn("Weapon pickup sound file not found. Audio disabled.");
+          this.audioDisabled = true;
+        };
+      }
+      
+      // Only play if audio is loaded
+      if (this.pickupSound.readyState > 0) {
+        this.pickupSound.currentTime = 0;
+        this.pickupSound.play().catch(error => {
+          console.warn("Could not play weapon pickup sound:", error);
+          this.audioDisabled = true;
+        });
+      }
+    } catch (error) {
+      console.warn("Error with weapon pickup sound:", error);
+      this.audioDisabled = true;
+    }
   }
   
   /**
@@ -650,6 +939,16 @@ export class MysteryBox {
     this.isOpening = false;
     this.isGeneratingWeapon = false;
     this.boxOpeningTime = 0;
+    this.weaponDisplayTime = 0;
+    this.boxState = 'closed';
+    this.weaponReady = false;
+    
+    // Reset box lid position and rotation
+    if (this.boxLid) {
+      this.boxLid.rotation.x = 0;
+      this.boxLid.position.y = 0.8;
+      this.boxLid.position.z = 0;
+    }
     
     // Show question mark again
     if (this.questionMark) {
@@ -658,55 +957,6 @@ export class MysteryBox {
     
     // Clear player reference
     this.playerToReceiveWeapon = null;
-  }
-  
-  /**
-   * Show a message when the player obtains a weapon
-   * @param {string} weaponName - Name of the weapon obtained
-   */
-  showWeaponObtainedMessage(weaponName) {
-    const messageContainer = document.createElement('div');
-    messageContainer.style.position = 'absolute';
-    messageContainer.style.top = '30%';
-    messageContainer.style.left = '50%';
-    messageContainer.style.transform = 'translateX(-50%)';
-    messageContainer.style.padding = '20px 40px';
-    messageContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
-    messageContainer.style.color = '#4FC3F7';
-    messageContainer.style.fontFamily = 'Arial, sans-serif';
-    messageContainer.style.fontSize = '28px';
-    messageContainer.style.fontWeight = 'bold';
-    messageContainer.style.borderRadius = '8px';
-    messageContainer.style.zIndex = '2000';
-    messageContainer.style.textAlign = 'center';
-    messageContainer.style.boxShadow = '0 0 30px rgba(79, 195, 247, 0.7)';
-    messageContainer.style.border = '3px solid #4FC3F7';
-    messageContainer.style.animation = 'weaponReveal 3s forwards';
-    
-    // Add weapon name with special styling
-    messageContainer.innerHTML = `
-      <div style="font-size: 22px; margin-bottom: 10px; color: #B39DDB;">You obtained</div>
-      <div style="font-size: 32px; margin: 15px 0; color: #FFEB3B; text-shadow: 0 0 10px rgba(255, 235, 59, 0.7);">${weaponName}</div>
-      <div style="font-size: 18px; color: #E0E0E0;">Press Tab to view your weapons</div>
-    `;
-    
-    // Add CSS animation
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes weaponReveal {
-        0% { opacity: 0; transform: translate(-50%, -30px); }
-        10% { opacity: 1; transform: translate(-50%, 0); }
-        80% { opacity: 1; transform: translate(-50%, 0); }
-        100% { opacity: 0; transform: translate(-50%, -30px); }
-      }
-    `;
-    document.head.appendChild(style);
-    
-    // Add to document and remove after animation completes
-    document.body.appendChild(messageContainer);
-    setTimeout(() => {
-      document.body.removeChild(messageContainer);
-    }, 3000);
   }
   
   /**
@@ -810,19 +1060,21 @@ export class MysteryBox {
    * @returns {boolean} Whether the box was successfully opened
    */
   attemptOpen(player) {
-    // Check if the box is already being opened
-    if (this.isOpening) {
-      console.log('Mystery box is already being opened');
+    // If the box is already open, don't allow another open
+    if (this.isOpen) {
+      console.log('Mystery box is already open');
+      return false;
+    }
+    
+    // Check if the box is already being opened or open
+    if (this.boxState !== 'closed') {
+      console.log('Mystery box is already being opened or open');
       return false;
     }
     
     // Check if player has enough points
     if (player.score < this.cost) {
       console.log(`Player doesn't have enough points (${player.score}/${this.cost})`);
-      
-      // Show insufficient funds message
-      this.showInsufficientFundsMessage();
-      
       return false;
     }
     
@@ -831,92 +1083,25 @@ export class MysteryBox {
     console.log(`Deducted ${this.cost} points from player. Remaining: ${player.score}`);
     
     // Capture current brightness for weapon quality
-    const currentQuality = this.currentWeaponQuality;
-    console.log(`Mystery box opened with quality: ${currentQuality}`);
+    this.currentWeaponQuality = Math.max(0.3, this.currentWeaponQuality);
+    console.log(`Mystery box opened with quality: ${this.currentWeaponQuality}`);
     
     // Store player reference for weapon delivery
     this.playerToReceiveWeapon = player;
     
     // Start the box opening animation
-    this.isOpening = true;
+    this.boxState = 'opening';
     this.boxOpeningTime = 0;
+    this.weaponDisplayTime = 0;
+    this.weaponReady = false;
+    this.weaponGenerationTime = 0; 
+    this.isGeneratingWeapon = true;
     
-    // Show opening message
-    this.showOpeningMessage();
+    // Update state flags
+    this.isOpen = true;
+    this.hasWeaponAvailable = false; // Will be set to true when weapon is ready
     
     return true;
-  }
-  
-  /**
-   * Show a message when player has insufficient funds
-   */
-  showInsufficientFundsMessage() {
-    const messageContainer = document.createElement('div');
-    messageContainer.style.position = 'absolute';
-    messageContainer.style.top = '30%';
-    messageContainer.style.left = '50%';
-    messageContainer.style.transform = 'translateX(-50%)';
-    messageContainer.style.padding = '15px 30px';
-    messageContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
-    messageContainer.style.color = '#FF5252';
-    messageContainer.style.fontFamily = 'Arial, sans-serif';
-    messageContainer.style.fontSize = '24px';
-    messageContainer.style.fontWeight = 'bold';
-    messageContainer.style.borderRadius = '8px';
-    messageContainer.style.zIndex = '2000';
-    messageContainer.style.textAlign = 'center';
-    messageContainer.style.boxShadow = '0 0 20px rgba(255, 82, 82, 0.5)';
-    messageContainer.style.border = '2px solid #FF5252';
-    messageContainer.style.animation = 'fadeInOut 2s forwards';
-    messageContainer.textContent = 'Not enough points!';
-    
-    // Add CSS animation
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes fadeInOut {
-        0% { opacity: 0; transform: translate(-50%, -20px); }
-        15% { opacity: 1; transform: translate(-50%, 0); }
-        75% { opacity: 1; transform: translate(-50%, 0); }
-        100% { opacity: 0; transform: translate(-50%, -20px); }
-      }
-    `;
-    document.head.appendChild(style);
-    
-    // Add to document and remove after animation completes
-    document.body.appendChild(messageContainer);
-    setTimeout(() => {
-      document.body.removeChild(messageContainer);
-    }, 2000);
-  }
-  
-  /**
-   * Show a message when the box is being opened
-   */
-  showOpeningMessage() {
-    const messageContainer = document.createElement('div');
-    messageContainer.style.position = 'absolute';
-    messageContainer.style.top = '30%';
-    messageContainer.style.left = '50%';
-    messageContainer.style.transform = 'translateX(-50%)';
-    messageContainer.style.padding = '15px 30px';
-    messageContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
-    messageContainer.style.color = '#4FC3F7';
-    messageContainer.style.fontFamily = 'Arial, sans-serif';
-    messageContainer.style.fontSize = '24px';
-    messageContainer.style.fontWeight = 'bold';
-    messageContainer.style.borderRadius = '8px';
-    messageContainer.style.zIndex = '2000';
-    messageContainer.style.textAlign = 'center';
-    messageContainer.style.boxShadow = '0 0 20px rgba(79, 195, 247, 0.5)';
-    messageContainer.style.border = '2px solid #4FC3F7';
-    messageContainer.style.animation = 'fadeInOut 2s forwards';
-    messageContainer.textContent = 'Opening Mystery Box...';
-    
-    // Add to document and remove after animation completes
-    document.body.appendChild(messageContainer);
-    setTimeout(() => {
-      document.body.removeChild(messageContainer);
-    }, 2000);
   }
   
   /**
@@ -927,6 +1112,285 @@ export class MysteryBox {
     if (this.infoPanel && document.body.contains(this.infoPanel)) {
       document.body.removeChild(this.infoPanel);
     }
+    
+    // Clear any active timeouts
+    if (this.weaponTimeoutId) {
+      clearTimeout(this.weaponTimeoutId);
+      this.weaponTimeoutId = null;
+    }
+  }
+  
+  /**
+   * Create a visual representation of a weapon
+   * @param {WeaponType} weaponType - The type of weapon to create
+   * @returns {THREE.Group} The weapon mesh
+   */
+  createWeaponMesh(weaponType) {
+    const weaponGroup = new THREE.Group();
+    
+    // Create a more detailed weapon model
+    const gunBody = new THREE.Group();
+    
+    // Gun body color based on weapon quality (stored in currentWeaponQuality)
+    const quality = this.currentWeaponQuality;
+    const bodyColor = new THREE.Color(
+      0.2 + quality * 0.8, 
+      0.4 + quality * 0.6,
+      0.6 + quality * 0.4
+    );
+    
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: bodyColor,
+      emissive: bodyColor.clone().multiplyScalar(0.5),
+      emissiveIntensity: 0.8,
+      metalness: 0.8,
+      roughness: 0.2
+    });
+    
+    // Main body
+    const bodyGeometry = new THREE.BoxGeometry(0.08, 0.15, 0.5);
+    const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    gunBody.add(bodyMesh);
+    
+    // Barrel
+    const barrelGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8);
+    const barrelMesh = new THREE.Mesh(barrelGeometry, bodyMaterial);
+    barrelMesh.position.set(0, 0.05, 0.3);
+    barrelMesh.rotation.x = Math.PI / 2;
+    gunBody.add(barrelMesh);
+    
+    // Handle
+    const handleGeometry = new THREE.BoxGeometry(0.06, 0.2, 0.08);
+    const handleMesh = new THREE.Mesh(handleGeometry, bodyMaterial);
+    handleMesh.position.set(0, -0.15, 0);
+    gunBody.add(handleMesh);
+    
+    // Add scope for high quality weapons
+    if (quality > 0.7) {
+      const scopeGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.15, 8);
+      const scopeMesh = new THREE.Mesh(scopeGeometry, bodyMaterial);
+      scopeMesh.position.set(0, 0.13, 0.1);
+      scopeMesh.rotation.x = Math.PI / 2;
+      gunBody.add(scopeMesh);
+      
+      // Scope lens
+      const lensGeometry = new THREE.CircleGeometry(0.02, 8);
+      const lensMaterial = new THREE.MeshStandardMaterial({
+        color: 0x00ffff,
+        emissive: 0x00ffff,
+        emissiveIntensity: 1
+      });
+      const lensMesh = new THREE.Mesh(lensGeometry, lensMaterial);
+      lensMesh.position.set(0, 0.13, 0.18);
+      lensMesh.rotation.y = Math.PI / 2;
+      gunBody.add(lensMesh);
+    }
+    
+    // Add muzzle
+    const muzzleGeometry = new THREE.CylinderGeometry(0.03, 0.02, 0.05, 8);
+    const muzzleMesh = new THREE.Mesh(muzzleGeometry, bodyMaterial);
+    muzzleMesh.position.set(0, 0.05, 0.6);
+    muzzleMesh.rotation.x = Math.PI / 2;
+    gunBody.add(muzzleMesh);
+    
+    // Add to weapon group
+    weaponGroup.add(gunBody);
+    
+    return weaponGroup;
+  }
+  
+  /**
+   * Generate a random AI weapon with properties based on quality
+   * @param {number} quality - Quality value from 0 to 1
+   * @returns {Object} The generated weapon type
+   */
+  generateAIWeapon(quality) {
+    // Scale quality for better distribution (emphasize middle range)
+    const scaledQuality = Math.pow(quality, 0.7);
+    
+    // Generate weapon name
+    const prefixes = ["Quantum", "Hyper", "Omni", "Void", "Flux", "Nano", "Plasma", "Astral", "Cosmic", "Vortex"];
+    const types = ["Blaster", "Cannon", "Pulser", "Decimator", "Annihilator", "Disruptor", "Rifle", "Launcher", "Beamer", "Shredder"];
+    const suffixes = ["of Doom", "X9000", "Prime", "Elite", "Mk IV", "Ultra", "Omega", "Infinity", "Matrix", "Nexus"];
+    
+    // Use quality to determine complexity of name
+    let name = "";
+    if (scaledQuality < 0.3) {
+      // Simple name for low quality
+      name = `${types[Math.floor(Math.random() * types.length)]}`;
+    } else if (scaledQuality < 0.7) {
+      // Two-part name for medium quality
+      name = `${prefixes[Math.floor(Math.random() * prefixes.length)]} ${types[Math.floor(Math.random() * types.length)]}`;
+    } else {
+      // Three-part name for high quality
+      name = `${prefixes[Math.floor(Math.random() * prefixes.length)]} ${types[Math.floor(Math.random() * types.length)]} ${suffixes[Math.floor(Math.random() * suffixes.length)]}`;
+    }
+    
+    // Generate weapon stats based on quality
+    const bodyDamage = Math.floor(20 + (scaledQuality * 80)); // 20-100 damage
+    const headDamage = Math.floor(bodyDamage * (1.5 + scaledQuality)); // 1.5x to 2.5x multiplier
+    
+    // Higher quality = faster fire rate (lower cooldown)
+    const cooldown = Math.max(0.05, 0.5 - (scaledQuality * 0.45)); // 0.5 to 0.05 seconds
+    
+    // Higher quality = larger magazine
+    const magazineSize = Math.floor(8 + (scaledQuality * 92)); // 8 to 100 rounds
+    
+    // Higher quality = more ammo
+    const totalAmmo = Math.floor(magazineSize * (2 + (scaledQuality * 8))); // 2x to 10x magazine size
+    
+    // Calculate color values for the weapon based on quality
+    const colorR = 0.2 + scaledQuality * 0.8;
+    const colorG = 0.4 + scaledQuality * 0.6;
+    const colorB = 0.6 + scaledQuality * 0.4;
+    
+    // Configure weapon type based on random features and quality
+    const weaponType = {
+      name: name,
+      description: `Mystery Box special weapon`,
+      cost: 0, // Mystery box weapons are free once obtained
+      bodyDamage: bodyDamage,
+      headDamage: headDamage,
+      cooldown: cooldown,
+      magazineSize: magazineSize,
+      totalAmmo: totalAmmo,
+      currentAmmo: magazineSize, // Start with a full magazine
+      automatic: scaledQuality > 0.4, // Higher quality = automatic firing
+      
+      // Essential weapon properties for gameplay
+      spread: 0.02, // Reasonable spread for most weapons
+      projectilesPerShot: Math.max(1, Math.floor(scaledQuality * 3)), // 1-3 projectiles based on quality
+      shotsPerBurst: 1, // Standard single shot
+      reloadTime: Math.max(0.5, 2.0 - scaledQuality), // 0.5-2.0 seconds based on quality
+      hasInfiniteAmmo: scaledQuality > 0.9, // Only the best quality weapons get infinite ammo
+      
+      // Visual properties for maintaining appearance
+      customColor: {
+        r: colorR,
+        g: colorG,
+        b: colorB
+      },
+      quality: scaledQuality, // Store the weapon quality for visual effects
+      
+      // Metadata
+      isMysteryWeapon: true,
+      soundPath: '/audio/gun-shot.wav', // Default sound path
+      muzzleFlash: true, // Enable muzzle flash for all weapons
+    };
+    
+    console.log("MYSTERY BOX - Created weapon:", name, "with quality:", scaledQuality.toFixed(2), "and properties:", weaponType);
+    
+    return weaponType;
+  }
+  
+  /**
+   * Update the box closed state
+   * @param {number} deltaTime - Time elapsed since last update
+   */
+  updateBoxClosed(deltaTime) {
+    // Create a more dramatic pulsing effect from dark to bright
+    if (this.questionMark && this.questionMarkMaterial) {
+      // Calculate pulsing value - more pronounced between very dark and bright
+      const pulseValue = (Math.sin(this.time * 2) + 1) / 2; // 0 to 1 range
+      
+      // Store current brightness for weapon quality calculation
+      this.currentWeaponQuality = pulseValue;
+      
+      // Apply to question mark material - go from almost black to bright blue
+      this.questionMark.children.forEach(child => {
+        if (child.material) {
+          // Adjust emissive intensity to go from very dark to bright
+          child.material.emissiveIntensity = pulseValue * 2; // 0 to 2 range
+          
+          // Change color from dark to bright
+          const colorIntensity = 0.2 + pulseValue * 0.8;
+          child.material.color.setRGB(
+            0.1 * colorIntensity, 
+            0.6 * colorIntensity, 
+            0.9 * colorIntensity
+          );
+        }
+      });
+      
+      // Update the point light intensity - more dramatic from off to very bright
+      if (this.questionMarkLight) {
+        this.questionMarkLight.intensity = pulseValue * 5; // 0 to 5 range
+        
+        // Light color goes from dark purple to bright blue
+        const lightColor = new THREE.Color(
+          0.3 + pulseValue * 0.2,
+          0.5 + pulseValue * 0.3,
+          0.7 + pulseValue * 0.3
+        );
+        this.questionMarkLight.color = lightColor;
+      }
+      
+      // Update the glow effect
+      if (this.questionMarkGlow) {
+        // Opacity pulses with the question mark
+        this.questionMarkGlow.material.opacity = 0.05 + pulseValue * 0.3;
+        
+        // Slowly rotate the glow for additional effect
+        this.questionMarkGlow.rotation.y += deltaTime * 0.2;
+      }
+    }
+  }
+  
+  /**
+   * Reset the mystery box to its initial state
+   */
+  reset() {
+    console.log("Resetting Mystery Box");
+    
+    // Reset all state flags
+    this.isActive = true;
+    this.isPlayerNearby = false;
+    this.isGeneratingWeapon = false;
+    this.isOpening = false;
+    this.boxOpeningTime = 0;
+    this.weaponDisplayTime = 0;
+    this.boxSoundPlaying = false;
+    this.weaponReady = false;
+    
+    // Reset box state
+    this.boxState = 'closed';
+    this.isOpen = false;
+    this.hasWeaponAvailable = false;
+    
+    // Remove any floating weapon
+    if (this.weaponFloating) {
+      this.instance.remove(this.weaponFloating);
+      this.weaponFloating = null;
+    }
+    
+    // Reset box lid position and rotation
+    if (this.boxLid) {
+      this.boxLid.rotation.x = 0;
+      this.boxLid.position.y = 0.8;
+      this.boxLid.position.z = 0;
+    }
+    
+    // Show question mark again
+    if (this.questionMark) {
+      this.questionMark.visible = true;
+    }
+    
+    // Reset floating weapon height
+    this.weaponFloatingHeight = 0;
+    
+    // Clear player reference
+    this.playerToReceiveWeapon = null;
+    
+    // Reset quality and time
+    this.currentWeaponQuality = 0.5;
+    this.time = 0;
+    
+    // Hide info panel if it exists
+    this.hideInfoPanel();
   }
 } 
+ 
+ 
+ 
+ 
  

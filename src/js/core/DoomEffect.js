@@ -36,7 +36,7 @@ export class DoomEffect {
         uniforms: {
           tDiffuse: { value: null },
           resolution: { value: this.resolution },
-          pixelSize: { value: 4.0 } // Control pixelation amount
+          pixelSize: { value: 2.75 } // Reduced pixelation for better visibility (from 3.25 to 2.75)
         }
       });
       
@@ -146,16 +146,17 @@ export class DoomEffect {
         // Sample the texture with pixelated coordinates
         vec4 texel = texture2D(tDiffuse, pixelatedUV);
         
-        // Apply a simple contrast enhancement for more Doom-like look
-        texel.rgb = clamp(texel.rgb * 1.2 - 0.1, 0.0, 1.0);
+        // Apply a brighter contrast enhancement
+        texel.rgb = clamp(texel.rgb * 1.5 + 0.15, 0.0, 1.0); // Increased from 1.3 to 1.5 and 0.1 to 0.15
         
-        // Add slight vignette effect for retro feel
-        float vignette = 1.0 - smoothstep(0.4, 1.0, length(vUv - 0.5) * 1.5);
-        texel.rgb *= vignette;
+        // Add lighter vignette effect (reduced darkening at edges)
+        float vignette = 1.0 - smoothstep(0.5, 1.5, length(vUv - 0.5) * 1.1); // Extended vignette range and reduced intensity
+        texel.rgb = mix(texel.rgb, texel.rgb * vignette, 0.3); // Reduced vignette mix from 0.5 to 0.3
         
         gl_FragColor = texel;
       }
     `;
   }
 } 
+ 
  

@@ -73,7 +73,8 @@ export class Room {
     this.uiElements = {
       interactionText: null,
       statusDisplay: null,
-      zombieCounter: null
+      zombieCounter: null,
+      holdProgressBar: null
     };
     
     // Enemy manager
@@ -88,6 +89,13 @@ export class Room {
     // Mystery box
     this.mysteryBox = null;
     this.nearbyMysteryBox = null;
+    
+    // Hold to buy mechanic
+    this.fKeyHoldStartTime = 0;
+    this.fKeyHoldDuration = 0.25; // Reduced to 0.25 seconds (250ms) for a quicker interaction
+    this.isHoldingF = false;
+    this.holdInteractionType = null; // 'mysteryBox' or 'wallBuy'
+    this.nearbyWallBuyRef = null; // Reference to nearby wall buy
   }
 
   /**
@@ -498,11 +506,35 @@ export class Room {
     // Add to container
     interactionContainer.appendChild(interactionText);
     
+    // Create hold progress bar
+    const holdProgressContainer = document.createElement('div');
+    holdProgressContainer.style.marginTop = '10px';
+    holdProgressContainer.style.width = '100%';
+    holdProgressContainer.style.height = '8px'; // Increased from 5px to 8px for better visibility
+    holdProgressContainer.style.backgroundColor = 'rgba(255, 255, 255, 0.3)';
+    holdProgressContainer.style.borderRadius = '4px';
+    holdProgressContainer.style.display = 'none';
+    
+    const holdProgressBar = document.createElement('div');
+    holdProgressBar.style.width = '0%';
+    holdProgressBar.style.height = '100%';
+    holdProgressBar.style.background = 'linear-gradient(to right, #4FC3F7, #2196F3)'; // Blue gradient
+    holdProgressBar.style.borderRadius = '4px';
+    holdProgressBar.style.transition = 'width 0.1s linear';
+    holdProgressBar.style.boxShadow = '0 0 5px rgba(79, 195, 247, 0.7)'; // Add a glow effect
+    
+    holdProgressContainer.appendChild(holdProgressBar);
+    interactionContainer.appendChild(holdProgressContainer);
+    
     // Add to document
     document.body.appendChild(interactionContainer);
     
-    // Store reference
+    // Store references
     this.uiElements.interactionText = interactionContainer;
+    this.uiElements.holdProgressBar = {
+      container: holdProgressContainer,
+      bar: holdProgressBar
+    };
     
     // Create status display
     this.createStatusDisplay();
@@ -606,9 +638,12 @@ export class Room {
   /**
    * Check for mystery box interactions
    * @param {Player} player - The player to check interactions for
+   * @param {number} deltaTime - Time since last frame
    */
-  checkMysteryBoxInteractions(player) {
-    if (!this.mysteryBox || !player || !player.camera) return;
+  checkMysteryBoxInteractions(player, deltaTime) {
+    if (!this.mysteryBox || !player || !player.camera) {
+      return;
+    }
     
     // Get player position using the camera
     const playerPosition = player.camera.position.clone();
@@ -636,41 +671,366 @@ export class Room {
       
       // Show/hide info panel based on proximity
       if (isNearby) {
-        // Check if player has enough points
-        const hasEnoughPoints = player.score >= this.mysteryBox.cost;
-        this.mysteryBox.showInfoPanel(hasEnoughPoints);
-        
-        // Update interaction text
-        if (this.uiElements && this.uiElements.interactionText) {
-          this.uiElements.interactionText.style.display = 'block';
-          this.uiElements.interactionText.textContent = `Press F to open Mystery Box (${this.mysteryBox.cost.toLocaleString()} points)`;
+        // Only show info if the box is not currently open
+        if (!this.mysteryBox.isOpen) {
+          // Check if player has enough points
+          const hasEnoughPoints = player.score >= this.mysteryBox.cost;
           
-          // Update style based on whether player can afford it
-          if (hasEnoughPoints) {
+          // Update interaction text only if the box is not open
+          if (this.uiElements && this.uiElements.interactionText && !this.mysteryBox.isOpen) {
+            this.uiElements.interactionText.style.display = 'block';
+            this.uiElements.interactionText.textContent = `HOLD F to open Mystery Box (${this.mysteryBox.cost.toLocaleString()} points)`;
+            
+            // Update style based on whether player can afford it
+            if (hasEnoughPoints) {
+              this.uiElements.interactionText.style.color = '#4FC3F7';
+              this.uiElements.interactionText.style.textShadow = '0 0 8px rgba(79, 195, 247, 0.5)';
+            } else {
+              this.uiElements.interactionText.style.color = '#FF5252';
+              this.uiElements.interactionText.style.textShadow = '0 0 8px rgba(255, 82, 82, 0.5)';
+            }
+          }
+        } 
+        // If box is open and a weapon is available, show pickup message
+        else if (this.mysteryBox.isOpen && this.mysteryBox.hasWeaponAvailable) {
+          if (this.uiElements && this.uiElements.interactionText) {
+            this.uiElements.interactionText.style.display = 'block';
+            this.uiElements.interactionText.textContent = `Press F to take weapon`;
             this.uiElements.interactionText.style.color = '#4FC3F7';
             this.uiElements.interactionText.style.textShadow = '0 0 8px rgba(79, 195, 247, 0.5)';
-          } else {
-            this.uiElements.interactionText.style.color = '#FF5252';
-            this.uiElements.interactionText.style.textShadow = '0 0 8px rgba(255, 82, 82, 0.5)';
           }
         }
       } else {
-        this.mysteryBox.hideInfoPanel();
+        // If no longer nearby, reset holding state for mystery box
+        if (this.holdInteractionType === 'mysteryBox') {
+          this.resetHoldInteraction();
+        }
         
-        // Clear interaction text
-        if (this.uiElements && this.uiElements.interactionText) {
+        // Clear interaction text if not near a wall buy
+        if (!this.nearbyWallBuyRef && this.uiElements && this.uiElements.interactionText) {
           this.uiElements.interactionText.style.display = 'none';
         }
       }
     }
     
-    // If player presses the interaction key and is nearby
-    if (isNearby && player.inputController && player.inputController.keys.f) {
-      // Reset the key to prevent multiple activations
-      player.inputController.keys.f = false;
+    // Handle interactions with the Mystery Box
+    if (isNearby) {
+      // Different handling based on whether the box is open or not
+      if (!this.mysteryBox.isOpen) {
+        // Box is closed - use hold mechanic to open
+        // Check if F key is currently pressed (not just a single tap)
+        const fKeyPressed = player.keys && player.keys.f;
+        
+        // Start tracking hold when F is pressed
+        if (fKeyPressed && !this.isHoldingF) {
+          this.isHoldingF = true;
+          this.fKeyHoldStartTime = performance.now() / 1000; // Convert to seconds
+          this.holdInteractionType = 'mysteryBox';
+          
+          // Show progress bar
+          if (this.uiElements && this.uiElements.holdProgressBar) {
+            this.uiElements.holdProgressBar.container.style.display = 'block';
+            this.uiElements.holdProgressBar.bar.style.width = '0%';
+          }
+        }
+        
+        // Update hold progress if actively holding
+        if (this.isHoldingF && fKeyPressed && this.holdInteractionType === 'mysteryBox') {
+          const currentTime = performance.now() / 1000;
+          const holdDuration = currentTime - this.fKeyHoldStartTime;
+          
+          // Calculate progress (0 to 1)
+          const holdProgress = Math.min(holdDuration / this.fKeyHoldDuration, 1.0);
+          
+          // Update progress bar
+          if (this.uiElements && this.uiElements.holdProgressBar) {
+            this.uiElements.holdProgressBar.bar.style.width = `${holdProgress * 100}%`;
+          }
+          
+          // Check if hold is complete
+          if (holdProgress >= 1.0) {
+            // Check if player has enough points and box is not already open
+            if (player.score >= this.mysteryBox.cost && !this.mysteryBox.isOpen) {
+              // Attempt to open the mystery box
+              const result = this.mysteryBox.attemptOpen(player);
+              
+              if (result) {
+                // Set a 10-second timer for the weapon to be available
+                this.mysteryBox.weaponTimeoutId = setTimeout(() => {
+                  if (this.mysteryBox.hasWeaponAvailable) {
+                    this.mysteryBox.hideWeapon();
+                    this.mysteryBox.hasWeaponAvailable = false;
+                    this.mysteryBox.isOpen = false;
+                    
+                    // Update interaction text if player is still nearby
+                    if (this.nearbyMysteryBox && this.uiElements && this.uiElements.interactionText) {
+                      const hasEnoughPoints = player.score >= this.mysteryBox.cost;
+                      this.uiElements.interactionText.textContent = `HOLD F to open Mystery Box (${this.mysteryBox.cost.toLocaleString()} points)`;
+                      
+                      if (hasEnoughPoints) {
+                        this.uiElements.interactionText.style.color = '#4FC3F7';
+                      } else {
+                        this.uiElements.interactionText.style.color = '#FF5252';
+                      }
+                    }
+                  }
+                }, 10000); // 10 seconds
+              }
+            }
+            
+            // Reset holding state
+            this.resetHoldInteraction();
+          }
+        }
+        
+        // If key is released, reset the hold
+        if (this.isHoldingF && !fKeyPressed && this.holdInteractionType === 'mysteryBox') {
+          this.resetHoldInteraction();
+        }
+      }
+      // Box is open and has a weapon available - use simple press to pick up
+      else if (this.mysteryBox.isOpen && this.mysteryBox.hasWeaponAvailable && this.mysteryBox.weaponReady) {
+        // Check for interaction using both isInteracting and keys.f (for one-press interaction)
+        const isPickingUp = player.isInteracting || (player.keys && player.keys.f && !this.isHoldingF);
+        
+        if (isPickingUp) {
+          console.log("MYSTERY BOX - Detected F press, attempting to take weapon");
+          
+          // Take the weapon with a simple press
+          const weaponTaken = this.mysteryBox.takeWeapon(player);
+          
+          if (weaponTaken) {
+            console.log("MYSTERY BOX - Weapon successfully taken by player");
+            
+            // Clear the timeout since the weapon was taken
+            if (this.mysteryBox.weaponTimeoutId) {
+              clearTimeout(this.mysteryBox.weaponTimeoutId);
+              this.mysteryBox.weaponTimeoutId = null;
+            }
+            
+            // Reset box state
+            this.mysteryBox.isOpen = false;
+            this.mysteryBox.hasWeaponAvailable = false;
+            
+            // Update interaction text if still nearby
+            if (this.nearbyMysteryBox && this.uiElements && this.uiElements.interactionText) {
+              const hasEnoughPoints = player.score >= this.mysteryBox.cost;
+              this.uiElements.interactionText.textContent = `HOLD F to open Mystery Box (${this.mysteryBox.cost.toLocaleString()} points)`;
+              
+              if (hasEnoughPoints) {
+                this.uiElements.interactionText.style.color = '#4FC3F7';
+              } else {
+                this.uiElements.interactionText.style.color = '#FF5252';
+              }
+            }
+          } else {
+            console.error("MYSTERY BOX - Failed to take weapon");
+          }
+          
+          // Reset interaction state
+          player.isInteracting = false;
+          if (player.keys) {
+            player.keys.f = false;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Reset hold interaction state
+   */
+  resetHoldInteraction() {
+    this.isHoldingF = false;
+    this.fKeyHoldStartTime = 0;
+    this.holdInteractionType = null;
+    
+    // Hide progress bar
+    if (this.uiElements && this.uiElements.holdProgressBar) {
+      this.uiElements.holdProgressBar.container.style.display = 'none';
+      this.uiElements.holdProgressBar.bar.style.width = '0%';
+      this.uiElements.holdProgressBar.bar.style.boxShadow = '0 0 5px rgba(79, 195, 247, 0.7)';
+    }
+    
+    // Reset text scale
+    if (this.uiElements && this.uiElements.interactionText) {
+      this.uiElements.interactionText.style.transform = 'scale(1)';
+    }
+  }
+
+  /**
+   * Check if player is near any wall buys for interaction
+   * @param {number} deltaTime - Time since last frame
+   */
+  checkWallBuyInteractions(deltaTime) {
+    if (!this.player || !this.wallBuys || !this.player.camera) return;
+    
+    let isNearWallBuy = false;
+    let nearestWallBuy = null;
+    
+    // Check each wall buy for proximity
+    this.wallBuys.forEach(wallBuy => {
+      if (wallBuy && typeof wallBuy.checkPlayerProximity === 'function') {
+        // Use the same approach as in checkWindowInteractions
+        if (wallBuy.checkPlayerProximity(this.player.camera.position)) {
+          isNearWallBuy = true;
+          nearestWallBuy = wallBuy;
+          
+          // Update wall buy's info panel position
+          if (typeof wallBuy.updateInfoPanelPosition === 'function') {
+            wallBuy.updateInfoPanelPosition(this.player.camera);
+          }
+        }
+      }
+    });
+    
+    // Update player's reference to the nearest wall buy
+    if (typeof this.player.setNearbyWallBuy === 'function') {
+      this.player.setNearbyWallBuy(nearestWallBuy);
+    }
+    
+    // Store reference to nearest wall buy
+    const wasNearWallBuy = this.nearbyWallBuyRef !== null;
+    this.nearbyWallBuyRef = nearestWallBuy;
+    
+    // Show different interaction text for wall buy
+    if (isNearWallBuy && nearestWallBuy && this.uiElements && this.uiElements.interactionText) {
+      // Only update text if not already set (prevent flickering if already showing this)
+      if (!wasNearWallBuy || this.uiElements.interactionText.textContent.indexOf('HOLD F to buy') === -1) {
+        this.uiElements.interactionText.style.display = 'block';
+        this.uiElements.interactionText.textContent = `HOLD F to buy ${nearestWallBuy.weapon?.name || 'Weapon'} (${nearestWallBuy.cost || '?'} points)`;
+      }
+    } else {
+      // If we're no longer near a wall buy but we were holding F for it, reset
+      if (!isNearWallBuy && this.holdInteractionType === 'wallBuy') {
+        this.resetHoldInteraction();
+      }
+    }
+    
+    // Handle F key hold for Wall Buy
+    if (isNearWallBuy && nearestWallBuy) {
+      const player = this.player;
+      // Check if F key is currently pressed (not just a single tap)
+      const fKeyPressed = player.keys && player.keys.f;
       
-      // Attempt to open the mystery box
-      this.mysteryBox.attemptOpen(player);
+      // Start tracking hold when F is pressed
+      if (fKeyPressed && !this.isHoldingF) {
+        this.isHoldingF = true;
+        this.fKeyHoldStartTime = performance.now() / 1000; // Convert to seconds
+        this.holdInteractionType = 'wallBuy';
+        
+        // Show progress bar
+        if (this.uiElements && this.uiElements.holdProgressBar) {
+          this.uiElements.holdProgressBar.container.style.display = 'block';
+          this.uiElements.holdProgressBar.bar.style.width = '0%';
+        }
+        
+        console.log("Started holding F near Wall Buy");
+      } 
+      // Check if F is released
+      else if (!fKeyPressed && this.isHoldingF && this.holdInteractionType === 'wallBuy') {
+        this.resetHoldInteraction();
+        console.log("Released F before completing Wall Buy purchase");
+      }
+      // Update hold progress - ONLY if still holding F key
+      else if (fKeyPressed && this.isHoldingF && this.holdInteractionType === 'wallBuy') {
+        const currentTime = performance.now() / 1000;
+        const holdTime = currentTime - this.fKeyHoldStartTime;
+        const holdProgress = Math.min(holdTime / this.fKeyHoldDuration, 1.0);
+        
+        // Update progress bar
+        if (this.uiElements && this.uiElements.holdProgressBar) {
+          this.uiElements.holdProgressBar.bar.style.width = `${holdProgress * 100}%`;
+          
+          // Add pulse effect when close to completion
+          if (holdProgress > 0.7) {
+            this.uiElements.holdProgressBar.bar.style.boxShadow = '0 0 10px rgba(79, 195, 247, 0.9)';
+          }
+        }
+        
+        // Add text pulse feedback as hold progresses
+        if (this.uiElements && this.uiElements.interactionText) {
+          // Make text pulse as you get closer
+          const scale = 1.0 + (holdProgress * 0.1);
+          this.uiElements.interactionText.style.transform = `scale(${scale})`;
+        }
+        
+        // Check if hold is complete
+        if (holdProgress >= 1.0) {
+          console.log("Completed holding F for Wall Buy");
+          
+          // Trigger wall buy purchase if player has enough points
+          if (player.score >= nearestWallBuy.cost) {
+            // Attempt to buy the weapon
+            nearestWallBuy.onInteract(player);
+            console.log(`Wall Buy purchase completed for ${nearestWallBuy.weapon?.name || 'Weapon'}`);
+          } else {
+            console.log("Not enough points to buy weapon");
+          }
+          
+          // Reset holding state
+          this.resetHoldInteraction();
+        }
+      }
+    }
+  }
+
+  /**
+   * Check if player is near any windows for interaction
+   */
+  checkWindowInteractions() {
+    if (!this.player || !this.windows) return;
+    
+    let isNearWindow = false;
+    let nearestWindow = null;
+    
+    // Check each window for proximity
+    this.windows.forEach(window => {
+      if (window.checkPlayerProximity(this.player.camera.position)) {
+        isNearWindow = true;
+        nearestWindow = window;
+      }
+    });
+    
+    // Show/hide interaction prompt
+    if (isNearWindow && nearestWindow && !nearestWindow.isFullyBoarded()) {
+      // Only show window interaction prompt if not holding F for something else
+      if (!this.isHoldingF) {
+        if (this.uiElements && this.uiElements.interactionText) {
+          this.uiElements.interactionText.style.display = 'block';
+          this.uiElements.interactionText.textContent = 'Press F to board up window';
+          
+          // Reset any hold progress indicators
+          if (this.uiElements.holdProgressBar) {
+            this.uiElements.holdProgressBar.container.style.display = 'none';
+          }
+        }
+      }
+      
+      // For window boarding, we'll keep the quick press interaction
+      if (this.player.isInteracting && !this.isHoldingF) {
+        // Add a board to the window
+        const boardAdded = nearestWindow.addBoard();
+        
+        // If board was successfully added, award points to the player
+        if (boardAdded && this.player && typeof this.player.addPoints === 'function') {
+          // Award 20 points for boarding up a window
+          this.player.addPoints(20, false, false);
+          
+          // Play window board add sound
+          if (typeof this.player.playWindowBoardAddSound === 'function') {
+            this.player.playWindowBoardAddSound();
+          }
+        }
+        
+        // Reset interaction state
+        this.player.isInteracting = false;
+      }
+    } else if (!this.nearbyWallBuyRef && !this.nearbyMysteryBox && !this.isHoldingF) {
+      // Only hide if not near a wall buy or mystery box and not currently holding F
+      if (this.uiElements && this.uiElements.interactionText) {
+        this.uiElements.interactionText.style.display = 'none';
+      }
     }
   }
 
@@ -707,102 +1067,19 @@ export class Room {
     // Check for window interactions
     this.checkWindowInteractions();
     
-    // Check for wall buy interactions
-    this.checkWallBuyInteractions();
+    // Check for wall buy interactions (pass deltaTime)
+    this.checkWallBuyInteractions(deltaTime);
     
-    // Check for mystery box interactions
-    this.checkMysteryBoxInteractions(this.player);
+    // Check for mystery box interactions (pass deltaTime)
+    this.checkMysteryBoxInteractions(this.player, deltaTime);
+    
+    // Reset the player's isInteracting flag to prevent unwanted interactions on the next frame
+    if (this.player.isInteracting) {
+      this.player.isInteracting = false;
+    }
     
     // Update UI
     this.updateStatusDisplay();
-  }
-  
-  /**
-   * Check if player is near any wall buys for interaction
-   */
-  checkWallBuyInteractions() {
-    if (!this.player || !this.wallBuys || !this.player.camera) return;
-    
-    let isNearWallBuy = false;
-    let nearestWallBuy = null;
-    
-    // Check each wall buy for proximity
-    this.wallBuys.forEach(wallBuy => {
-      if (wallBuy && typeof wallBuy.checkPlayerProximity === 'function') {
-        // Use the same approach as in checkWindowInteractions
-        if (wallBuy.checkPlayerProximity(this.player.camera.position)) {
-          isNearWallBuy = true;
-          nearestWallBuy = wallBuy;
-          
-          // Update wall buy's info panel position
-          if (typeof wallBuy.updateInfoPanelPosition === 'function') {
-            wallBuy.updateInfoPanelPosition(this.player.camera);
-          }
-        }
-      }
-    });
-    
-    // Update player's reference to the nearest wall buy
-    if (typeof this.player.setNearbyWallBuy === 'function') {
-      this.player.setNearbyWallBuy(nearestWallBuy);
-    }
-    
-    // Show different interaction text for wall buy
-    if (isNearWallBuy && nearestWallBuy && this.uiElements && this.uiElements.interactionText) {
-      this.uiElements.interactionText.style.display = 'block';
-      this.uiElements.interactionText.textContent = `Press F to buy ${nearestWallBuy.weapon?.name || 'Weapon'} (${nearestWallBuy.cost || '?'} points)`;
-    }
-  }
-  
-  /**
-   * Check if player is near any windows for interaction
-   */
-  checkWindowInteractions() {
-    if (!this.player || !this.windows) return;
-    
-    let isNearWindow = false;
-    let nearestWindow = null;
-    
-    // Check each window for proximity
-    this.windows.forEach(window => {
-      if (window.checkPlayerProximity(this.player.camera.position)) {
-        isNearWindow = true;
-        nearestWindow = window;
-      }
-    });
-    
-    // Show/hide interaction prompt
-    if (isNearWindow && nearestWindow && !nearestWindow.isFullyBoarded()) {
-      if (this.uiElements && this.uiElements.interactionText) {
-        this.uiElements.interactionText.style.display = 'block';
-        this.uiElements.interactionText.textContent = 'Press F to board up window';
-      }
-      
-      // Check for interaction key (F)
-      if (this.player.isInteracting) {
-        // Add a board to the window
-        const boardAdded = nearestWindow.addBoard();
-        
-        // If board was successfully added, award points to the player
-        if (boardAdded && this.player && typeof this.player.addPoints === 'function') {
-          // Award 20 points for boarding up a window
-          this.player.addPoints(20, false, false);
-          
-          // Play window board add sound
-          if (typeof this.player.playWindowBoardAddSound === 'function') {
-            this.player.playWindowBoardAddSound();
-          }
-        }
-        
-        // Reset interaction state
-        this.player.isInteracting = false;
-      }
-    } else if (!this.player.nearbyWallBuy && !this.nearbyMysteryBox) {
-      // Only hide if not near a wall buy or mystery box
-      if (this.uiElements && this.uiElements.interactionText) {
-        this.uiElements.interactionText.style.display = 'none';
-      }
-    }
   }
   
   /**
@@ -816,5 +1093,88 @@ export class Room {
       this.uiElements.zombieCounter.textContent = `Zombies: ${this.enemyManager.enemies.length}`;
     }
   }
+
+  /**
+   * Reset all windows to their initial state
+   */
+  resetWindows() {
+    console.log("Resetting all windows");
+    
+    // Repair all windows to their initial state
+    if (this.windows && this.windows.length > 0) {
+      this.windows.forEach(window => {
+        // Fully repair each window
+        if (typeof window.repair === 'function') {
+          // Repair to maximum boards
+          while (window.boardsCount < window.maxBoards) {
+            window.repair();
+          }
+        }
+        
+        // Reset any other window state if needed
+        if (typeof window.reset === 'function') {
+          window.reset();
+        }
+      });
+      
+      console.log(`${this.windows.length} windows reset to fully repaired state`);
+    }
+  }
+
+  /**
+   * Reset the entire room to its initial state
+   * This is called when restarting the game
+   */
+  resetRoom() {
+    console.log("Resetting entire room to initial state");
+    
+    // Reset all windows
+    this.resetWindows();
+    
+    // Reset mystery box if it exists
+    if (this.mysteryBox && typeof this.mysteryBox.reset === 'function') {
+      this.mysteryBox.reset();
+    }
+    
+    // Reset enemy manager
+    if (this.enemyManager) {
+      this.enemyManager.clearEnemies();
+      this.enemyManager.currentRound = 0;
+      this.enemyManager.zombiesRemaining = 0;
+      this.enemyManager.roundActive = false;
+    }
+    
+    // Reset any other room state as needed
+    // Reset wall buys
+    if (this.wallBuys && this.wallBuys.length > 0) {
+      this.wallBuys.forEach(wallBuy => {
+        if (typeof wallBuy.reset === 'function') {
+          wallBuy.reset();
+        }
+      });
+    }
+    
+    // Reset UI elements
+    if (this.uiElements && this.uiElements.interactionText) {
+      this.uiElements.interactionText.style.display = 'none';
+    }
+    
+    if (this.uiElements && this.uiElements.holdProgressBar) {
+      this.uiElements.holdProgressBar.container.style.display = 'none';
+      this.uiElements.holdProgressBar.bar.style.width = '0%';
+    }
+    
+    // Reset interaction states
+    this.isHoldingF = false;
+    this.holdInteractionType = null;
+    this.nearbyWallBuyRef = null;
+    this.nearbyMysteryBox = false;
+    
+    console.log("Room reset completed");
+  }
 } 
+ 
+ 
+ 
+ 
  

@@ -299,5 +299,33 @@ export class WallBuy {
       document.body.removeChild(this.infoPanel);
     }
   }
+  
+  /**
+   * Handle player interaction with wall buy
+   * @param {PlayerControls} player - The player attempting to interact
+   * @returns {boolean} True if interaction was successful
+   */
+  onInteract(player) {
+    console.log("Wall Buy onInteract called - attempting to purchase");
+    return this.purchase(player);
+  }
+  
+  /**
+   * Reset the wall buy to its initial state
+   */
+  reset() {
+    // Hide the info panel
+    this.showInfoPanel(false);
+    
+    // Reset interaction state
+    this.isPlayerNearby = false;
+    
+    // Any other state that needs to be reset
+    console.log(`Wall buy ${this.weapon.name} reset to initial state`);
+  }
 } 
+ 
+ 
+ 
+ 
  

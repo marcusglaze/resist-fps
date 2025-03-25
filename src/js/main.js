@@ -14,16 +14,41 @@ document.addEventListener('DOMContentLoaded', () => {
     const doomParam = url.searchParams.get('doomMode');
     const doomMode = doomParam !== '0'; // Enable Doom mode by default, disable if parameter is '0'
     
-    console.log("Starting game with doomMode:", doomMode);
+    // Check for multiplayer mode via URL parameters
+    const hostParam = url.searchParams.get('host');
+    const joinParam = url.searchParams.get('join');
     
-    // Add title styling for Doom-like aesthetics if in Doom mode
-    if (doomMode) {
-      createDoomTitle();
+    console.log("Initializing game with doomMode:", doomMode);
+    if (hostParam === '1') {
+      console.log("Initializing as multiplayer host");
+    } else if (joinParam) {
+      console.log("Joining multiplayer game:", joinParam);
     }
+    
+    // Create a loading screen
+    showLoadingScreen();
     
     // Create and initialize the engine with debug and doom modes
     const engine = new Engine(debugMode, doomMode);
+    
+    // Initialize the engine - this will show the start menu
     engine.init();
+    
+    // Check if we should automatically host or join a game via URL parameters
+    if (hostParam === '1' && engine.networkManager) {
+      setTimeout(() => {
+        engine.startMenu.hide();
+        engine.networkManager.startHosting();
+      }, 1000);
+    } else if (joinParam && engine.networkManager) {
+      setTimeout(() => {
+        engine.startMenu.hide();
+        engine.networkManager.joinGame(joinParam);
+      }, 1000);
+    }
+    
+    // Hide loading screen once engine is initialized
+    hideLoadingScreen();
 
     // Print instructions to console
     console.log('3D Room Explorer: Zombie Defense' + (doomMode ? ' - DOOM EDITION' : ''));
@@ -31,6 +56,14 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Press F to board up windows when close to them');
     console.log('Zombies will break through the windows if you don\'t board them up!');
     console.log('Left-click to shoot zombies');
+    
+    // Add multiplayer instructions
+    console.log('--- Multiplayer ---');
+    console.log('To host a game: Choose "Host Game" from the menu');
+    console.log('To join a game: Choose "Join Game" and enter the host ID');
+    console.log('You can also use URL parameters to automatically host or join:');
+    console.log('  ?host=1 - Host a game');
+    console.log('  ?join=HOSTID - Join a specific host');
   } catch (error) {
     console.error("Fatal error initializing game:", error);
     document.body.innerHTML = `
@@ -46,38 +79,84 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /**
- * Create a Doom-style title banner
+ * Show a loading screen while the game initializes
+ */
+function showLoadingScreen() {
+  const loadingScreen = document.createElement('div');
+  loadingScreen.id = 'loading-screen';
+  loadingScreen.style.position = 'fixed';
+  loadingScreen.style.top = '0';
+  loadingScreen.style.left = '0';
+  loadingScreen.style.width = '100%';
+  loadingScreen.style.height = '100%';
+  loadingScreen.style.backgroundColor = '#000';
+  loadingScreen.style.display = 'flex';
+  loadingScreen.style.flexDirection = 'column';
+  loadingScreen.style.alignItems = 'center';
+  loadingScreen.style.justifyContent = 'center';
+  loadingScreen.style.zIndex = '9999';
+  loadingScreen.style.color = '#fff';
+  loadingScreen.style.fontFamily = 'monospace';
+  
+  const title = document.createElement('h1');
+  title.textContent = 'RESIST: MATRIX';
+  title.style.color = '#ff3333';
+  title.style.fontSize = '36px';
+  title.style.textShadow = '0 0 10px #ff3333';
+  title.style.marginBottom = '20px';
+  
+  const loadingText = document.createElement('p');
+  loadingText.textContent = 'Loading...';
+  loadingText.style.fontSize = '18px';
+  
+  // Create loading bar
+  const loadingBarContainer = document.createElement('div');
+  loadingBarContainer.style.width = '300px';
+  loadingBarContainer.style.height = '20px';
+  loadingBarContainer.style.backgroundColor = '#333';
+  loadingBarContainer.style.borderRadius = '10px';
+  loadingBarContainer.style.overflow = 'hidden';
+  loadingBarContainer.style.marginTop = '20px';
+  
+  const loadingBar = document.createElement('div');
+  loadingBar.style.width = '0%';
+  loadingBar.style.height = '100%';
+  loadingBar.style.backgroundColor = '#ff3333';
+  loadingBar.style.transition = 'width 3s ease-in-out';
+  loadingBarContainer.appendChild(loadingBar);
+  
+  loadingScreen.appendChild(title);
+  loadingScreen.appendChild(loadingText);
+  loadingScreen.appendChild(loadingBarContainer);
+  
+  document.body.appendChild(loadingScreen);
+  
+  // Animate loading bar
+  setTimeout(() => {
+    loadingBar.style.width = '100%';
+  }, 100);
+}
+
+/**
+ * Hide the loading screen
+ */
+function hideLoadingScreen() {
+  const loadingScreen = document.getElementById('loading-screen');
+  if (loadingScreen) {
+    loadingScreen.style.opacity = '0';
+    loadingScreen.style.transition = 'opacity 0.5s ease-in-out';
+    
+    setTimeout(() => {
+      if (loadingScreen.parentNode) {
+        loadingScreen.parentNode.removeChild(loadingScreen);
+      }
+    }, 500);
+  }
+}
+
+/**
+ * Create a Doom-style title banner (function kept for reference but not used)
  */
 function createDoomTitle() {
-  try {
-    // Create title container
-    const titleContainer = document.createElement('div');
-    titleContainer.className = 'doom-title';
-    titleContainer.style.position = 'fixed';
-    titleContainer.style.top = '20px';
-    titleContainer.style.left = '0';
-    titleContainer.style.width = '100%';
-    titleContainer.style.textAlign = 'center';
-    titleContainer.style.zIndex = '1000';
-    titleContainer.style.pointerEvents = 'none';
-    
-    // Create title text
-    const titleText = document.createElement('h1');
-    titleText.textContent = 'DOOM: WINDOW DEFENSE';
-    titleText.style.fontFamily = 'Impact, fantasy';
-    titleText.style.fontSize = '48px';
-    titleText.style.color = '#ff0000';
-    titleText.style.textShadow = '4px 4px 0 #000';
-    titleText.style.margin = '0';
-    titleText.style.letterSpacing = '2px';
-    titleText.style.transform = 'scaleY(1.2)';
-    
-    // Add title to container
-    titleContainer.appendChild(titleText);
-    
-    // Add to document
-    document.body.appendChild(titleContainer);
-  } catch (error) {
-    console.error("Error creating Doom title:", error);
-  }
+  // Title banner functionality removed as requested
 } 

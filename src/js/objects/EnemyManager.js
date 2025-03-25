@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { Enemy } from './Enemy';
+import { CrawlingZombie } from './CrawlingZombie';
+import { RunnerZombie } from './RunnerZombie';
+import { SpitterZombie } from './SpitterZombie';
 
 /**
  * Manages enemies in the game
@@ -15,8 +18,8 @@ export class EnemyManager {
     this.zombiesRemaining = 0;
     this.zombiesSpawned = 0;
     this.roundActive = false;
-    this.roundChangeDelay = 5; // seconds between rounds
-    this.roundStartDelay = 3; // seconds before zombies start spawning in a new round
+    this.roundChangeDelay = 3; // seconds between rounds (reduced from 5)
+    this.roundStartDelay = 2; // seconds before zombies start spawning in a new round (reduced from 3)
     this.timeSinceLastRound = 0;
     this.roundStartTime = 0;
     
@@ -25,10 +28,10 @@ export class EnemyManager {
     this.stateCheckInterval = 5; // Check every 5 seconds
     
     // Enemy settings that scale with rounds
-    this.baseMaxEnemies = 5; // Starting max concurrent zombies
+    this.baseMaxEnemies = 7; // Reduced from 8
     this.maxEnemies = this.baseMaxEnemies;
-    this.baseZombiesPerRound = 6; // Starting zombies per round
-    this.baseSpawnRate = 0.15; // Base spawn rate (zombies per second)
+    this.baseZombiesPerRound = 8; // Reduced from 10
+    this.baseSpawnRate = 0.2; // Reduced from 0.25
     this.spawnRate = this.baseSpawnRate;
     this.lastSpawnTime = 0;
     
@@ -297,25 +300,25 @@ export class EnemyManager {
     this.timeSinceLastRound = 0;
     this.roundStartTime = performance.now() / 1000;
     
-    // Calculate zombies for this round - more aggressive scaling
-    // Old formula: baseZombiesPerRound + (round-1) * 3
-    // New formula: baseZombiesPerRound + (round-1) * 4 + Math.floor(round/5) * 5
-    const baseZombies = this.baseZombiesPerRound + (this.currentRound - 1) * 4;
-    const bonusZombies = Math.floor(this.currentRound / 5) * 5;
+    // Calculate zombies for this round - slightly reduced scaling
+    // Old formula: baseZombiesPerRound + (round-1) * 6 + Math.floor(round/4) * 7
+    // New formula: baseZombiesPerRound + (round-1) * 5 + Math.floor(round/4) * 6
+    const baseZombies = this.baseZombiesPerRound + (this.currentRound - 1) * 5; // Reduced from 6
+    const bonusZombies = Math.floor(this.currentRound / 4) * 6; // Reduced from 7
     this.zombiesRemaining = baseZombies + bonusZombies;
     this.zombiesSpawned = 0;
     
-    // Update max concurrent enemies - more aggressive scaling
-    // Old formula: baseMaxEnemies + Math.floor(round/3)
-    // New formula: baseMaxEnemies + Math.floor(round/2) + Math.floor(round/5)
+    // Update max concurrent enemies - slightly reduced scaling
+    // Old formula: baseMaxEnemies + Math.floor(round/2) + Math.floor(round/3)
+    // New formula: baseMaxEnemies + Math.floor(round/2) + Math.floor(round/4)
     const baseMaxIncrease = Math.floor(this.currentRound / 2);
-    const bonusMaxIncrease = Math.floor(this.currentRound / 5);
+    const bonusMaxIncrease = Math.floor(this.currentRound / 4); // Reduced from round/3
     this.maxEnemies = this.baseMaxEnemies + baseMaxIncrease + bonusMaxIncrease;
     
-    // Update spawn rate - gets faster with higher rounds - more aggressive scaling
-    // Old formula: baseSpawnRate * (1 + round/10)
-    // New formula: baseSpawnRate * (1 + round/5)
-    this.spawnRate = this.baseSpawnRate * (1 + this.currentRound / 5);
+    // Update spawn rate - gets faster with higher rounds - slightly reduced scaling
+    // Old formula: baseSpawnRate * (1 + round/3)
+    // New formula: baseSpawnRate * (1 + round/4)
+    this.spawnRate = this.baseSpawnRate * (1 + this.currentRound / 4); // Reduced from round/3
     
     // Special mechanic for rounds 5, 10, 15, etc: burst spawning
     if (this.currentRound % 5 === 0) {
@@ -356,7 +359,7 @@ export class EnemyManager {
    */
   performBurstSpawn() {
     // Number of zombies to spawn in the burst
-    const burstCount = Math.min(4, this.maxEnemies / 2);
+    const burstCount = Math.min(6, this.maxEnemies / 2); // Increased from 4
     
     // Schedule a burst spawn after the round start delay
     setTimeout(() => {
@@ -720,15 +723,15 @@ export class EnemyManager {
       let enemiesToSpawn = 1;
       
       // After round 3, there's a chance to spawn multiple zombies at once
-      if (this.currentRound > 3) {
+      if (this.currentRound > 3) { // Changed from 2 to 3 to delay multi-spawns
         // Calculate chance of multi-spawn (increases with rounds)
-        const multiSpawnChance = Math.min(0.5, 0.1 + (this.currentRound * 0.02));
+        const multiSpawnChance = Math.min(0.6, 0.12 + (this.currentRound * 0.025)); // Reduced from 0.7, 0.15, and 0.03
         
         if (Math.random() < multiSpawnChance) {
           // Determine how many to spawn (scales with round)
           const maxMultiSpawn = Math.min(
-            3, // Never more than 3 at once
-            Math.floor(this.currentRound / 5) + 1 // 1 extra zombie per 5 rounds
+            5, // Never more than 5 at once (increased from 3)
+            Math.floor(this.currentRound / 4) + 1 // 1 extra zombie per 4 rounds (changed from 5)
           );
           
           enemiesToSpawn = Math.min(
@@ -784,8 +787,42 @@ export class EnemyManager {
         return null;
       }
       
-      // Create new enemy
-      const enemy = new Enemy(targetWindow);
+      // Determine enemy type based on probabilities that change with rounds
+      // The higher the round, the more special zombies appear
+      
+      // Crawler chance increases with rounds (up to 35%)
+      const crawlerChance = Math.min(0.35, 0.05 + (this.currentRound * 0.02)); // Increased scaling
+      
+      // Runner chance increases with rounds (up to 30%)
+      const runnerChance = Math.min(0.30, 0.03 + (this.currentRound * 0.025)); // Increased scaling
+      
+      // Spitter chance increases with rounds (up to 25%)
+      const spitterChance = Math.min(0.25, 0.02 + (this.currentRound * 0.02)); // Increased scaling
+      
+      // Random value to determine enemy type
+      const rand = Math.random();
+      
+      let enemy;
+      let enemyType = "standard";
+      
+      // Create the appropriate enemy type
+      if (rand < crawlerChance) {
+        // Spawn a crawler
+        enemy = new CrawlingZombie(targetWindow);
+        enemyType = "crawler";
+      } else if (rand < crawlerChance + runnerChance) {
+        // Spawn a runner
+        enemy = new RunnerZombie(targetWindow);
+        enemyType = "runner";
+      } else if (rand < crawlerChance + runnerChance + spitterChance) {
+        // Spawn a spitter
+        enemy = new SpitterZombie(targetWindow);
+        enemyType = "spitter";
+      } else {
+        // Spawn a standard zombie
+        enemy = new Enemy(targetWindow);
+      }
+      
       enemy.init();
       enemy.positionOutsideWindow();
       
@@ -812,6 +849,11 @@ export class EnemyManager {
       
       // Add to tracking array
       this.enemies.push(enemy);
+      
+      // Log special enemy types if in debug mode
+      if (this.currentRound > 1 && enemyType !== "standard") {
+        console.log(`Spawned a ${enemyType} zombie!`);
+      }
       
       return enemy;
     } catch (error) {
@@ -845,39 +887,145 @@ export class EnemyManager {
         }
       }
       
-      // Create new enemy
-      const enemy = new Enemy(targetWindow);
+      // Determine enemy type based on probabilities that change with rounds
+      // The higher the round, the more special zombies appear
+      
+      // Crawler chance increases with rounds (up to 35%)
+      const crawlerChance = Math.min(0.35, 0.05 + (this.currentRound * 0.02)); // Increased scaling
+      
+      // Runner chance increases with rounds (up to 30%)
+      const runnerChance = Math.min(0.30, 0.03 + (this.currentRound * 0.025)); // Increased scaling
+      
+      // Spitter chance increases with rounds (up to 25%)
+      const spitterChance = Math.min(0.25, 0.02 + (this.currentRound * 0.02)); // Increased scaling
+      
+      // Random value to determine enemy type
+      const rand = Math.random();
+      
+      let enemy;
+      let enemyType = "standard";
+      
+      // Create the appropriate enemy type
+      if (rand < crawlerChance) {
+        // Spawn a crawler
+        enemy = new CrawlingZombie(targetWindow);
+        enemyType = "crawler";
+      } else if (rand < crawlerChance + runnerChance) {
+        // Spawn a runner
+        enemy = new RunnerZombie(targetWindow);
+        enemyType = "runner";
+      } else if (rand < crawlerChance + runnerChance + spitterChance) {
+        // Spawn a spitter
+        enemy = new SpitterZombie(targetWindow);
+        enemyType = "spitter";
+      } else {
+        // Spawn a standard zombie
+        enemy = new Enemy(targetWindow);
+      }
       
       // Set manager reference for pausing
       enemy.manager = this;
       
-      // Adjust enemy speed based on round - more aggressive scaling
-      // Old formula: base + (round * 0.05)
-      // New formula: base + (round * 0.07) + (floor(round/5) * 0.1)
-      const baseSpeed = 0.5;
-      const roundSpeedBonus = this.currentRound * 0.07;
-      const milestoneSpeedBonus = Math.floor(this.currentRound / 5) * 0.1;
-      enemy.speed = baseSpeed + roundSpeedBonus + milestoneSpeedBonus;
+      // Apply round-based scaling based on enemy type
+      if (enemyType === "standard") {
+        // Standard zombie scaling
+        const baseSpeed = 0.5;
+        const roundSpeedBonus = this.currentRound * 0.07;
+        const milestoneSpeedBonus = Math.floor(this.currentRound / 5) * 0.1;
+        enemy.speed = baseSpeed + roundSpeedBonus + milestoneSpeedBonus;
+        
+        // Cap speed to avoid too fast enemies
+        enemy.speed = Math.min(enemy.speed, 2.5);
+        
+        // Health scaling
+        const baseHealth = 100;
+        const roundHealthBonus = this.currentRound * 5;
+        const milestoneHealthBonus = Math.floor(this.currentRound / 3) * 20;
+        enemy.health = baseHealth + roundHealthBonus + milestoneHealthBonus;
+        
+        // Attack scaling
+        const baseAttack = 25;
+        const roundAttackBonus = this.currentRound * 2;
+        const milestoneAttackBonus = Math.floor(this.currentRound / 3) * 5;
+        enemy.playerDamage = Math.min(75, baseAttack + roundAttackBonus + milestoneAttackBonus);
+      } 
+      else if (enemyType === "crawler") {
+        // Crawler zombie scaling - slower speed increase but still scales
+        const baseSpeed = 0.3;
+        const roundSpeedBonus = this.currentRound * 0.04;
+        enemy.speed = baseSpeed + roundSpeedBonus;
+        
+        // Cap crawler speed
+        enemy.speed = Math.min(enemy.speed, 1.5);
+        
+        // Health scaling - less health but still scales
+        const baseHealth = 75;
+        const roundHealthBonus = this.currentRound * 4; // Slightly less scaling
+        const milestoneHealthBonus = Math.floor(this.currentRound / 4) * 15;
+        enemy.health = baseHealth + roundHealthBonus + milestoneHealthBonus;
+        
+        // Attack scaling - less damage
+        const baseAttack = 15;
+        const roundAttackBonus = this.currentRound * 1.5;
+        const milestoneAttackBonus = Math.floor(this.currentRound / 4) * 4;
+        enemy.playerDamage = Math.min(60, baseAttack + roundAttackBonus + milestoneAttackBonus);
+      }
+      else if (enemyType === "runner") {
+        // Runner zombie scaling - faster but less health
+        const baseSpeed = 1.2;
+        const roundSpeedBonus = this.currentRound * 0.08; // Faster speed increase
+        enemy.speed = baseSpeed + roundSpeedBonus;
+        
+        // Cap runner speed, but allow it to be faster than other zombies
+        enemy.speed = Math.min(enemy.speed, 3.0);
+        
+        // Health scaling - much less health
+        const baseHealth = 60;
+        const roundHealthBonus = this.currentRound * 3; // Less health scaling
+        const milestoneHealthBonus = Math.floor(this.currentRound / 5) * 10;
+        enemy.health = baseHealth + roundHealthBonus + milestoneHealthBonus;
+        
+        // Attack scaling - normal damage
+        const baseAttack = 20;
+        const roundAttackBonus = this.currentRound * 2;
+        const milestoneAttackBonus = Math.floor(this.currentRound / 3) * 5;
+        enemy.playerDamage = Math.min(70, baseAttack + roundAttackBonus + milestoneAttackBonus);
+      }
+      else if (enemyType === "spitter") {
+        // Spitter zombie scaling - focus on projectile damage
+        const baseSpeed = 0.4;
+        const roundSpeedBonus = this.currentRound * 0.03; // Slower scaling
+        enemy.speed = baseSpeed + roundSpeedBonus;
+        
+        // Cap spitter speed
+        enemy.speed = Math.min(enemy.speed, 1.2);
+        
+        // Health scaling - medium health
+        const baseHealth = 70;
+        const roundHealthBonus = this.currentRound * 3.5;
+        const milestoneHealthBonus = Math.floor(this.currentRound / 4) * 12;
+        enemy.health = baseHealth + roundHealthBonus + milestoneHealthBonus;
+        
+        // Projectile damage scaling
+        const baseAttack = 15;
+        const roundAttackBonus = this.currentRound * 2.5; // Projectiles scale faster
+        const milestoneAttackBonus = Math.floor(this.currentRound / 3) * 8;
+        enemy.playerDamage = Math.min(80, baseAttack + roundAttackBonus + milestoneAttackBonus);
+        
+        // Increase projectile speed in later rounds
+        if (enemy.projectileSpeed) {
+          enemy.projectileSpeed = 5.0 + (this.currentRound * 0.2);
+          enemy.projectileSpeed = Math.min(enemy.projectileSpeed, 10.0);
+        }
+        
+        // Increase attack rate in later rounds
+        if (this.currentRound > 7) {
+          enemy.attackRate = Math.min(3.5, 2.0 + (this.currentRound * 0.1));
+        }
+      }
       
-      // Cap speed to avoid too fast enemies
-      enemy.speed = Math.min(enemy.speed, 2.5);
-      
-      // Adjust enemy health based on round - more aggressive scaling
-      // Old formula: base + (floor(round/5) * 25)
-      // New formula: base + (round * 5) + (floor(round/3) * 20)
-      const baseHealth = 100;
-      const roundHealthBonus = this.currentRound * 5;
-      const milestoneHealthBonus = Math.floor(this.currentRound / 3) * 20;
-      enemy.health = baseHealth + roundHealthBonus + milestoneHealthBonus;
+      // Set max health based on calculated health
       enemy.maxHealth = enemy.health;
-      
-      // Increase attack damage in later rounds - more aggressive scaling
-      // Old formula: base + (floor(round/3) * 5) with cap of 50
-      // New formula: base + (round * 2) + (floor(round/3) * 5) with cap of 75
-      const baseAttack = 25;
-      const roundAttackBonus = this.currentRound * 2;
-      const milestoneAttackBonus = Math.floor(this.currentRound / 3) * 5;
-      enemy.playerDamage = Math.min(75, baseAttack + roundAttackBonus + milestoneAttackBonus);
       
       // Initialize enemy
       enemy.init();
@@ -910,7 +1058,12 @@ export class EnemyManager {
       
       // Log enemy creation with stats for debugging
       if (this.currentRound > 1) {
-        console.log(`Spawned zombie with speed: ${enemy.speed.toFixed(2)}, health: ${enemy.health}, damage: ${enemy.playerDamage}`);
+        let enemyTypeDisplay = "STANDARD zombie";
+        if (enemyType === "crawler") enemyTypeDisplay = "CRAWLING zombie";
+        if (enemyType === "runner") enemyTypeDisplay = "RUNNER zombie";
+        if (enemyType === "spitter") enemyTypeDisplay = "SPITTER zombie";
+        
+        console.log(`Spawned ${enemyTypeDisplay} with speed: ${enemy.speed.toFixed(2)}, health: ${enemy.health}, damage: ${enemy.playerDamage}`);
       }
       
       return enemy;
@@ -1054,5 +1207,32 @@ export class EnemyManager {
     // Clear array
     this.enemies = [];
   }
+
+  /**
+   * Despawn all enemies with death animations
+   */
+  despawnAllEnemies() {
+    console.log("Despawning all enemies");
+    
+    // Make all enemies die, which will trigger their death animations
+    this.enemies.forEach(enemy => {
+      if (!enemy.isDead) {
+        enemy.die();
+        
+        // Force remove after a short delay to avoid waiting for full death animation
+        setTimeout(() => {
+          enemy.remove();
+        }, 500);
+      }
+    });
+    
+    // Force clear after a brief delay to ensure all are removed
+    setTimeout(() => {
+      this.clearEnemies();
+    }, 600);
+  }
 } 
+ 
+ 
+ 
  
