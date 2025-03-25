@@ -747,15 +747,8 @@ export class P2PNetwork {
         .then(() => console.log('Heartbeat sent'))
         .catch(err => console.error('Heartbeat error:', err));
       
-      // Also try to ping peers directly if available
-      if (this.peer && this.peer.socket && this.peer.socket._wsOpen()) {
-        try {
-          console.log('Sending WebSocket ping');
-          this.peer.socket.send(JSON.stringify({ type: 'HEARTBEAT' }));
-        } catch (err) {
-          console.error('Error sending WebSocket ping:', err);
-        }
-      }
+      // Remove the custom WebSocket ping as it's causing "Invalid message" errors
+      // PeerJS already has its own internal ping mechanism
     }, 15000); // Every 15 seconds
   }
   
