@@ -2557,9 +2557,8 @@ export class PlayerControls {
     const pistol = new Weapon(WeaponTypes.PISTOL);
     pistol.init();
     
-    // Set pistol to have infinite ammo
-    pistol.hasInfiniteAmmo = true;
-    pistol.totalAmmo = Infinity;
+    // WeaponTypes.PISTOL already has hasInfiniteAmmo set to true
+    // No need to override these values manually
     
     // Add to weapons array
     this.weapons.push(pistol);
@@ -3278,20 +3277,8 @@ export class PlayerControls {
     // Clear existing weapons
     this.weapons = [];
     
-    // Add default pistol
-    const defaultPistol = new Weapon({
-      name: 'Pistol',
-      description: 'Standard issue sidearm',
-      damage: 25,
-      fireRate: 2,
-      range: 50,
-      ammo: 8,
-      maxAmmo: 8,
-      totalAmmo: 40,
-      reloadTime: 1.5,
-      cost: 0,
-      type: WeaponTypes.PISTOL
-    });
+    // Add default pistol using the proper weapon type definition
+    const defaultPistol = new Weapon(WeaponTypes.PISTOL);
     
     // Initialize and add the weapon
     defaultPistol.init();
