@@ -6,6 +6,8 @@ import * as THREE from 'three';
 export class MobileControls {
   constructor(playerControls) {
     this.playerControls = playerControls;
+    // Get a reference to the game engine from player controls
+    this.gameEngine = playerControls.gameEngine;
     this.isMobile = this.detectMobileDevice();
     this.touchControls = {};
     this.joystickPosition = { x: 0, y: 0 };
@@ -15,7 +17,7 @@ export class MobileControls {
     this.isAiming = false;
     this.lastTouchPosition = { x: 0, y: 0 };
     this.touchStartTime = 0;
-    this.isActive = false; // Controls not active by default
+    this.isActive = false;
     
     // Initialize if on mobile
     if (this.isMobile) {
@@ -44,9 +46,6 @@ export class MobileControls {
     
     // Add touch event listeners
     this.addTouchEventListeners();
-    
-    // Hide the controls initially (create them but don't show them yet)
-    this.toggleControls(false);
     
     // Flag for initialization
     this.isInitialized = true;
@@ -254,8 +253,32 @@ export class MobileControls {
    * @param {TouchEvent} event - Touch event
    */
   handleTouchStart(event) {
-    // Skip processing if controls are not active or game is paused
-    if (!this.isActive || (this.playerControls.gameEngine && this.playerControls.gameEngine.isPaused)) {
+    // Log for debugging
+    console.log("Touch start detected", event.touches.length);
+    
+    // Skip processing if game is paused, in menu, or controls are not active
+    if (!this.isActive) {
+      console.log("Touch ignored - controls not active");
+      return;
+    }
+    
+    if (!this.gameEngine) {
+      console.log("Touch ignored - no game engine reference");
+      return;
+    }
+    
+    if (this.gameEngine.isPaused || !this.gameEngine.isGameStarted || this.gameEngine.isGameOver) {
+      console.log("Touch ignored - game state:", {
+        isPaused: this.gameEngine.isPaused,
+        isGameStarted: this.gameEngine.isGameStarted,
+        isGameOver: this.gameEngine.isGameOver
+      });
+      return;
+    }
+
+    // Check if touching a menu element
+    if (event.target.closest('.pause-menu, #pause-menu, .start-menu, #start-menu, #game-over-menu, button, .main-menu, #main-menu, .multiplayer-menu, #multiplayer-menu')) {
+      console.log("Touch ignored - on menu element");
       return;
     }
     
@@ -271,21 +294,25 @@ export class MobileControls {
       
       // Check if touching the joystick area
       if (this.isTouchingElement(touch, this.touchControls.joystickContainer)) {
+        console.log("Touch on joystick");
         this.isDraggingJoystick = true;
         this.updateJoystickPosition(touch.clientX, touch.clientY);
       }
       
       // Check action buttons
       if (this.isTouchingElement(touch, this.touchControls.shootButton)) {
+        console.log("Touch on shoot button");
         this.playerControls.shooting = true;
         this.playerControls.shoot();
       }
       
       if (this.isTouchingElement(touch, this.touchControls.reloadButton)) {
+        console.log("Touch on reload button");
         this.playerControls.reload();
       }
       
       if (this.isTouchingElement(touch, this.touchControls.interactButton)) {
+        console.log("Touch on interact button");
         this.playerControls.isInteracting = true;
         if (this.playerControls.keys) {
           this.playerControls.keys.f = true;
@@ -293,23 +320,28 @@ export class MobileControls {
       }
       
       if (this.isTouchingElement(touch, this.touchControls.aimButton)) {
+        console.log("Touch on aim button");
         this.isAiming = true;
       }
       
       if (this.isTouchingElement(touch, this.touchControls.runButton)) {
+        console.log("Touch on run button");
         this.playerControls.running = true;
       }
       
       if (this.isTouchingElement(touch, this.touchControls.prevWeaponButton)) {
+        console.log("Touch on prev weapon button");
         this.playerControls.prevWeapon();
       }
       
       if (this.isTouchingElement(touch, this.touchControls.nextWeaponButton)) {
+        console.log("Touch on next weapon button");
         this.playerControls.nextWeapon();
       }
       
       // If not touching any control, it's for aiming
       if (!this.isTouchingAnyControl(touch) && !this.isAiming) {
+        console.log("Touch for aiming");
         // Update camera rotation based on touch
         this.updateCameraRotation(touch.clientX, touch.clientY, true);
       }
@@ -321,8 +353,13 @@ export class MobileControls {
    * @param {TouchEvent} event - Touch event
    */
   handleTouchMove(event) {
-    // Skip processing if controls are not active or game is paused
-    if (!this.isActive || (this.playerControls.gameEngine && this.playerControls.gameEngine.isPaused)) {
+    // Skip processing if game is paused, in menu, or controls are not active
+    if (!this.isActive || !this.gameEngine || this.gameEngine.isPaused || !this.gameEngine.isGameStarted || this.gameEngine.isGameOver) {
+      return;
+    }
+
+    // Check if touching a menu element
+    if (event.target.closest('.pause-menu, #pause-menu, .start-menu, #start-menu, #game-over-menu, button, .main-menu, #main-menu, .multiplayer-menu, #multiplayer-menu')) {
       return;
     }
     
@@ -355,13 +392,17 @@ export class MobileControls {
    * @param {TouchEvent} event - Touch event
    */
   handleTouchEnd(event) {
-    // Skip processing if controls are not active or game is paused
-    if (!this.isActive || (this.playerControls.gameEngine && this.playerControls.gameEngine.isPaused)) {
+    // Log for debugging
+    console.log("Touch end detected", event.touches.length);
+    
+    // Skip processing if game is paused, in menu, or controls are not active
+    if (!this.isActive || !this.gameEngine || this.gameEngine.isPaused || !this.gameEngine.isGameStarted || this.gameEngine.isGameOver) {
       return;
     }
-    
+
     // If all touches are gone, reset joystick
     if (event.touches.length === 0) {
+      console.log("All touches ended, resetting joystick and controls");
       this.resetJoystick();
       this.isDraggingJoystick = false;
       this.isAiming = false;
@@ -395,6 +436,7 @@ export class MobileControls {
     }
     
     if (!stillTouchingJoystick) {
+      console.log("No longer touching joystick, resetting");
       this.resetJoystick();
       this.isDraggingJoystick = false;
       
@@ -415,6 +457,7 @@ export class MobileControls {
     }
     
     if (!stillShooting) {
+      console.log("No longer shooting");
       this.playerControls.shooting = false;
       this.playerControls.stopWeaponSound();
     }
@@ -524,9 +567,14 @@ export class MobileControls {
    * @param {number} maxRadius - Maximum joystick radius
    */
   updateMovementFromJoystick(deltaX, deltaY, maxRadius) {
+    // Log joystick position for debugging
+    console.log("Joystick movement:", {deltaX, deltaY, maxRadius});
+    
     // Calculate normalized direction (-1 to 1 range)
     const dirX = deltaX / maxRadius;
     const dirY = deltaY / maxRadius;
+    
+    console.log("Normalized joystick:", {dirX, dirY});
     
     // Set movement flags based on joystick position
     // Use threshold to create dead zone in center
@@ -541,14 +589,33 @@ export class MobileControls {
     // Set movement based on joystick position
     if (dirY < -threshold) {
       this.playerControls.moveForward = true;
+      console.log("Move FORWARD set");
     } else if (dirY > threshold) {
       this.playerControls.moveBackward = true;
+      console.log("Move BACKWARD set");
     }
     
     if (dirX < -threshold) {
       this.playerControls.moveLeft = true;
+      console.log("Move LEFT set");
     } else if (dirX > threshold) {
       this.playerControls.moveRight = true;
+      console.log("Move RIGHT set");
+    }
+    
+    // Log the state of movement flags
+    console.log("Movement flags:", {
+      forward: this.playerControls.moveForward,
+      backward: this.playerControls.moveBackward,
+      left: this.playerControls.moveLeft,
+      right: this.playerControls.moveRight
+    });
+    
+    // Ensure the playerControls are updated
+    if (this.playerControls.update && typeof this.playerControls.update === 'function') {
+      // Force an update to apply the movement immediately
+      const delta = 1/60; // Fake delta time of ~16.6ms (60fps)
+      this.playerControls.update(delta);
     }
   }
   
@@ -622,48 +689,77 @@ export class MobileControls {
    * @param {boolean} show - Whether to show or hide controls
    */
   toggleControls(show) {
-    if (!this.isInitialized) return;
+    console.log("Toggle mobile controls:", show);
     
-    const display = show ? 'block' : 'none';
+    if (!this.isInitialized) {
+      console.log("Controls not initialized, initializing now");
+      this.init();
+    }
+    
+    // Set visibility flag to prevent touch events when hidden
+    this.isActive = show;
+    
+    if (!this.touchControls || !this.touchControls.joystickContainer) {
+      console.error("Touch controls not properly initialized");
+      return;
+    }
     
     // Set display for all controls
-    this.touchControls.joystickContainer.style.display = display;
-    this.touchControls.buttonContainer.style.display = display;
-    this.touchControls.aimButton.style.display = display;
-    this.touchControls.runButton.style.display = display;
-    this.touchControls.prevWeaponButton.style.display = display;
-    this.touchControls.nextWeaponButton.style.display = display;
+    const display = show ? 'block' : 'none';
+    
+    try {
+      // Set display for all controls
+      this.touchControls.joystickContainer.style.display = display;
+      this.touchControls.buttonContainer.style.display = display;
+      this.touchControls.aimButton.style.display = display;
+      this.touchControls.runButton.style.display = display;
+      this.touchControls.prevWeaponButton.style.display = display;
+      this.touchControls.nextWeaponButton.style.display = display;
+      
+      console.log("Mobile controls visibility updated:", display);
+    } catch (error) {
+      console.error("Error updating control visibility:", error);
+    }
   }
-  
+
   /**
-   * Enable all mobile controls
+   * Show mobile controls
    */
   show() {
-    // Show the control elements
-    this.toggleControls(true);
+    console.log("Showing mobile controls - MobileControls.js");
+    // Ensure we're initialized before showing
+    if (!this.isInitialized && this.detectMobileDevice()) {
+      console.log("Initializing mobile controls before showing");
+      this.init();
+    }
     
-    // Enable controls processing
+    // Set active flag first to ensure touch events are processed
     this.isActive = true;
     
-    console.log("Mobile controls enabled");
+    // Then show the controls
+    this.toggleControls(true);
+    
+    // Log the state of the controls for debugging
+    console.log("Mobile controls active state:", this.isActive);
+    if (this.touchControls.joystickContainer) {
+      console.log("Joystick container display:", this.touchControls.joystickContainer.style.display);
+    }
   }
-  
+
   /**
-   * Disable all mobile controls
+   * Hide mobile controls
    */
   hide() {
-    // Hide the control elements
+    console.log("Hiding mobile controls - MobileControls.js");
+    this.isActive = false;
     this.toggleControls(false);
     
-    // Disable controls processing
-    this.isActive = false;
-    
-    // Reset states to prevent stuck input
+    // Reset all control states when hiding
     this.resetJoystick();
     this.isDraggingJoystick = false;
     this.isAiming = false;
     
-    // Reset player control states
+    // Reset player movement
     if (this.playerControls) {
       this.playerControls.moveForward = false;
       this.playerControls.moveBackward = false;
@@ -678,11 +774,7 @@ export class MobileControls {
       }
       
       // Stop weapon sound
-      if (typeof this.playerControls.stopWeaponSound === 'function') {
-        this.playerControls.stopWeaponSound();
-      }
+      this.playerControls.stopWeaponSound();
     }
-    
-    console.log("Mobile controls disabled");
   }
 } 
