@@ -8,6 +8,9 @@ export class CrawlingZombie extends Enemy {
   constructor(targetWindow) {
     super(targetWindow);
     
+    // Set the type for network synchronization
+    this.type = 'crawler';
+    
     // Override default enemy properties
     this.health = 30; // Less health than standard zombies
     this.maxHealth = 75;

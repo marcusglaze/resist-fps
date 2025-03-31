@@ -16,6 +16,16 @@ export class Enemy {
     this.attackCooldown = 1; // seconds between attacks on player
     this.lastPlayerAttackTime = 0;
     
+    // Assign a unique ID for network synchronization
+    this.id = `enemy_${Math.random().toString(36).substring(2, 15)}_${Date.now().toString(36)}`;
+    // Default state
+    this.state = 'idle';
+    // Enemy type for network synchronization
+    this.type = 'standard';
+    // Movement status
+    this.isMoving = false;
+    this.isAttacking = false;
+    
     // Sound properties
     this.soundFrequency = 0.1; // Sound frequency in Hz (once every 10 seconds)
     this.nextSoundTime = Math.random() * (1 / this.soundFrequency); // Randomize initial sound time
@@ -561,20 +571,53 @@ export class Enemy {
   chasePlayer(deltaTime) {
     if (!this.player) return;
     
-    // Get player position at ground level
-    const playerPos = new THREE.Vector3(
+    // Default to chasing local player
+    let closestPlayerPos = new THREE.Vector3(
       this.player.camera.position.x,
       this.floorLevel,
       this.player.camera.position.z
     );
     
-    // Calculate direction to player (only on x and z axes)
+    let closestDistance = this.instance.position.distanceTo(closestPlayerPos);
+    
+    // Check for remote players via NetworkManager if we have access to game engine
+    if (this.manager && this.manager.gameEngine && 
+        this.manager.gameEngine.networkManager && 
+        this.manager.gameEngine.networkManager.remotePlayers) {
+      
+      // Log that we're checking for remote players
+      if (this.manager.gameEngine.networkManager.remotePlayers.size > 0) {
+        console.log(`Checking ${this.manager.gameEngine.networkManager.remotePlayers.size} remote players for closest target`);
+      }
+      
+      // Loop through remote players to find the closest one
+      this.manager.gameEngine.networkManager.remotePlayers.forEach((remotePlayer) => {
+        if (remotePlayer.position) {
+          const remotePlayerPos = new THREE.Vector3(
+            remotePlayer.position.x,
+            this.floorLevel,
+            remotePlayer.position.z
+          );
+          
+          const distance = this.instance.position.distanceTo(remotePlayerPos);
+          
+          // If this remote player is closer than current closest, target them instead
+          if (distance < closestDistance) {
+            closestPlayerPos = remotePlayerPos;
+            closestDistance = distance;
+            console.log(`Found closer player at distance ${distance.toFixed(2)}`);
+          }
+        }
+      });
+    }
+    
+    // Calculate direction to closest player (only on x and z axes)
     const direction = new THREE.Vector3().subVectors(
-      playerPos,
+      closestPlayerPos,
       this.instance.position
     ).normalize();
     
-    // Move towards player
+    // Move towards closest player
     const step = this.speed * deltaTime;
     this.instance.position.x += direction.x * step;
     this.instance.position.z += direction.z * step;
@@ -582,8 +625,8 @@ export class Enemy {
     // Ensure y position is at floor level
     this.instance.position.y = this.floorLevel;
     
-    // Look at player
-    this.instance.lookAt(playerPos);
+    // Look at closest player
+    this.instance.lookAt(closestPlayerPos);
     
     // Keep inside room boundaries
     this.enforceRoomBoundaries();
@@ -601,19 +644,50 @@ export class Enemy {
       return;
     }
     
-    // Calculate distance to player
-    const playerPos = new THREE.Vector3(
+    // Start with local player
+    let playerToAttack = this.player;
+    let closestPlayerPos = new THREE.Vector3(
       this.player.camera.position.x,
       this.floorLevel,
       this.player.camera.position.z
     );
     
-    const distance = this.instance.position.distanceTo(playerPos);
+    let closestDistance = this.instance.position.distanceTo(closestPlayerPos);
+    let foundCloserPlayer = false;
+    
+    // Check for remote players via NetworkManager if we have access to game engine
+    if (this.manager && this.manager.gameEngine && 
+        this.manager.gameEngine.networkManager && 
+        this.manager.gameEngine.networkManager.remotePlayers) {
+      
+      // Loop through remote players to find the closest one
+      this.manager.gameEngine.networkManager.remotePlayers.forEach((remotePlayer) => {
+        if (remotePlayer.position) {
+          const remotePlayerPos = new THREE.Vector3(
+            remotePlayer.position.x,
+            this.floorLevel,
+            remotePlayer.position.z
+          );
+          
+          const distance = this.instance.position.distanceTo(remotePlayerPos);
+          
+          // If this remote player is closer than current closest
+          if (distance < closestDistance) {
+            closestPlayerPos = remotePlayerPos;
+            closestDistance = distance;
+            foundCloserPlayer = true;
+          }
+        }
+      });
+    }
     
     // Attack if close enough (1.5 units)
-    if (distance < 1.5) {
-      // Apply damage to player
-      this.player.takeDamage(this.playerDamage);
+    if (closestDistance < 1.5) {
+      // Apply damage to player only if it's the local player
+      // (damage to remote players is handled by their own game instances)
+      if (!foundCloserPlayer) {
+        this.player.takeDamage(this.playerDamage);
+      }
       
       // Update last attack time
       this.lastPlayerAttackTime = currentTime;
@@ -850,5 +924,22 @@ export class Enemy {
       const variation = 0.8 + Math.random() * 0.4;
       this.nextSoundTime = (1 / this.soundFrequency) * variation;
     }
+  }
+
+  /**
+   * Make the enemy start moving (for animations and state sync)
+   */
+  startMoving() {
+    this.isMoving = true;
+    this.state = 'moving';
+  }
+  
+  /**
+   * Make the enemy start attacking (for animations and state sync)
+   */
+  startAttacking() {
+    this.isAttacking = true;
+    this.state = 'attacking';
+    this.playAttackAnimation();
   }
 } 

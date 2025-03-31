@@ -60,59 +60,118 @@ peerServer.on('disconnect', (client) => {
 });
 
 // API endpoint to register a server
-app.post('/api/servers', (req, res) => {
-  const { id, name, playerCount } = req.body;
+app.post('/api/servers/register', (req, res) => {
+  const { id, name, uniqueId, playerCount, maxPlayers } = req.body;
   
   if (!id) {
     return res.status(400).json({ error: 'Server ID is required' });
   }
   
+  // If a server with the same uniqueId exists, update it instead of creating a new one
+  for (const [serverId, server] of activeServers.entries()) {
+    if (server.uniqueId === uniqueId) {
+      activeServers.delete(serverId);
+      console.log(`Replacing existing server with uniqueId ${uniqueId}`);
+      break;
+    }
+  }
+  
   activeServers.set(id, {
     id,
+    uniqueId,
     name: name || `Game Server #${Math.floor(Math.random() * 1000)}`,
     playerCount: playerCount || 1,
+    maxPlayers: maxPlayers || 2,
     timestamp: Date.now()
   });
   
-  console.log(`Registered server: ${id}, ${name}, ${playerCount} players`);
+  console.log(`Registered server: ${id}, ${name}, ${playerCount}/${maxPlayers} players`);
   
   res.status(201).json({ success: true });
 });
 
 // API endpoint to update server information
-app.put('/api/servers/:id', (req, res) => {
-  const { id } = req.params;
-  const { name, playerCount } = req.body;
+app.post('/api/servers/update', (req, res) => {
+  const { id, uniqueId, name, playerCount, maxPlayers } = req.body;
   
-  if (!activeServers.has(id)) {
-    return res.status(404).json({ error: 'Server not found' });
+  if (!id) {
+    return res.status(400).json({ error: 'Server ID is required' });
   }
   
-  const server = activeServers.get(id);
+  // Check if server exists
+  if (!activeServers.has(id)) {
+    // If server doesn't exist but we have a uniqueId, try to find it by uniqueId
+    if (uniqueId) {
+      let found = false;
+      for (const [serverId, server] of activeServers.entries()) {
+        if (server.uniqueId === uniqueId) {
+          // Found server with matching uniqueId but different id
+          activeServers.delete(serverId);
+          found = true;
+          console.log(`Found server by uniqueId ${uniqueId}, updating id from ${serverId} to ${id}`);
+          break;
+        }
+      }
+      
+      if (!found) {
+        return res.status(404).json({ error: 'Server not found' });
+      }
+    } else {
+      return res.status(404).json({ error: 'Server not found' });
+    }
+  }
   
-  if (name) server.name = name;
-  if (playerCount !== undefined) server.playerCount = playerCount;
-  server.timestamp = Date.now();
+  // Update or create the server entry
+  activeServers.set(id, {
+    id,
+    uniqueId: uniqueId || activeServers.get(id)?.uniqueId,
+    name: name || activeServers.get(id)?.name || `Game Server #${Math.floor(Math.random() * 1000)}`,
+    playerCount: playerCount !== undefined ? playerCount : activeServers.get(id)?.playerCount || 1,
+    maxPlayers: maxPlayers || activeServers.get(id)?.maxPlayers || 2,
+    timestamp: Date.now()
+  });
   
   res.json({ success: true });
 });
 
 // API endpoint to get the list of servers
 app.get('/api/servers', (req, res) => {
-  const serversList = Array.from(activeServers.values());
+  const serversList = Array.from(activeServers.values()).map(server => ({
+    id: server.id,
+    name: server.name,
+    playerCount: server.playerCount,
+    maxPlayers: server.maxPlayers || 2,
+    isFull: server.playerCount >= (server.maxPlayers || 2)
+  }));
+  
   res.json(serversList);
 });
 
-// API endpoint to delete a server
-app.delete('/api/servers/:id', (req, res) => {
-  const { id } = req.params;
+// API endpoint to remove a server
+app.post('/api/servers/remove', (req, res) => {
+  const { id, uniqueId } = req.body;
   
-  if (activeServers.has(id)) {
-    activeServers.delete(id);
-    console.log(`Removed server: ${id}`);
+  if (!id && !uniqueId) {
+    return res.status(400).json({ error: 'Either id or uniqueId is required' });
   }
   
-  res.json({ success: true });
+  if (id && activeServers.has(id)) {
+    activeServers.delete(id);
+    console.log(`Removed server by id: ${id}`);
+    return res.json({ success: true });
+  }
+  
+  if (uniqueId) {
+    for (const [serverId, server] of activeServers.entries()) {
+      if (server.uniqueId === uniqueId) {
+        activeServers.delete(serverId);
+        console.log(`Removed server by uniqueId: ${uniqueId}`);
+        return res.json({ success: true });
+      }
+    }
+  }
+  
+  res.status(404).json({ error: 'Server not found' });
 });
 
 // Always return the main index.html for any route, as this is a SPA

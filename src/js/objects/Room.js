@@ -131,6 +131,11 @@ export class Room {
     this.enemyManager = new EnemyManager(this.instance, this.windows);
     this.enemyManager.init();
     
+    // Set game engine reference if available (through the player's gameEngine reference)
+    if (this.player && this.player.gameEngine) {
+      this.enemyManager.setGameEngine(this.player.gameEngine);
+    }
+    
     // Log for debugging
     console.log(`Room initialized with ${this.instance.children.length} objects`);
   }
@@ -145,6 +150,11 @@ export class Room {
     // Also set player reference in enemy manager
     if (this.enemyManager) {
       this.enemyManager.setPlayer(player);
+      
+      // Set game engine reference to the enemy manager
+      if (player.gameEngine) {
+        this.enemyManager.setGameEngine(player.gameEngine);
+      }
     }
   }
 

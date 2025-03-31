@@ -8,6 +8,9 @@ export class RunnerZombie extends Enemy {
   constructor(targetWindow) {
     super(targetWindow);
     
+    // Set the type for network synchronization
+    this.type = 'runner';
+    
     // Override default enemy properties
     this.health = 60; // Less health than standard zombies
     this.maxHealth = 60;

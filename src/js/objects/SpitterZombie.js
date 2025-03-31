@@ -8,6 +8,9 @@ export class SpitterZombie extends Enemy {
   constructor(targetWindow) {
     super(targetWindow);
     
+    // Set the type for network synchronization
+    this.type = 'spitter';
+    
     // Override default enemy properties
     this.health = 70; // Less health than standard zombies
     this.maxHealth = 70;

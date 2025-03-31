@@ -223,8 +223,39 @@ export class P2PNetwork {
         this.onPlayerJoined(conn.peer);
       }
       
-      // Send initial game state to the new player
-      this.sendGameState(conn);
+      // Make sure the client gets a complete and accurate game state immediately
+      try {
+        // Send a complete game state snapshot
+        const gameState = this.getGameState();
+        console.log(`Sending initial game state to new client with ${gameState.enemies?.length || 0} enemies and round ${gameState.round?.round || 0}`);
+        
+        // Send the state to the new client
+        conn.send({
+          type: 'gameState',
+          state: gameState
+        });
+        
+        // Stagger repeated sends to ensure reliable state transfer
+        setTimeout(() => {
+          if (conn.open) {
+            conn.send({
+              type: 'gameState',
+              state: this.getGameState()
+            });
+          }
+        }, 500);
+        
+        setTimeout(() => {
+          if (conn.open) {
+            conn.send({
+              type: 'gameState',
+              state: this.getGameState()
+            });
+          }
+        }, 1500);
+      } catch (error) {
+        console.error("Error sending initial game state:", error);
+      }
     });
     
     conn.on('close', () => {
@@ -422,6 +453,19 @@ export class P2PNetwork {
         }
         break;
         
+      case 'hostAction':
+        // Host is performing an action like pausing or restarting
+        this.handleHostAction(data.action);
+        break;
+        
+      case 'respawnPlayer':
+        // Host is respawning a player
+        if (data.playerId && this.isConnected && !this.isHost && 
+            data.playerId === this.clientId) {
+          this.handleRespawn();
+        }
+        break;
+        
       case 'hostDisconnect':
         // Host is disconnecting, clean up
         console.log("Host is disconnecting:", data.message);
@@ -535,8 +579,46 @@ export class P2PNetwork {
    * @param {Object} data - The data to broadcast
    */
   broadcastToAll(data) {
+    if (!this.isConnected) {
+      // Just log a debug message instead of a warning
+      console.debug("No broadcast: Connection is not established yet, but game continues");
+      return;
+    }
+    
+    // If there are no connections, just return silently - the game should still function
+    if (this.connections.length === 0) {
+      console.debug("No broadcast: No active connections, but game continues");
+      return;
+    }
+    
     for (const conn of this.connections) {
-      conn.send(data);
+      try {
+        // Check if the connection is ready for data
+        if (conn.open) {
+          conn.send(data);
+        } else {
+          console.warn(`Connection to ${conn.peer} is not open yet, message queued`);
+          // Add event listener to send once open if not already added
+          if (!conn._pendingSendHandlerAdded) {
+            conn._pendingSendHandlerAdded = true;
+            conn.on('open', () => {
+              console.log(`Connection to ${conn.peer} now open, sending queued data`);
+              conn.send(data);
+              conn._pendingSendHandlerAdded = false;
+            });
+          }
+        }
+      } catch (err) {
+        console.error(`Error sending data to peer ${conn.peer}:`, err);
+        // If there's a chronic issue with this connection, we might want to close and remove it
+        if (err.message && (
+          err.message.includes("Connection is not open") || 
+          err.message.includes("Connection is closed")
+        )) {
+          console.warn(`Removing problematic connection to ${conn.peer}`);
+          this.connections = this.connections.filter(c => c.peer !== conn.peer);
+        }
+      }
     }
   }
   
@@ -555,6 +637,7 @@ export class P2PNetwork {
       enemies: this.getEnemiesState(),
       round: this.getRoundInfo(),
       windows: this.getWindowsState(),
+      gameStatus: this.getGameStatus(),
       // Add other relevant game state data
     };
   }
@@ -564,17 +647,34 @@ export class P2PNetwork {
    * @returns {Object} Map of player IDs to positions
    */
   getPlayerPositions() {
-    // Example implementation
-    return {
-      // Placeholder for actual player position data
-      [this.isHost ? this.hostId : this.clientId]: {
+    const positions = {};
+    
+    // Add host's position if available
+    if (this.gameEngine && this.gameEngine.controls) {
+      positions[this.isHost ? this.hostId : this.clientId] = {
         x: this.gameEngine.controls.camera.position.x,
         y: this.gameEngine.controls.camera.position.y,
         z: this.gameEngine.controls.camera.position.z,
-        rotationY: this.gameEngine.controls.camera.rotation.y
-      }
-      // Other players would be added here
-    };
+        rotationY: this.gameEngine.controls.camera.rotation.y,
+        health: this.gameEngine.controls.health || 100,
+        isDead: this.gameEngine.controls.isDead || false
+      };
+    }
+    
+    // Add known remote player positions
+    if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
+      this.gameEngine.networkManager.remotePlayers.forEach((player, id) => {
+        if (player.position && id !== (this.isHost ? this.hostId : this.clientId)) {
+          positions[id] = {
+            ...player.position,
+            health: player.health || 100,
+            isDead: player.isDead || false
+          };
+        }
+      });
+    }
+    
+    return positions;
   }
   
   /**
@@ -589,15 +689,19 @@ export class P2PNetwork {
     
     // Example implementation
     return this.gameEngine.scene.room.enemyManager.enemies.map(enemy => ({
-      id: enemy.id,
+      id: enemy.id || (enemy.id = Math.random().toString(36).substring(2, 15)), // Ensure each enemy has a unique ID
       position: {
         x: enemy.instance.position.x,
         y: enemy.instance.position.y,
         z: enemy.instance.position.z
       },
       health: enemy.health,
-      type: enemy.type,
-      state: enemy.state // idle, attacking, dying, etc.
+      type: enemy.type || 'standard', // Include zombie type for proper spawning
+      state: enemy.state || 'idle', // idle, attacking, dying, etc.
+      targetWindow: enemy.targetWindow ? {
+        index: this.gameEngine.scene.room.windows.indexOf(enemy.targetWindow)
+      } : null, // Include target window information
+      insideRoom: enemy.insideRoom || false
     }));
   }
   
@@ -640,16 +744,116 @@ export class P2PNetwork {
   }
   
   /**
-   * Send player position update
+   * Get game status information like paused state, game over state, etc.
+   * @returns {Object} Game status information
    */
-  sendPlayerPosition() {
+  getGameStatus() {
+    if (!this.gameEngine) return {};
+    
+    return {
+      isPaused: this.gameEngine.isPaused || false,
+      isGameOver: this.gameEngine.isGameOver || false,
+      allPlayersDead: this.areAllPlayersDead()
+    };
+  }
+  
+  /**
+   * Check if all players are dead
+   * @returns {boolean} True if all players are dead
+   */
+  areAllPlayersDead() {
+    // Check local player
+    const localPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
+    
+    // Check remote players
+    let allRemotePlayersDead = true;
+    
+    if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers.size > 0) {
+      this.gameEngine.networkManager.remotePlayers.forEach(player => {
+        if (!player.isDead) {
+          allRemotePlayersDead = false;
+        }
+      });
+    }
+    
+    return localPlayerDead && allRemotePlayersDead;
+  }
+  
+  /**
+   * Handle host actions like pause, restart, etc.
+   * @param {Object} action - The action data
+   */
+  handleHostAction(action) {
+    if (!this.gameEngine || this.isHost) return;
+    
+    console.log('Received host action:', action.type);
+    
+    switch (action.type) {
+      case 'pause':
+        this.gameEngine.pauseGame();
+        break;
+        
+      case 'resume':
+        this.gameEngine.resumeGame();
+        break;
+        
+      case 'restart':
+        this.gameEngine.restartGame();
+        break;
+        
+      case 'endGame':
+        this.gameEngine.endGame();
+        break;
+    }
+  }
+  
+  /**
+   * Handle player respawn command from host
+   */
+  handleRespawn() {
+    if (!this.gameEngine || !this.gameEngine.controls) return;
+    
+    console.log('Host commanded player respawn');
+    
+    // Only respawn if player is dead
+    if (this.gameEngine.controls.isDead) {
+      // Reset player state
+      this.gameEngine.controls.resetHealth();
+      this.gameEngine.controls.isDead = false;
+      
+      // Re-lock pointer
+      document.body.requestPointerLock();
+      
+      // Hide game over screen if visible
+      const gameOverMenu = document.getElementById('game-over-menu');
+      if (gameOverMenu) {
+        gameOverMenu.remove();
+      }
+      
+      // Unpause game if it was paused
+      if (this.gameEngine.isPaused) {
+        this.gameEngine.resumeGame();
+      }
+      
+      console.log('Player respawned successfully');
+    }
+  }
+  
+  /**
+   * Send player position update
+   * @param {Object} weaponInfo - Optional information about the player's current weapon
+   */
+  sendPlayerPosition(weaponInfo = null) {
     if (!this.isConnected || !this.gameEngine || !this.gameEngine.controls) return;
     
     const position = {
       x: this.gameEngine.controls.camera.position.x,
       y: this.gameEngine.controls.camera.position.y,
       z: this.gameEngine.controls.camera.position.z,
-      rotationY: this.gameEngine.controls.camera.rotation.y
+      rotationY: this.gameEngine.controls.camera.rotation.y,
+      weapon: weaponInfo, // Include weapon information if provided
+      health: this.gameEngine.controls.health || 100,
+      isDead: this.gameEngine.controls.isDead || false
     };
     
     this.broadcastToAll({
@@ -815,5 +1019,53 @@ export class P2PNetwork {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
     }
+  }
+  
+  /**
+   * Host control: Pause game for all players
+   */
+  hostPauseGame() {
+    if (!this.isHost || !this.isConnected) return;
+    
+    console.log("Host sending pause command to all clients");
+    
+    this.broadcastToAll({
+      type: 'hostAction',
+      action: {
+        type: 'pause'
+      }
+    });
+  }
+  
+  /**
+   * Host control: Resume game for all players
+   */
+  hostResumeGame() {
+    if (!this.isHost || !this.isConnected) return;
+    
+    console.log("Host sending resume command to all clients");
+    
+    this.broadcastToAll({
+      type: 'hostAction',
+      action: {
+        type: 'resume'
+      }
+    });
+  }
+  
+  /**
+   * Host control: Restart game for all players
+   */
+  hostRestartGame() {
+    if (!this.isHost || !this.isConnected) return;
+    
+    console.log("Host sending restart command to all clients");
+    
+    this.broadcastToAll({
+      type: 'hostAction',
+      action: {
+        type: 'restart'
+      }
+    });
   }
 } 

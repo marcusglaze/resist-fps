@@ -2,7 +2,12 @@
  * NetworkManager class
  * Manages multiplayer sessions and coordinates network activities
  */
+import * as THREE from 'three';
 import { P2PNetwork } from './P2PNetwork.js';
+import { Enemy } from '../objects/Enemy.js';
+import { CrawlingZombie } from '../objects/CrawlingZombie.js';
+import { RunnerZombie } from '../objects/RunnerZombie.js';
+import { SpitterZombie } from '../objects/SpitterZombie.js';
 
 export class NetworkManager {
   constructor(gameEngine) {
@@ -16,12 +21,15 @@ export class NetworkManager {
     this.isConnected = false;
     this.isMultiplayer = false;
     this.lastPositionUpdate = 0;
-    this.positionUpdateInterval = 100; // ms between position updates
+    this.positionUpdateInterval = 50; // Reduced from 100ms for smoother updates
     this.connectionStatusElement = null;
     
     // For server list feature
     this.serverListUpdateInterval = null;
     this.serverName = "Game Server #" + Math.floor(Math.random() * 1000);
+    this.serverUniqueId = null;
+    this.serverListApiUrl = '/api/servers';
+    this.isServerRegistered = false;
   }
   
   /**
@@ -80,16 +88,22 @@ export class NetworkManager {
       this.isConnected = true;
       
       // Register this server in the server list
-      this.registerServer(hostId);
+      await this.registerServer(hostId);
       
-      // Show host ID for sharing
-      this.showHostIdDialog(hostId);
+      // Start the game immediately - don't wait for clients
+      console.log("Starting the game as a host");
+      this.gameEngine.startGame();
       
       // Start game state updates
       this.network.startStateUpdates();
       
-      // Start sending position updates
-      this.startPositionUpdates();
+      // Important: Only start sending position updates AFTER the connection is established
+      // This fixes the "Connection is not open" error
+      setTimeout(() => {
+        // Starting position updates with a slight delay to ensure connection is ready
+        this.startPositionUpdates();
+        console.log("Started sending position updates after host connection established");
+      }, 1000); // 1 second delay to ensure connection is fully established
       
       this.updateConnectionStatus(`Hosting (ID: ${this.truncateId(hostId)})`);
     } catch (err) {
@@ -105,7 +119,8 @@ export class NetworkManager {
    */
   async joinGame(hostId) {
     if (!hostId) {
-      this.showJoinDialog();
+      // Show server list instead of join dialog
+      this.showServerListDialog();
       return;
     }
     
@@ -128,8 +143,22 @@ export class NetworkManager {
       await this.network.joinGame(hostId);
       this.isConnected = true;
       
-      // Start sending position updates
-      this.startPositionUpdates();
+      // Start the game on the client side
+      console.log("Starting the game as a client");
+      this.gameEngine.startGame();
+      
+      // Wait for the game to initialize
+      setTimeout(() => {
+        console.log("Game started, now syncing with host");
+        
+        // Important: Only start sending position updates AFTER the connection is established
+        // This fixes the "Connection is not open" error
+        setTimeout(() => {
+          // Starting position updates with a slight delay to ensure connection is ready
+          this.startPositionUpdates();
+          console.log("Started sending position updates after connection established");
+        }, 1000); // 1 second delay to ensure connection is fully established
+      }, 1000); // Wait 1 second for the game to initialize properly
       
       this.updateConnectionStatus(`Connected to ${this.truncateId(hostId)}`);
     } catch (err) {
@@ -180,17 +209,39 @@ export class NetworkManager {
    * Start sending position updates
    */
   startPositionUpdates() {
-    setInterval(() => {
-      if (!this.isConnected || !this.network) return;
+    // Clear any existing interval first to prevent duplicates
+    if (this._positionUpdateInterval) {
+      clearInterval(this._positionUpdateInterval);
+    }
+    
+    this._positionUpdateInterval = setInterval(() => {
+      if (!this.isConnected || !this.network) {
+        console.log("Position updates stopping - no longer connected");
+        clearInterval(this._positionUpdateInterval);
+        this._positionUpdateInterval = null;
+        return;
+      }
       
       const now = Date.now();
       
       // Limit update frequency
       if (now - this.lastPositionUpdate > this.positionUpdateInterval) {
-        this.network.sendPlayerPosition();
+        // Get weapon information if available
+        let weaponInfo = null;
+        if (this.gameEngine.weaponManager && this.gameEngine.weaponManager.currentWeapon) {
+          weaponInfo = {
+            type: this.gameEngine.weaponManager.currentWeapon.type || 'PISTOL',
+            isReloading: this.gameEngine.weaponManager.isReloading || false,
+            isFiring: this.gameEngine.weaponManager.isFiring || false
+          };
+        }
+        
+        this.network.sendPlayerPosition(weaponInfo);
         this.lastPositionUpdate = now;
       }
     }, this.positionUpdateInterval);
+    
+    console.log("Position updates started with interval:", this.positionUpdateInterval);
   }
   
   /**
@@ -209,11 +260,103 @@ export class NetworkManager {
       });
     }
     
+    // Update game status (pause, game over, etc.)
+    if (state.gameStatus) {
+      this.updateGameStatus(state.gameStatus);
+    }
+    
     // Update enemy state if needed (for client-side visualization)
     if (state.enemies && this.gameEngine.scene && this.gameEngine.scene.room && 
         this.gameEngine.scene.room.enemyManager) {
-      // This would be implemented to update enemy positions and states
-      // This is a simplified example and would need to be expanded based on the game structure
+      
+      const enemyManager = this.gameEngine.scene.room.enemyManager;
+      
+      // Enhanced enemy synchronization
+      if (Array.isArray(state.enemies)) {
+        console.log(`Syncing ${state.enemies.length} enemies from host`);
+        
+        // If host has no enemies, clear client enemies
+        if (state.enemies.length === 0 && enemyManager.enemies.length > 0) {
+          console.log("Host has no enemies, clearing client enemies");
+          enemyManager.despawnAllEnemies();
+          return;
+        }
+        
+        // If client has no enemies but host does, force a spawn on the client
+        if (enemyManager.enemies.length === 0 && state.enemies.length > 0) {
+          console.log("Spawning initial enemies from host data");
+          
+          // Spawn missing enemies
+          state.enemies.forEach(enemyData => {
+            // Only create if we don't already have this enemy
+            if (!enemyManager.enemies.some(e => e.id === enemyData.id)) {
+              this.spawnEnemyFromData(enemyData, enemyManager);
+            }
+          });
+        } else {
+          // Update positions and states of existing enemies
+          state.enemies.forEach(enemyData => {
+            const enemy = enemyManager.enemies.find(e => e.id === enemyData.id);
+            if (enemy && enemy.instance) {
+              // Update position
+              enemy.instance.position.set(
+                enemyData.position.x,
+                enemyData.position.y,
+                enemyData.position.z
+              );
+              
+              // Update health and state
+              enemy.health = enemyData.health;
+              enemy.state = enemyData.state;
+              enemy.insideRoom = enemyData.insideRoom || enemy.insideRoom;
+              
+              // Ensure enemies are properly moving/animated based on state
+              if (enemyData.state === 'moving' && enemy.state !== 'moving') {
+                if (typeof enemy.startMoving === 'function') enemy.startMoving();
+              } else if (enemyData.state === 'attacking' && enemy.state !== 'attacking') {
+                if (typeof enemy.startAttacking === 'function') enemy.startAttacking();
+              } else if (enemyData.state === 'dying' && enemy.state !== 'dying') {
+                if (typeof enemy.die === 'function') enemy.die();
+              }
+            } else {
+              // Enemy doesn't exist on client, create it
+              console.log(`Creating missing enemy ${enemyData.id} from host data`);
+              this.spawnEnemyFromData(enemyData, enemyManager);
+            }
+          });
+          
+          // Remove enemies that don't exist on host anymore
+          const enemiesToRemove = enemyManager.enemies.filter(enemy => 
+            !state.enemies.some(e => e.id === enemy.id)
+          );
+          
+          if (enemiesToRemove.length > 0) {
+            console.log(`Removing ${enemiesToRemove.length} enemies that don't exist on host`);
+            enemiesToRemove.forEach(enemy => {
+              if (enemy.instance) {
+                if (typeof enemy.die === 'function') {
+                  enemy.die();
+                  // Force remove after a short delay
+                  setTimeout(() => {
+                    if (enemy.instance && this.gameEngine.scene.instance && typeof this.gameEngine.scene.instance.remove === 'function') {
+                      this.gameEngine.scene.instance.remove(enemy.instance);
+                    }
+                  }, 500);
+                } else {
+                  if (this.gameEngine.scene.instance && typeof this.gameEngine.scene.instance.remove === 'function') {
+                    this.gameEngine.scene.instance.remove(enemy.instance);
+                  }
+                }
+              }
+            });
+            
+            // Update enemies array
+            enemyManager.enemies = enemyManager.enemies.filter(enemy => 
+              state.enemies.some(e => e.id === enemy.id)
+            );
+          }
+        }
+      }
     }
     
     // Update round info
@@ -231,12 +374,146 @@ export class NetworkManager {
           state.round.zombiesRemaining
         );
       }
+      
+      // If round active state changed, handle round transitions
+      if (enemyManager.roundActive !== state.round.roundActive) {
+        if (state.round.roundActive) {
+          console.log(`Client syncing: Round ${state.round.round} started`);
+          // Host started a new round, sync it
+          enemyManager.roundActive = true;
+        } else {
+          console.log(`Client syncing: Round ${state.round.round} ended`);
+          // Host ended a round, sync it
+          enemyManager.roundActive = false;
+        }
+      }
     }
     
     // Update window states if necessary
     if (state.windows && this.gameEngine.scene && this.gameEngine.scene.room) {
       // This would be implemented to update window states
-      // This is a simplified example and would need to be expanded based on the game structure
+      const room = this.gameEngine.scene.room;
+      if (Array.isArray(room.windows) && Array.isArray(state.windows)) {
+        state.windows.forEach((windowData, index) => {
+          if (room.windows[index]) {
+            // Update window state
+            room.windows[index].isOpen = windowData.isOpen;
+            room.windows[index].boardsCount = windowData.boardsCount;
+            
+            // Update visuals to match
+            if (windowData.isOpen && !room.windows[index].instance.visible) {
+              room.windows[index].breakWindow();
+            }
+          }
+        });
+      }
+    }
+  }
+  
+  /**
+   * Spawn an enemy from network data
+   * @param {Object} enemyData - The enemy data
+   * @param {EnemyManager} enemyManager - The enemy manager
+   */
+  spawnEnemyFromData(enemyData, enemyManager) {
+    if (!this.gameEngine.scene || !this.gameEngine.scene.room) return;
+    
+    try {
+      const room = this.gameEngine.scene.room;
+      let targetWindow = null;
+      
+      // Get target window if provided
+      if (enemyData.targetWindow && typeof enemyData.targetWindow.index === 'number') {
+        const windowIndex = enemyData.targetWindow.index;
+        if (windowIndex >= 0 && windowIndex < room.windows.length) {
+          targetWindow = room.windows[windowIndex];
+        }
+      }
+      
+      // If no target window found, use a random one
+      if (!targetWindow && room.windows && room.windows.length > 0) {
+        const randomIndex = Math.floor(Math.random() * room.windows.length);
+        targetWindow = room.windows[randomIndex];
+      }
+      
+      if (!targetWindow) {
+        console.error("No target window available for enemy spawn");
+        return;
+      }
+      
+      // Create appropriate enemy type based on received data
+      let enemy;
+      switch (enemyData.type) {
+        case 'crawler':
+          enemy = new CrawlingZombie(targetWindow);
+          break;
+        case 'runner':
+          enemy = new RunnerZombie(targetWindow);
+          break;
+        case 'spitter':
+          enemy = new SpitterZombie(targetWindow);
+          break;
+        default:
+          enemy = new Enemy(targetWindow);
+          break;
+      }
+      
+      // Set the ID to match the host
+      enemy.id = enemyData.id;
+      
+      // Initialize the enemy
+      enemy.init();
+      
+      // Set position
+      if (enemyData.position && enemy.instance) {
+        enemy.instance.position.set(
+          enemyData.position.x,
+          enemyData.position.y,
+          enemyData.position.z
+        );
+      }
+      
+      // Set state properties
+      enemy.health = enemyData.health;
+      enemy.state = enemyData.state;
+      enemy.insideRoom = enemyData.insideRoom || false;
+      
+      // Set manager reference
+      enemy.manager = enemyManager;
+      
+      // Set game engine reference directly
+      enemy.gameEngine = this.gameEngine;
+      
+      // Set player reference if available
+      if (enemyManager.player) {
+        enemy.setPlayer(enemyManager.player);
+      }
+      
+      // Use the correct THREE.js scene instance
+      // The actual THREE.js scene is at this.gameEngine.scene.instance, not this.gameEngine.scene
+      if (this.gameEngine.scene.instance && typeof this.gameEngine.scene.instance.add === 'function') {
+        // Add to scene using the correct scene instance
+        this.gameEngine.scene.instance.add(enemy.instance);
+      } else {
+        console.warn("Cannot add enemy to scene - scene.instance.add is not available");
+        
+        // Try alternative ways to add the enemy
+        if (room && room.instance && typeof room.instance.add === 'function') {
+          room.instance.add(enemy.instance);
+        } else {
+          console.error("Could not add enemy to any available scene object");
+          // Don't add enemy to tracking array if we couldn't add it to the scene
+          return null;
+        }
+      }
+      
+      // Add to tracking array
+      enemyManager.enemies.push(enemy);
+      
+      return enemy;
+    } catch (error) {
+      console.error("Error spawning enemy from network data:", error);
+      return null;
     }
   }
   
@@ -267,20 +544,97 @@ export class NetworkManager {
   createRemotePlayerModel(playerId) {
     if (!this.gameEngine.scene) return;
     
-    // Create a simple placeholder model for the remote player
-    // This is a simplified example and would need to be expanded with proper models
-    const geometry = new THREE.BoxGeometry(0.5, 1.8, 0.5);
-    const material = new THREE.MeshBasicMaterial({ color: 0x0000ff });
-    const model = new THREE.Mesh(geometry, material);
+    console.log(`Creating visible model for remote player ${playerId}`);
     
-    // Set initial position
-    model.position.set(0, 0, 0);
+    // Create a more visible and recognizable player model
+    const playerGroup = new THREE.Group();
     
-    // Add to the scene
-    this.gameEngine.scene.add(model);
+    // Body - taller and more visible blue color
+    const bodyGeometry = new THREE.BoxGeometry(0.6, 1.8, 0.6);
+    const bodyMaterial = new THREE.MeshBasicMaterial({ 
+      color: 0x1E90FF, // Dodger blue - more vibrant and visible
+      transparent: true,
+      opacity: 0.8
+    });
+    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    body.position.y = 0.9; // Center the body vertically
+    playerGroup.add(body);
+    
+    // Head
+    const headGeometry = new THREE.SphereGeometry(0.3, 8, 8);
+    const headMaterial = new THREE.MeshBasicMaterial({ color: 0x4169E1 }); // Royal blue for head
+    const head = new THREE.Mesh(headGeometry, headMaterial);
+    head.position.y = 2.0; // Position the head on top of the body
+    playerGroup.add(head);
+    
+    // Gun/weapon (just for visual identification)
+    const gunGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.5);
+    const gunMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
+    const gun = new THREE.Mesh(gunGeometry, gunMaterial);
+    gun.position.set(0.3, 1.2, 0.3); // Position to the side like holding a gun
+    gun.userData.type = 'gun'; // Mark this as a gun for later reference
+    playerGroup.add(gun);
+    
+    // Add player name label
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#000000';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.font = 'Bold 24px Arial';
+    context.fillStyle = '#FFFFFF';
+    context.textAlign = 'center';
+    context.fillText(`Player ${playerId.substring(0, 5)}`, canvas.width / 2, canvas.height / 2);
+    
+    const labelTexture = new THREE.CanvasTexture(canvas);
+    const labelMaterial = new THREE.MeshBasicMaterial({
+      map: labelTexture,
+      transparent: true,
+      side: THREE.DoubleSide
+    });
+    const labelGeometry = new THREE.PlaneGeometry(1, 0.25);
+    const label = new THREE.Mesh(labelGeometry, labelMaterial);
+    label.position.y = 2.4; // Position above the head
+    label.rotation.y = Math.PI; // Face the label toward the player (billboarding)
+    playerGroup.add(label);
+    
+    // Set initial position - make it slightly higher so it doesn't clip into the ground
+    playerGroup.position.set(0, 0.1, 0);
+    
+    // Add to the scene using the correct scene instance
+    if (this.gameEngine.scene.instance && typeof this.gameEngine.scene.instance.add === 'function') {
+      this.gameEngine.scene.instance.add(playerGroup);
+    } else {
+      console.warn("Cannot add player model to scene - scene.instance.add is not available");
+      return;
+    }
     
     // Store the model
-    this.playerModels.set(playerId, model);
+    this.playerModels.set(playerId, playerGroup);
+    
+    // Set up a simple animation to make the player model more noticeable
+    const bobAnimation = () => {
+      const model = this.playerModels.get(playerId);
+      if (model) {
+        // Small floating/bobbing animation
+        model.position.y = 0.1 + Math.sin(Date.now() * 0.002) * 0.05;
+        
+        // Make the label always face the camera (billboarding)
+        const label = model.children.find(child => child.geometry && child.geometry.type === 'PlaneGeometry');
+        if (label && this.gameEngine.controls && this.gameEngine.controls.camera) {
+          label.lookAt(this.gameEngine.controls.camera.position);
+        }
+      }
+      
+      // Continue animation if player still exists
+      if (this.playerModels.has(playerId)) {
+        requestAnimationFrame(bobAnimation);
+      }
+    };
+    
+    // Start the animation
+    bobAnimation();
   }
   
   /**
@@ -298,15 +652,178 @@ export class NetworkManager {
       playerData = this.remotePlayers.get(playerId);
     }
     
-    // Update the player's position
+    // Update the player's position and weapon info
     playerData.position = position;
     playerData.lastUpdate = Date.now();
+    
+    // Update health and status if provided
+    if (position.health !== undefined) {
+      playerData.health = position.health;
+    }
+    
+    if (position.isDead !== undefined) {
+      playerData.isDead = position.isDead;
+      
+      // If the player just died, update their model to show death state
+      if (position.isDead && !playerData.wasDeadLastUpdate) {
+        this.updatePlayerDeathState(playerId, true);
+      } else if (!position.isDead && playerData.wasDeadLastUpdate) {
+        // Player was respawned
+        this.updatePlayerDeathState(playerId, false);
+      }
+      
+      playerData.wasDeadLastUpdate = position.isDead;
+    }
+    
+    // Save weapon info if provided
+    if (position.weapon) {
+      playerData.weapon = position.weapon;
+    }
     
     // Update the player's model
     const model = this.playerModels.get(playerId);
     if (model) {
+      // Update position and rotation
       model.position.set(position.x, position.y, position.z);
       model.rotation.y = position.rotationY;
+      
+      // Update weapon visualization if weapon info is available
+      if (position.weapon && position.weapon.type) {
+        // Find the gun mesh
+        const gun = model.children.find(child => child.userData && child.userData.type === 'gun');
+        if (gun) {
+          // Update gun appearance based on weapon type
+          switch (position.weapon.type) {
+            case 'ASSAULT_RIFLE':
+              gun.scale.set(0.1, 0.1, 0.8); // Longer for rifle
+              break;
+            case 'SHOTGUN':
+              gun.scale.set(0.12, 0.12, 0.6); // Thicker for shotgun
+              break;
+            default: // PISTOL
+              gun.scale.set(0.1, 0.1, 0.5); // Default size
+          }
+          
+          // Show firing effect if the player is firing
+          if (position.weapon.isFiring) {
+            if (!gun.userData.muzzleFlash) {
+              // Create muzzle flash if it doesn't exist
+              const muzzleGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+              const muzzleMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xffff00,
+                transparent: true,
+                opacity: 0.8
+              });
+              const muzzleFlash = new THREE.Mesh(muzzleGeometry, muzzleMaterial);
+              muzzleFlash.position.z = gun.scale.z + 0.1; // Position at end of gun
+              gun.add(muzzleFlash);
+              gun.userData.muzzleFlash = muzzleFlash;
+              
+              // Hide after a short time
+              setTimeout(() => {
+                if (gun.userData.muzzleFlash) {
+                  gun.userData.muzzleFlash.visible = false;
+                }
+              }, 100);
+            } else {
+              // Make existing muzzle flash visible
+              gun.userData.muzzleFlash.visible = true;
+              
+              // Hide after a short time
+              setTimeout(() => {
+                if (gun.userData.muzzleFlash) {
+                  gun.userData.muzzleFlash.visible = false;
+                }
+              }, 100);
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  /**
+   * Update a player's death state visual representation
+   * @param {string} playerId - The ID of the player
+   * @param {boolean} isDead - Whether the player is dead
+   */
+  updatePlayerDeathState(playerId, isDead) {
+    const model = this.playerModels.get(playerId);
+    if (!model) return;
+    
+    if (isDead) {
+      // Make player model appear dead (fallen over, grayed out)
+      model.rotation.z = Math.PI / 2; // Rotate to lie down
+      model.position.y = 0.3; // Lower to ground level
+      
+      // Gray out the model
+      model.children.forEach(child => {
+        if (child.material) {
+          child.material.color.set(0x555555);
+          if (child.material.opacity) {
+            child.material.opacity = 0.7;
+          }
+        }
+      });
+      
+      // Add "DEAD" text above player
+      if (!model.userData.deadText) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 64;
+        const context = canvas.getContext('2d');
+        context.fillStyle = '#550000';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.font = 'Bold 32px Arial';
+        context.fillStyle = '#FF0000';
+        context.textAlign = 'center';
+        context.fillText('DEAD', canvas.width / 2, canvas.height / 2);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        const material = new THREE.MeshBasicMaterial({
+          map: texture,
+          transparent: true,
+          side: THREE.DoubleSide
+        });
+        
+        const geometry = new THREE.PlaneGeometry(1, 0.25);
+        const deadText = new THREE.Mesh(geometry, material);
+        deadText.position.y = 1.0; // Position above the fallen player
+        deadText.rotation.y = Math.PI; // Face the text toward the player
+        
+        model.add(deadText);
+        model.userData.deadText = deadText;
+      }
+    } else {
+      // Restore player model to normal
+      model.rotation.z = 0; // Upright position
+      model.position.y = 0.1; // Normal height
+      
+      // Restore normal colors
+      model.children.forEach(child => {
+        if (child.isMesh) {
+          if (child.userData.type === 'gun') {
+            child.material.color.set(0x333333);
+          } else if (child.geometry && child.geometry.type === 'BoxGeometry') {
+            child.material.color.set(0x1E90FF); // Body color
+            if (child.material.opacity) {
+              child.material.opacity = 0.8;
+            }
+          } else if (child.geometry && child.geometry.type === 'SphereGeometry' && 
+                    !child.userData.muzzleFlash) {
+            child.material.color.set(0x4169E1); // Head color
+            if (child.material.opacity) {
+              child.material.opacity = 1.0;
+            }
+          }
+        }
+      });
+      
+      // Remove "DEAD" text if it exists
+      if (model.userData.deadText) {
+        model.remove(model.userData.deadText);
+        model.userData.deadText = null;
+      }
     }
   }
   
@@ -320,8 +837,8 @@ export class NetworkManager {
     
     // Remove the player's model
     const model = this.playerModels.get(playerId);
-    if (model && this.gameEngine.scene) {
-      this.gameEngine.scene.remove(model);
+    if (model && this.gameEngine.scene && this.gameEngine.scene.instance) {
+      this.gameEngine.scene.instance.remove(model);
     }
     
     this.playerModels.delete(playerId);
@@ -331,11 +848,11 @@ export class NetworkManager {
    * Clean up player models
    */
   cleanupPlayerModels() {
-    if (!this.gameEngine.scene) return;
+    if (!this.gameEngine.scene || !this.gameEngine.scene.instance) return;
     
     // Remove all player models from the scene
     for (const model of this.playerModels.values()) {
-      this.gameEngine.scene.remove(model);
+      this.gameEngine.scene.instance.remove(model);
     }
     
     this.playerModels.clear();
@@ -358,8 +875,16 @@ export class NetworkManager {
       }
     }
     
+    // Clear any position update intervals
+    if (this._positionUpdateInterval) {
+      console.log("Clearing position update interval");
+      clearInterval(this._positionUpdateInterval);
+      this._positionUpdateInterval = null;
+    }
+    
     // Disconnect the P2P network
     if (this.network) {
+      console.log("Disconnecting network connections");
       this.network.disconnect();
       this.network = null;
     }
@@ -437,40 +962,62 @@ export class NetworkManager {
   }
   
   /**
-   * Register a server in the public server list
-   * @param {string} hostId - The host ID to register
+   * Register this server in the public server list
+   * @param {string} hostId - Host ID
    */
-  registerServer(hostId) {
+  async registerServer(hostId) {
+    if (!hostId) return;
+    
     try {
-      // Register server with the API
-      fetch('/api/servers', {
+      console.log("Attempting to register server with hostId:", hostId);
+      
+      // Use unique identifier from localStorage if available, or generate a new one
+      if (!this.serverUniqueId) {
+        this.serverUniqueId = localStorage.getItem('serverUniqueId') || this.generateUniqueId();
+        localStorage.setItem('serverUniqueId', this.serverUniqueId);
+      }
+      
+      console.log("Using server unique ID:", this.serverUniqueId);
+      
+      const requestBody = {
+        id: hostId,
+        name: this.serverName || `Game Server ${hostId.substring(0, 6)}`,
+        uniqueId: this.serverUniqueId,
+        playerCount: 1, // Start with 1 player (the host)
+        maxPlayers: 2  // Maximum 2 players
+      };
+      
+      console.log("Sending server registration request:", JSON.stringify(requestBody));
+      console.log("API URL:", `${this.serverListApiUrl}/register`);
+      
+      const response = await fetch(`${this.serverListApiUrl}/register`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          id: hostId,
-          name: this.serverName,
-          playerCount: 1
-        }),
-      })
-      .then(response => response.json())
-      .then(data => {
-        console.log("Registered server in public list:", hostId);
-        
-        // Start the server list update interval to keep it fresh
-        this.startServerListUpdates();
-      })
-      .catch(err => {
-        console.error("Error registering server:", err);
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
       });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Server registration failed with status:", response.status, errorText);
+        throw new Error(`Failed to register server: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+      
+      const responseData = await response.json();
+      console.log("Server registration response:", responseData);
+      
+      console.log("Server registered in the public list");
+      this.isServerRegistered = true;
+      
+      // Start sending server updates
+      this.startServerListUpdates();
     } catch (err) {
       console.error("Error registering server:", err);
+      // Don't rethrow - we want to continue with the game even if server registration fails
     }
   }
   
   /**
-   * Start periodic updates to the server list for this host
+   * Start periodic updates to keep server info in the public list fresh
    */
   startServerListUpdates() {
     // Clear any existing interval
@@ -478,115 +1025,59 @@ export class NetworkManager {
       clearInterval(this.serverListUpdateInterval);
     }
     
-    // Update player count and timestamp every 30 seconds
-    this.serverListUpdateInterval = setInterval(() => {
-      if (!this.isHost || !this.hostId) return;
-      
-      try {
-        // Update server info with current player count
-        fetch(`/api/servers/${this.hostId}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            name: this.serverName,
-            playerCount: this.remotePlayers.size + 1
-          }),
-        })
-        .then(response => response.json())
-        .catch(err => {
-          console.error("Error updating server list:", err);
-        });
-      } catch (err) {
-        console.error("Error updating server list:", err);
-      }
-    }, 30000); // Every 30 seconds
+    // Update server info immediately and then every 30 seconds
+    this.updateServerInfo();
     
-    // Also set up an event to remove the server when this window is closed
-    window.addEventListener('beforeunload', () => {
-      this.removeServerFromList();
-    });
+    this.serverListUpdateInterval = setInterval(() => {
+      this.updateServerInfo();
+    }, 30000); // 30 seconds
   }
   
   /**
-   * Remove this server from the public list
+   * Update server information in the public server list
    */
-  removeServerFromList() {
-    if (!this.isHost || !this.hostId) return;
+  async updateServerInfo() {
+    if (!this.isServerRegistered || !this.hostId) return;
     
     try {
-      // Remove server from API
-      fetch(`/api/servers/${this.hostId}`, {
-        method: 'DELETE',
-      })
-      .then(() => {
-        console.log("Removed server from public list:", this.hostId);
-      })
-      .catch(err => {
-        console.error("Error removing server from list:", err);
-      });
-    } catch (err) {
-      console.error("Error removing server from list:", err);
-    }
-  }
-  
-  /**
-   * Get the list of available servers
-   * @returns {Promise<Array>} Promise resolving to array of server objects
-   */
-  getServerList() {
-    return new Promise((resolve, reject) => {
-      try {
-        // Get server list from API
-        fetch('/api/servers')
-          .then(response => response.json())
-          .then(serverList => {
-            resolve(serverList);
-          })
-          .catch(err => {
-            console.error("Error getting server list:", err);
-            resolve([]);
-          });
-      } catch (err) {
-        console.error("Error getting server list:", err);
-        resolve([]);
+      // Calculate current player count (host + connected peers)
+      let playerCount = 1; // Host is always counted
+      
+      // Add connected peers to the count
+      if (this.network && this.network.connections) {
+        playerCount += Object.keys(this.network.connections).length;
       }
-    });
-  }
-
-  /**
-   * Set the name for this server
-   * @param {string} name - The server name
-   */
-  setServerName(name) {
-    this.serverName = name;
-    
-    // If we're hosting, update the server info
-    if (this.isHost && this.hostId) {
-      fetch(`/api/servers/${this.hostId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+      
+      const response = await fetch(`${this.serverListApiUrl}/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: name,
-          playerCount: this.remotePlayers.size + 1
-        }),
-      })
-      .catch(err => {
-        console.error("Error updating server name:", err);
+          id: this.hostId,
+          uniqueId: this.serverUniqueId,
+          name: this.serverName,
+          playerCount: playerCount,
+          maxPlayers: 2
+        })
       });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to update server info: ${response.statusText}`);
+      }
+    } catch (err) {
+      console.error("Error updating server info:", err);
     }
   }
   
   /**
-   * Show a dialog with the host ID for sharing
+   * Show a dialog with the host's ID for sharing
    * @param {string} hostId - The host ID to display
    */
   showHostIdDialog(hostId) {
+    console.log("Showing host ID dialog:", hostId);
+    
     // Create a modal dialog
     const modal = document.createElement('div');
+    modal.id = 'host-id-modal';
     modal.style.position = 'fixed';
     modal.style.left = '0';
     modal.style.top = '0';
@@ -604,126 +1095,154 @@ export class NetworkManager {
     dialog.style.color = 'white';
     dialog.style.padding = '20px';
     dialog.style.borderRadius = '5px';
-    dialog.style.maxWidth = '400px';
+    dialog.style.width = '400px';
     dialog.style.textAlign = 'center';
     dialog.style.fontFamily = 'Arial, sans-serif';
     
     // Add title
     const title = document.createElement('h2');
-    title.textContent = 'Game Hosted!';
+    title.textContent = 'Share this server ID with friends';
     title.style.marginTop = '0';
+    title.style.color = '#4CAF50';
     dialog.appendChild(title);
-    
-    // Add server name input
-    const nameLabel = document.createElement('div');
-    nameLabel.textContent = 'Server Name:';
-    nameLabel.style.marginTop = '15px';
-    dialog.appendChild(nameLabel);
-    
-    const nameInput = document.createElement('input');
-    nameInput.value = this.serverName;
-    nameInput.style.width = '100%';
-    nameInput.style.padding = '10px';
-    nameInput.style.margin = '5px 0 15px';
-    nameInput.style.fontSize = '16px';
-    nameInput.style.textAlign = 'center';
-    nameInput.style.backgroundColor = '#222';
-    nameInput.style.color = 'white';
-    nameInput.style.border = '1px solid #444';
-    nameInput.oninput = () => {
-      this.setServerName(nameInput.value);
-    };
-    dialog.appendChild(nameInput);
     
     // Add host ID display
     const idDisplay = document.createElement('div');
-    idDisplay.textContent = 'Share this ID with friends:';
+    idDisplay.style.padding = '15px';
+    idDisplay.style.marginTop = '15px';
+    idDisplay.style.marginBottom = '15px';
+    idDisplay.style.backgroundColor = '#222';
+    idDisplay.style.color = '#fff';
+    idDisplay.style.fontSize = '16px';
+    idDisplay.style.fontFamily = 'monospace';
+    idDisplay.style.cursor = 'pointer';
+    idDisplay.style.borderRadius = '3px';
+    idDisplay.textContent = hostId;
+    
+    // Add click-to-copy functionality
+    idDisplay.addEventListener('click', () => {
+      // Select the text
+      const range = document.createRange();
+      range.selectNode(idDisplay);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+      
+      // Copy to clipboard
+      try {
+        document.execCommand('copy');
+        
+        // Show copied message
+        const copyMsg = document.createElement('div');
+        copyMsg.textContent = 'Copied to clipboard!';
+        copyMsg.style.fontSize = '12px';
+        copyMsg.style.color = '#4CAF50';
+        copyMsg.style.marginTop = '5px';
+        
+        // Remove any existing copy message
+        const existingMsg = dialog.querySelector('.copy-msg');
+        if (existingMsg) {
+          dialog.removeChild(existingMsg);
+        }
+        
+        copyMsg.className = 'copy-msg';
+        dialog.insertBefore(copyMsg, idDisplay.nextSibling);
+        
+        // Remove message after 2 seconds
+        setTimeout(() => {
+          if (dialog.contains(copyMsg)) {
+            dialog.removeChild(copyMsg);
+          }
+        }, 2000);
+      } catch (err) {
+        console.error('Failed to copy:', err);
+      }
+      
+      // Deselect
+      window.getSelection().removeAllRanges();
+    });
+    
     dialog.appendChild(idDisplay);
     
-    // Add ID input field for easy copying
-    const idInput = document.createElement('input');
-    idInput.value = hostId;
-    idInput.readOnly = true;
-    idInput.style.width = '100%';
-    idInput.style.padding = '10px';
-    idInput.style.margin = '10px 0';
-    idInput.style.fontSize = '16px';
-    idInput.style.textAlign = 'center';
-    idInput.style.backgroundColor = '#222';
-    idInput.style.color = 'white';
-    idInput.style.border = '1px solid #444';
-    dialog.appendChild(idInput);
+    // Add note
+    const note = document.createElement('p');
+    note.textContent = 'Friends can use this ID to join your game.';
+    note.style.marginTop = '10px';
+    note.style.fontSize = '14px';
+    note.style.color = '#aaa';
+    dialog.appendChild(note);
     
-    // Add copy button
-    const copyButton = document.createElement('button');
-    copyButton.textContent = 'Copy ID';
-    copyButton.style.padding = '10px 20px';
-    copyButton.style.margin = '10px';
-    copyButton.style.cursor = 'pointer';
-    copyButton.style.backgroundColor = '#4CAF50';
-    copyButton.style.color = 'white';
-    copyButton.style.border = 'none';
-    copyButton.style.borderRadius = '3px';
-    copyButton.onclick = () => {
-      idInput.select();
-      document.execCommand('copy');
-      copyButton.textContent = 'Copied!';
-      setTimeout(() => {
-        copyButton.textContent = 'Copy ID';
-      }, 2000);
-    };
-    dialog.appendChild(copyButton);
+    // Add server info
+    const listingInfo = document.createElement('p');
+    listingInfo.textContent = 'Your server will also appear in the server list.';
+    listingInfo.style.marginTop = '5px';
+    listingInfo.style.fontSize = '14px';
+    listingInfo.style.color = '#aaa';
+    dialog.appendChild(listingInfo);
     
-    // Add instructions
-    const instructions = document.createElement('p');
-    instructions.textContent = 'Friends can join your game by choosing "Join Game" and entering this ID.';
-    dialog.appendChild(instructions);
-    
-    // Add player count display
-    const playerCount = document.createElement('p');
-    playerCount.textContent = `Players connected: ${this.remotePlayers.size + 1}`;
-    playerCount.style.fontWeight = 'bold';
-    playerCount.style.marginTop = '20px';
-    dialog.appendChild(playerCount);
-    
-    // Update player count when players join
-    const updateInterval = setInterval(() => {
-      playerCount.textContent = `Players connected: ${this.remotePlayers.size + 1}`;
-    }, 1000);
-    
-    // Add start game button
-    const startButton = document.createElement('button');
-    startButton.textContent = 'Start Game';
-    startButton.style.padding = '10px 20px';
-    startButton.style.margin = '10px';
-    startButton.style.cursor = 'pointer';
-    startButton.style.backgroundColor = '#2196F3';
-    startButton.style.color = 'white';
-    startButton.style.border = 'none';
-    startButton.style.borderRadius = '3px';
-    startButton.style.fontSize = '18px';
-    startButton.style.fontWeight = 'bold';
-    startButton.onclick = () => {
-      clearInterval(updateInterval);
+    // Add close button
+    const closeButton = document.createElement('button');
+    closeButton.textContent = 'Close';
+    closeButton.style.padding = '10px 20px';
+    closeButton.style.margin = '10px';
+    closeButton.style.cursor = 'pointer';
+    closeButton.style.backgroundColor = '#4CAF50';
+    closeButton.style.color = 'white';
+    closeButton.style.border = 'none';
+    closeButton.style.borderRadius = '3px';
+    closeButton.onclick = () => {
+      console.log("Host dialog close button clicked");
+      
+      // Hide and remove the modal
+      modal.style.display = 'none';
       document.body.removeChild(modal);
-      // Now start the game after dialog is closed
-      this.gameEngine.startGame();
+      
+      // IMPORTANT: Request pointer lock after closing the dialog
+      console.log("Dialog closed, locking pointer");
+      
+      // Add a short delay to ensure the dialog is fully removed before requesting pointer lock
+      setTimeout(() => {
+        console.log("Attempting to lock pointer after dialog close");
+        
+        if (this.gameEngine) {
+          // Lock pointer to regain camera control
+          if (typeof this.gameEngine.lockPointer === 'function') {
+            console.log("Using gameEngine.lockPointer()");
+            this.gameEngine.lockPointer();
+          } else if (document.body.requestPointerLock) {
+            // Fallback to directly requesting pointer lock
+            console.log("Fallback: Using document.body.requestPointerLock()");
+            document.body.requestPointerLock();
+          }
+          
+          // Ensure controls are enabled
+          if (this.gameEngine.controls) {
+            console.log("Ensuring controls are enabled");
+            this.gameEngine.controls.enabled = true;
+          }
+        } else {
+          console.warn("gameEngine reference not found for pointer lock");
+        }
+      }, 100);
     };
-    dialog.appendChild(startButton);
+    dialog.appendChild(closeButton);
     
+    // Add to the modal
     modal.appendChild(dialog);
-    document.body.appendChild(modal);
     
-    // Auto-select the ID for easy copying
-    setTimeout(() => {
-      idInput.select();
-    }, 100);
+    // Show the modal
+    document.body.appendChild(modal);
+    modal.style.display = 'flex';
   }
   
   /**
-   * Show a dialog to enter a host ID to join
+   * Show a dialog with the list of available servers
    */
-  showJoinDialog() {
+  showServerListDialog() {
+    console.log("Showing server list dialog");
+    
+    // Define constants
+    const MAX_PLAYERS = 2; // Maximum players per game
+    
     // Create a modal dialog
     const modal = document.createElement('div');
     modal.style.position = 'fixed';
@@ -743,195 +1262,45 @@ export class NetworkManager {
     dialog.style.color = 'white';
     dialog.style.padding = '20px';
     dialog.style.borderRadius = '5px';
-    dialog.style.maxWidth = '500px';
+    dialog.style.width = '500px';
+    dialog.style.maxHeight = '70vh';
+    dialog.style.overflowY = 'auto';
     dialog.style.textAlign = 'center';
     dialog.style.fontFamily = 'Arial, sans-serif';
     
     // Add title
     const title = document.createElement('h2');
-    title.textContent = 'Join a Game';
+    title.textContent = 'Available Servers';
     title.style.marginTop = '0';
+    title.style.color = '#4CAF50';
     dialog.appendChild(title);
     
-    // Create tabs container
-    const tabsContainer = document.createElement('div');
-    tabsContainer.style.display = 'flex';
-    tabsContainer.style.justifyContent = 'center';
-    tabsContainer.style.margin = '20px 0';
-    dialog.appendChild(tabsContainer);
+    // Add loading indicator
+    const loadingText = document.createElement('div');
+    loadingText.textContent = 'Loading servers...';
+    loadingText.style.margin = '20px 0';
+    loadingText.style.fontSize = '16px';
+    dialog.appendChild(loadingText);
     
-    // Create server list tab
-    const serverListTab = document.createElement('div');
-    serverListTab.textContent = 'Server List';
-    serverListTab.style.padding = '10px 20px';
-    serverListTab.style.backgroundColor = '#4CAF50';
-    serverListTab.style.color = 'white';
-    serverListTab.style.cursor = 'pointer';
-    serverListTab.style.borderRadius = '5px 0 0 5px';
-    tabsContainer.appendChild(serverListTab);
-    
-    // Create direct join tab
-    const directJoinTab = document.createElement('div');
-    directJoinTab.textContent = 'Direct Join';
-    directJoinTab.style.padding = '10px 20px';
-    directJoinTab.style.backgroundColor = '#555';
-    directJoinTab.style.color = '#ddd';
-    directJoinTab.style.cursor = 'pointer';
-    directJoinTab.style.borderRadius = '0 5px 5px 0';
-    tabsContainer.appendChild(directJoinTab);
-    
-    // Create content containers
-    const serverListContent = document.createElement('div');
-    serverListContent.style.display = 'block';
-    dialog.appendChild(serverListContent);
-    
-    const directJoinContent = document.createElement('div');
-    directJoinContent.style.display = 'none';
-    dialog.appendChild(directJoinContent);
-    
-    // Set up tab switching
-    serverListTab.onclick = () => {
-      serverListTab.style.backgroundColor = '#4CAF50';
-      serverListTab.style.color = 'white';
-      directJoinTab.style.backgroundColor = '#555';
-      directJoinTab.style.color = '#ddd';
-      serverListContent.style.display = 'block';
-      directJoinContent.style.display = 'none';
-      refreshServerList(); // Refresh the list when switching to this tab
-    };
-    
-    directJoinTab.onclick = () => {
-      directJoinTab.style.backgroundColor = '#4CAF50';
-      directJoinTab.style.color = 'white';
-      serverListTab.style.backgroundColor = '#555';
-      serverListTab.style.color = '#ddd';
-      directJoinContent.style.display = 'block';
-      serverListContent.style.display = 'none';
-    };
-    
-    // --- Server List Content ---
-    
-    // Create server list container with a fixed height and scrolling
+    // Add server list container
     const serverListContainer = document.createElement('div');
-    serverListContainer.style.maxHeight = '300px';
-    serverListContainer.style.overflowY = 'auto';
-    serverListContainer.style.margin = '10px 0';
-    serverListContainer.style.border = '1px solid #444';
-    serverListContainer.style.borderRadius = '5px';
-    serverListContainer.style.padding = '5px';
-    serverListContainer.style.backgroundColor = '#222';
-    serverListContent.appendChild(serverListContainer);
+    serverListContainer.style.display = 'none'; // Hide initially
+    serverListContainer.style.marginTop = '20px';
+    dialog.appendChild(serverListContainer);
     
-    // Add refresh button
-    const refreshButton = document.createElement('button');
-    refreshButton.textContent = 'Refresh Servers';
-    refreshButton.style.padding = '10px 20px';
-    refreshButton.style.margin = '10px';
-    refreshButton.style.cursor = 'pointer';
-    refreshButton.style.backgroundColor = '#607D8B';
-    refreshButton.style.color = 'white';
-    refreshButton.style.border = 'none';
-    refreshButton.style.borderRadius = '3px';
-    refreshButton.onclick = refreshServerList;
-    serverListContent.appendChild(refreshButton);
+    // Add manual join section
+    const manualJoinSection = document.createElement('div');
+    manualJoinSection.style.marginTop = '25px';
+    manualJoinSection.style.padding = '15px 0';
+    manualJoinSection.style.borderTop = '1px solid #444';
     
-    // Function to refresh the server list
-    function refreshServerList() {
-      // Clear current list
-      serverListContainer.innerHTML = '';
-      
-      // Show loading indicator
-      const loadingIndicator = document.createElement('div');
-      loadingIndicator.textContent = 'Loading servers...';
-      loadingIndicator.style.padding = '15px';
-      loadingIndicator.style.textAlign = 'center';
-      serverListContainer.appendChild(loadingIndicator);
-      
-      // Get server list
-      this.getServerList()
-        .then(servers => {
-          // Clear loading indicator
-          serverListContainer.innerHTML = '';
-          
-          if (servers.length === 0) {
-            const noServers = document.createElement('div');
-            noServers.textContent = 'No active servers found. Try refreshing or host your own game!';
-            noServers.style.padding = '15px';
-            noServers.style.color = '#aaa';
-            noServers.style.textAlign = 'center';
-            serverListContainer.appendChild(noServers);
-            return;
-          }
-          
-          // Add each server to the list
-          servers.forEach(server => {
-            const serverItem = document.createElement('div');
-            serverItem.style.padding = '10px';
-            serverItem.style.margin = '5px 0';
-            serverItem.style.borderRadius = '5px';
-            serverItem.style.backgroundColor = '#333';
-            serverItem.style.cursor = 'pointer';
-            serverItem.style.transition = 'background-color 0.2s';
-            
-            // Name and player count
-            const serverInfo = document.createElement('div');
-            serverInfo.textContent = `${server.name} - ${server.playerCount} player(s) online`;
-            serverInfo.style.marginBottom = '5px';
-            serverItem.appendChild(serverInfo);
-            
-            // Server ID (truncated)
-            const serverId = document.createElement('div');
-            serverId.textContent = `ID: ${this.truncateId(server.id)}`;
-            serverId.style.fontSize = '12px';
-            serverId.style.color = '#aaa';
-            serverItem.appendChild(serverId);
-            
-            // Hover effect
-            serverItem.onmouseover = () => {
-              serverItem.style.backgroundColor = '#444';
-            };
-            
-            serverItem.onmouseout = () => {
-              serverItem.style.backgroundColor = '#333';
-            };
-            
-            // Join on click
-            serverItem.onclick = () => {
-              document.body.removeChild(modal);
-              this.joinGame(server.id);
-            };
-            
-            serverListContainer.appendChild(serverItem);
-          });
-        })
-        .catch(error => {
-          serverListContainer.innerHTML = '';
-          const errorMessage = document.createElement('div');
-          errorMessage.textContent = 'Error loading servers. Please try again.';
-          errorMessage.style.padding = '15px';
-          errorMessage.style.color = '#f44336';
-          errorMessage.style.textAlign = 'center';
-          serverListContainer.appendChild(errorMessage);
-          console.error("Error loading servers:", error);
-        });
-    }
+    const manualJoinTitle = document.createElement('h3');
+    manualJoinTitle.textContent = 'Or Join by Server ID';
+    manualJoinTitle.style.margin = '0 0 15px 0';
+    manualJoinSection.appendChild(manualJoinTitle);
     
-    // Bind the refreshServerList function to this NetworkManager instance
-    refreshServerList = refreshServerList.bind(this);
-    
-    // Initial refresh
-    refreshServerList();
-    
-    // --- Direct Join Content ---
-    
-    // Add instructions
-    const instructions = document.createElement('p');
-    instructions.textContent = 'Enter the host ID to join their game:';
-    directJoinContent.appendChild(instructions);
-    
-    // Add ID input field
     const idInput = document.createElement('input');
-    idInput.placeholder = 'Paste Host ID here';
+    idInput.placeholder = 'Enter Server ID...';
     idInput.style.width = '100%';
     idInput.style.padding = '10px';
     idInput.style.margin = '10px 0';
@@ -940,51 +1309,232 @@ export class NetworkManager {
     idInput.style.backgroundColor = '#222';
     idInput.style.color = 'white';
     idInput.style.border = '1px solid #444';
-    directJoinContent.appendChild(idInput);
+    manualJoinSection.appendChild(idInput);
     
-    // Add join button
-    const joinButton = document.createElement('button');
-    joinButton.textContent = 'Join Game';
-    joinButton.style.padding = '10px 20px';
-    joinButton.style.margin = '10px';
-    joinButton.style.cursor = 'pointer';
-    joinButton.style.backgroundColor = '#4CAF50';
-    joinButton.style.color = 'white';
-    joinButton.style.border = 'none';
-    joinButton.style.borderRadius = '3px';
-    joinButton.onclick = () => {
-      const hostId = idInput.value.trim();
-      if (hostId) {
-        this.joinGame(hostId);
+    const manualJoinButton = document.createElement('button');
+    manualJoinButton.textContent = 'Join with ID';
+    manualJoinButton.style.padding = '10px 20px';
+    manualJoinButton.style.margin = '10px 0';
+    manualJoinButton.style.fontSize = '16px';
+    manualJoinButton.style.cursor = 'pointer';
+    manualJoinButton.style.backgroundColor = '#2196F3';
+    manualJoinButton.style.color = 'white';
+    manualJoinButton.style.border = 'none';
+    manualJoinButton.style.borderRadius = '3px';
+    manualJoinButton.onclick = () => {
+      const serverId = idInput.value.trim();
+      if (serverId) {
+        // Close the dialog
         document.body.removeChild(modal);
+        // Join the game with the entered ID
+        this.joinGame(serverId);
       } else {
-        instructions.textContent = 'Please enter a valid host ID!';
-        instructions.style.color = '#FF5252';
+        // Shake the input to indicate error
+        idInput.style.animation = 'shake 0.5s';
+        setTimeout(() => {
+          idInput.style.animation = '';
+        }, 500);
       }
     };
-    directJoinContent.appendChild(joinButton);
+    manualJoinSection.appendChild(manualJoinButton);
     
-    // Add cancel button for both views
+    dialog.appendChild(manualJoinSection);
+    
+    // Add refresh button
+    const refreshButton = document.createElement('button');
+    refreshButton.textContent = 'Refresh List';
+    refreshButton.style.padding = '10px 20px';
+    refreshButton.style.margin = '20px 10px 10px 10px';
+    refreshButton.style.fontSize = '16px';
+    refreshButton.style.cursor = 'pointer';
+    refreshButton.style.backgroundColor = '#4CAF50';
+    refreshButton.style.color = 'white';
+    refreshButton.style.border = 'none';
+    refreshButton.style.borderRadius = '3px';
+    refreshButton.onclick = () => loadServerList();
+    dialog.appendChild(refreshButton);
+    
+    // Add cancel button
     const cancelButton = document.createElement('button');
     cancelButton.textContent = 'Cancel';
     cancelButton.style.padding = '10px 20px';
     cancelButton.style.margin = '10px';
+    cancelButton.style.fontSize = '16px';
     cancelButton.style.cursor = 'pointer';
-    cancelButton.style.backgroundColor = '#9E9E9E';
+    cancelButton.style.backgroundColor = '#f44336';
     cancelButton.style.color = 'white';
     cancelButton.style.border = 'none';
     cancelButton.style.borderRadius = '3px';
     cancelButton.onclick = () => {
       document.body.removeChild(modal);
+      
+      // Return to the main menu if it exists
+      if (this.gameEngine && this.gameEngine.startMenu) {
+        this.gameEngine.startMenu.show();
+      } else if (this.gameEngine && typeof this.gameEngine.showMainMenu === 'function') {
+        this.gameEngine.showMainMenu();
+      }
     };
     dialog.appendChild(cancelButton);
     
     modal.appendChild(dialog);
     document.body.appendChild(modal);
+    
+    // Function to load and display server list
+    const loadServerList = async () => {
+      // Show loading text and hide server list
+      loadingText.style.display = 'block';
+      serverListContainer.style.display = 'none';
+      serverListContainer.innerHTML = ''; // Clear previous servers
+      
+      try {
+        // Fetch servers
+        const servers = await this.getServerList();
+        
+        // Hide loading text
+        loadingText.style.display = 'none';
+        
+        // Show server list container
+        serverListContainer.style.display = 'block';
+        
+        if (servers.length === 0) {
+          // No servers found
+          const noServersMsg = document.createElement('div');
+          noServersMsg.textContent = 'No active servers found';
+          noServersMsg.style.padding = '15px';
+          noServersMsg.style.color = '#999';
+          serverListContainer.appendChild(noServersMsg);
+        } else {
+          // Create table headers
+          const tableHeader = document.createElement('div');
+          tableHeader.style.display = 'grid';
+          tableHeader.style.gridTemplateColumns = '1fr 100px 120px';
+          tableHeader.style.padding = '10px';
+          tableHeader.style.borderBottom = '1px solid #555';
+          tableHeader.style.fontWeight = 'bold';
+          tableHeader.style.backgroundColor = '#222';
+          
+          const nameHeader = document.createElement('div');
+          nameHeader.textContent = 'Server Name';
+          nameHeader.style.textAlign = 'left';
+          tableHeader.appendChild(nameHeader);
+          
+          const playersHeader = document.createElement('div');
+          playersHeader.textContent = 'Players';
+          playersHeader.style.textAlign = 'center';
+          tableHeader.appendChild(playersHeader);
+          
+          const actionHeader = document.createElement('div');
+          actionHeader.textContent = 'Action';
+          actionHeader.style.textAlign = 'center';
+          tableHeader.appendChild(actionHeader);
+          
+          serverListContainer.appendChild(tableHeader);
+          
+          // Add each server to the list
+          servers.forEach(server => {
+            const serverItem = document.createElement('div');
+            serverItem.style.display = 'grid';
+            serverItem.style.gridTemplateColumns = '1fr 100px 120px';
+            serverItem.style.padding = '10px';
+            serverItem.style.borderBottom = '1px solid #444';
+            serverItem.style.transition = 'background-color 0.2s';
+            
+            // Change background color on hover
+            serverItem.addEventListener('mouseover', () => {
+              serverItem.style.backgroundColor = '#3E3E3E';
+            });
+            
+            serverItem.addEventListener('mouseout', () => {
+              serverItem.style.backgroundColor = 'transparent';
+            });
+            
+            // Server name
+            const nameElement = document.createElement('div');
+            nameElement.textContent = server.name || 'Unnamed Server';
+            nameElement.style.textAlign = 'left';
+            nameElement.style.overflow = 'hidden';
+            nameElement.style.textOverflow = 'ellipsis';
+            nameElement.style.whiteSpace = 'nowrap';
+            serverItem.appendChild(nameElement);
+            
+            // Player count
+            const playerCountElement = document.createElement('div');
+            playerCountElement.textContent = `${server.playerCount || 0}/${server.maxPlayers || MAX_PLAYERS}`;
+            
+            // Highlight if server is full
+            if ((server.playerCount || 0) >= (server.maxPlayers || MAX_PLAYERS)) {
+              playerCountElement.style.color = '#ff4444'; // Red for full
+            } else if ((server.playerCount || 0) === (server.maxPlayers || MAX_PLAYERS) - 1) {
+              playerCountElement.style.color = '#ffaa44'; // Orange for almost full
+            } else {
+              playerCountElement.style.color = '#44ff44'; // Green for available
+            }
+            
+            playerCountElement.style.textAlign = 'center';
+            serverItem.appendChild(playerCountElement);
+            
+            // Join button
+            const joinButton = document.createElement('button');
+            
+            // Check if server is full
+            const isFull = (server.playerCount || 0) >= (server.maxPlayers || MAX_PLAYERS);
+            
+            joinButton.textContent = isFull ? 'Full' : 'Join';
+            joinButton.style.padding = '5px 10px';
+            joinButton.style.cursor = isFull ? 'not-allowed' : 'pointer';
+            joinButton.style.backgroundColor = isFull ? '#666' : '#4CAF50';
+            joinButton.style.color = 'white';
+            joinButton.style.border = 'none';
+            joinButton.style.borderRadius = '3px';
+            joinButton.style.fontSize = '14px';
+            joinButton.disabled = isFull;
+            
+            if (!isFull) {
+              joinButton.onclick = () => {
+                // Close the dialog
+                document.body.removeChild(modal);
+                // Join the game
+                this.joinGame(server.id);
+              };
+            }
+            
+            serverItem.appendChild(joinButton);
+            
+            // Add to container
+            serverListContainer.appendChild(serverItem);
+          });
+        }
+        
+      } catch (error) {
+        // Show error
+        loadingText.style.display = 'none';
+        serverListContainer.style.display = 'block';
+        serverListContainer.innerHTML = `<div style="color: #ff4444; padding: 15px;">Error loading servers: ${error.message}</div>`;
+      }
+    };
+    
+    // Load server list immediately
+    loadServerList();
+    
+    // Fix for loadServerList reference in the refresh button
+    refreshButton.onclick = () => loadServerList();
+    
+    // Focus the ID input for manual joining
+    setTimeout(() => {
+      idInput.focus();
+    }, 500);
+    
+    // Add enter key handler for ID input
+    idInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        manualJoinButton.click();
+      }
+    });
   }
   
   /**
-   * Show an error dialog
+   * Show an error dialog with a message
    * @param {string} message - The error message to display
    */
   showErrorDialog(message) {
@@ -1015,13 +1565,14 @@ export class NetworkManager {
     const title = document.createElement('h2');
     title.textContent = 'Error';
     title.style.marginTop = '0';
-    title.style.color = '#FF5252';
+    title.style.color = '#ff4444';
     dialog.appendChild(title);
     
-    // Add error message
-    const errorMessage = document.createElement('p');
-    errorMessage.textContent = message;
-    dialog.appendChild(errorMessage);
+    // Add message
+    const messageElement = document.createElement('p');
+    messageElement.textContent = message;
+    messageElement.style.margin = '20px 0';
+    dialog.appendChild(messageElement);
     
     // Add OK button
     const okButton = document.createElement('button');
@@ -1029,7 +1580,7 @@ export class NetworkManager {
     okButton.style.padding = '10px 20px';
     okButton.style.margin = '10px';
     okButton.style.cursor = 'pointer';
-    okButton.style.backgroundColor = '#2196F3';
+    okButton.style.backgroundColor = '#4CAF50';
     okButton.style.color = 'white';
     okButton.style.border = 'none';
     okButton.style.borderRadius = '3px';
@@ -1038,42 +1589,632 @@ export class NetworkManager {
     };
     dialog.appendChild(okButton);
     
+    // Add to the modal
     modal.appendChild(dialog);
+    
+    // Show the modal
     document.body.appendChild(modal);
+    
+    // Focus the OK button
+    setTimeout(() => {
+      okButton.focus();
+    }, 100);
   }
   
   /**
-   * Unregister this server from the server list
-   * @param {string} hostId - The host ID to unregister
+   * Remove this server from the public list
    */
-  unregisterServer(hostId) {
-    console.log(`Unregistering server ${hostId} from server list`);
+  async removeServerFromList() {
+    if (!this.isServerRegistered || !this.hostId) return;
     
-    // Send a request to the server to remove this host from the server list
     try {
-      fetch('/api/servers/remove', {
+      const response = await fetch(`${this.serverListApiUrl}/remove`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          hostId: hostId
+          id: this.hostId,
+          uniqueId: this.serverUniqueId
         })
-      })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`Failed to unregister server: ${response.statusText}`);
-        }
-        return response.json();
-      })
-      .then(data => {
-        console.log("Server unregistered successfully:", data);
-      })
-      .catch(err => {
-        console.error("Failed to unregister server:", err);
       });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to remove server: ${response.statusText}`);
+      }
+      
+      console.log("Removed server from public list");
+      this.isServerRegistered = false;
+      
+      // Clear update interval
+      if (this.serverListUpdateInterval) {
+        clearInterval(this.serverListUpdateInterval);
+        this.serverListUpdateInterval = null;
+      }
     } catch (err) {
-      console.error("Error unregistering server:", err);
+      console.error("Error removing server from list:", err);
     }
   }
-} 
+  
+  /**
+   * Get the list of available servers
+   * @returns {Promise<Array>} Promise resolving to array of server objects
+   */
+  async getServerList() {
+    try {
+      console.log("Fetching server list from:", `${this.serverListApiUrl}`);
+      
+      const response = await fetch(`${this.serverListApiUrl}`);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Server list fetch failed with status:", response.status, errorText);
+        throw new Error(`Failed to get server list: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+      
+      const servers = await response.json();
+      console.log("Received server list:", servers);
+      
+      return servers;
+    } catch (err) {
+      console.error("Error getting server list:", err);
+      return [];
+    }
+  }
+  
+  /**
+   * Generate a unique identifier for this client
+   * @returns {string} A unique ID
+   */
+  generateUniqueId() {
+    // Create a random string for the session
+    return 'client_' + Math.random().toString(36).substring(2, 15) + 
+           Math.random().toString(36).substring(2, 15);
+  }
+  
+  /**
+   * Set the name for this server
+   * @param {string} name - The server name
+   */
+  setServerName(name) {
+    this.serverName = name;
+    
+    // If we're hosting, update the server info
+    if (this.isServerRegistered && this.hostId) {
+      this.updateServerInfo();
+    }
+  }
+  
+  /**
+   * Update game status (pause, game over, etc.)
+   * @param {Object} status - Game status information
+   */
+  updateGameStatus(status) {
+    if (!this.gameEngine) return;
+    
+    // Only clients should process these updates
+    if (this.isHost) return;
+    
+    console.log('Received game status update:', status);
+    
+    // Handle game over state
+    if (status.isGameOver !== undefined && status.isGameOver !== this.gameEngine.isGameOver) {
+      if (status.isGameOver) {
+        // Show multiplayer game over screen with "waiting for host" message
+        this.showMultiplayerGameOverScreen(status.allPlayersDead);
+      } else if (this.gameEngine.isGameOver) {
+        // Host has restarted, close game over screen
+        const gameOverMenu = document.getElementById('game-over-menu');
+        if (gameOverMenu) {
+          gameOverMenu.remove();
+        }
+        
+        // Reset game state
+        this.gameEngine.isGameOver = false;
+      }
+    }
+    
+    // Handle pause state
+    if (status.isPaused !== undefined && status.isPaused !== this.gameEngine.isPaused) {
+      if (status.isPaused) {
+        // Host paused the game
+        console.log("Host paused the game, updating client pause state");
+        
+        // If we already have a pause menu, don't create another one
+        if (!document.getElementById('pause-menu')) {
+          this.gameEngine.pauseGame();
+        }
+      } else {
+        // Host resumed the game
+        console.log("Host resumed the game, updating client pause state");
+        
+        // If we have a pause menu, remove it
+        const pauseMenu = document.getElementById('pause-menu');
+        if (pauseMenu) {
+          pauseMenu.remove();
+        }
+        
+        // Resume the game engine
+        this.gameEngine.isPaused = false;
+        this.gameEngine.resumeGame();
+      }
+    }
+  }
+  
+  /**
+   * Show multiplayer game over screen
+   * @param {boolean} allPlayersDead - Whether all players are dead
+   */
+  showMultiplayerGameOverScreen(allPlayersDead) {
+    if (!this.gameEngine) return;
+    
+    // Set game over flag
+    this.gameEngine.isGameOver = true;
+    
+    // Create game over container
+    const gameOverContainer = document.createElement('div');
+    gameOverContainer.id = 'game-over-menu';
+    gameOverContainer.className = 'game-over-menu';
+    gameOverContainer.style.position = 'absolute';
+    gameOverContainer.style.top = '0';
+    gameOverContainer.style.left = '0';
+    gameOverContainer.style.width = '100%';
+    gameOverContainer.style.height = '100%';
+    gameOverContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+    gameOverContainer.style.display = 'flex';
+    gameOverContainer.style.flexDirection = 'column';
+    gameOverContainer.style.alignItems = 'center';
+    gameOverContainer.style.justifyContent = 'center';
+    gameOverContainer.style.zIndex = '2000';
+    gameOverContainer.style.color = '#fff';
+    gameOverContainer.style.fontFamily = 'monospace, "Press Start 2P", Courier, fantasy';
+    
+    // Game over title
+    const title = document.createElement('h1');
+    title.textContent = allPlayersDead ? 'ALL PLAYERS DEAD' : 'GAME OVER';
+    title.style.color = '#ff3333';
+    title.style.fontSize = '48px';
+    title.style.textShadow = '0 0 10px #ff3333, 0 0 20px #ff3333';
+    title.style.marginBottom = '30px';
+    title.style.fontFamily = 'Impact, fantasy';
+    title.style.letterSpacing = '2px';
+    
+    // Score display
+    let scoreText = "Score: 0";
+    if (this.gameEngine.controls && this.gameEngine.controls.score !== undefined) {
+      scoreText = `Score: ${this.gameEngine.controls.score}`;
+    }
+    
+    const scoreDisplay = document.createElement('h2');
+    scoreDisplay.textContent = scoreText;
+    scoreDisplay.style.color = '#ffffff';
+    scoreDisplay.style.fontSize = '24px';
+    scoreDisplay.style.marginBottom = '20px';
+    
+    // Status message
+    const statusMessage = document.createElement('p');
+    statusMessage.textContent = allPlayersDead 
+      ? 'Waiting for the host to restart the game...'
+      : 'Your team is still fighting! Wait for the round to end or return to lobby.';
+    statusMessage.style.color = '#fcba03';
+    statusMessage.style.fontSize = '18px';
+    statusMessage.style.marginBottom = '40px';
+    statusMessage.style.maxWidth = '80%';
+    statusMessage.style.textAlign = 'center';
+    
+    // Buttons container
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.flexDirection = 'column';
+    buttonContainer.style.gap = '15px';
+    buttonContainer.style.width = '300px';
+    
+    // Create main menu button
+    const menuButton = document.createElement('button');
+    menuButton.textContent = 'RETURN TO MAIN MENU';
+    menuButton.style.padding = '15px 20px';
+    menuButton.style.fontSize = '18px';
+    menuButton.style.backgroundColor = '#e74c3c';
+    menuButton.style.color = 'white';
+    menuButton.style.border = 'none';
+    menuButton.style.borderRadius = '5px';
+    menuButton.style.cursor = 'pointer';
+    menuButton.style.fontFamily = 'monospace, Courier';
+    menuButton.style.fontWeight = 'bold';
+    menuButton.style.transition = 'all 0.2s ease';
+    
+    // Add warning text
+    const warningText = document.createElement('p');
+    warningText.textContent = 'Warning: This will disconnect you from the multiplayer session.';
+    warningText.style.color = '#ff6b6b';
+    warningText.style.fontSize = '14px';
+    warningText.style.marginTop = '10px';
+    
+    // Hover effects
+    menuButton.addEventListener('mouseover', () => {
+      menuButton.style.transform = 'scale(1.05)';
+      menuButton.style.boxShadow = '0 0 10px #e74c3c';
+    });
+    
+    menuButton.addEventListener('mouseout', () => {
+      menuButton.style.transform = 'scale(1)';
+      menuButton.style.boxShadow = 'none';
+    });
+    
+    // Return to main menu when clicked
+    menuButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      
+      // Remove game over screen
+      document.body.removeChild(gameOverContainer);
+      
+      // Properly disconnect from multiplayer
+      this.disconnect();
+      
+      // Use the engine's reset method
+      this.gameEngine.resetGameState();
+      
+      // Show the start menu
+      if (this.gameEngine.startMenu) {
+        this.gameEngine.startMenu.show();
+      } else {
+        // Fallback to the custom main menu
+        this.gameEngine.showMainMenu();
+      }
+    });
+    
+    // Add elements to game over container
+    gameOverContainer.appendChild(title);
+    gameOverContainer.appendChild(scoreDisplay);
+    gameOverContainer.appendChild(statusMessage);
+    
+    // Add buttons to container
+    buttonContainer.appendChild(menuButton);
+    buttonContainer.appendChild(warningText);
+    
+    // Add button container to main container
+    gameOverContainer.appendChild(buttonContainer);
+    
+    // Add to the document
+    document.body.appendChild(gameOverContainer);
+  }
+  
+  /**
+   * Host control: Pause game for all players
+   */
+  hostPauseGame() {
+    if (!this.isHost || !this.network) return;
+    
+    this.network.hostPauseGame();
+  }
+  
+  /**
+   * Host control: Resume game for all players
+   */
+  hostResumeGame() {
+    if (!this.isHost || !this.network) return;
+    
+    this.network.hostResumeGame();
+  }
+  
+  /**
+   * Host control: Restart game for all players
+   */
+  hostRestartGame() {
+    if (!this.isHost || !this.network) return;
+    
+    this.network.hostRestartGame();
+  }
+  
+  /**
+   * Host respawn logic: Check if any dead players should respawn at round end
+   */
+  checkPlayersForRespawn() {
+    if (!this.isHost || !this.network) return;
+    
+    // If no round active and there are dead players but at least one player alive,
+    // respawn the dead players
+    const deadPlayers = [];
+    let anyAlive = !this.gameEngine.controls.isDead; // Check if host is alive
+    
+    // Check all remote players
+    this.remotePlayers.forEach((player, playerId) => {
+      if (player.isDead) {
+        deadPlayers.push(playerId);
+      } else {
+        anyAlive = true;
+      }
+    });
+    
+    // If at least one player is alive, respawn all dead players
+    if (anyAlive && deadPlayers.length > 0) {
+      console.log(`Host respawning ${deadPlayers.length} players at round end`);
+      
+      // Respawn each dead player
+      deadPlayers.forEach(playerId => {
+        this.network.hostRespawnPlayer(playerId);
+      });
+      
+      // If host is dead, respawn locally
+      if (this.gameEngine.controls.isDead) {
+        this.respawnLocalPlayer();
+      }
+    }
+  }
+  
+  /**
+   * Respawn the local player (host only)
+   */
+  respawnLocalPlayer() {
+    if (!this.gameEngine || !this.gameEngine.controls) return;
+    
+    console.log('Respawning local player');
+    
+    // Reset player state
+    this.gameEngine.controls.resetHealth();
+    this.gameEngine.controls.isDead = false;
+    
+    // Re-lock pointer
+    document.body.requestPointerLock();
+    
+    // Hide game over screen if visible
+    const gameOverMenu = document.getElementById('game-over-menu');
+    if (gameOverMenu) {
+      gameOverMenu.remove();
+    }
+    
+    // Unpause game if it was paused
+    if (this.gameEngine.isPaused) {
+      this.gameEngine.resumeGame();
+    }
+  }
+  
+  /**
+   * Show a dialog for joining a game with a manual host ID
+   */
+  showJoinDialog() {
+    console.log("Showing join dialog");
+    
+    // Create modal backdrop
+    const modal = document.createElement('div');
+    modal.style.position = 'fixed';
+    modal.style.left = '0';
+    modal.style.top = '0';
+    modal.style.width = '100%';
+    modal.style.height = '100%';
+    modal.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    modal.style.display = 'flex';
+    modal.style.justifyContent = 'center';
+    modal.style.alignItems = 'center';
+    modal.style.zIndex = '2000';
+    
+    // Create dialog content
+    const dialog = document.createElement('div');
+    dialog.style.backgroundColor = '#333';
+    dialog.style.color = 'white';
+    dialog.style.padding = '20px';
+    dialog.style.borderRadius = '5px';
+    dialog.style.width = '400px';
+    dialog.style.textAlign = 'center';
+    dialog.style.fontFamily = 'Arial, sans-serif';
+    
+    // Add title
+    const title = document.createElement('h2');
+    title.textContent = 'Join a Game';
+    title.style.marginTop = '0';
+    title.style.color = '#4CAF50';
+    dialog.appendChild(title);
+    
+    // Add description
+    const description = document.createElement('p');
+    description.textContent = 'Enter the server ID to join:';
+    description.style.marginBottom = '20px';
+    dialog.appendChild(description);
+    
+    // Add input field
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Server ID';
+    input.style.width = '100%';
+    input.style.padding = '10px';
+    input.style.margin = '10px 0';
+    input.style.fontSize = '16px';
+    input.style.textAlign = 'center';
+    input.style.backgroundColor = '#222';
+    input.style.color = 'white';
+    input.style.border = '1px solid #444';
+    dialog.appendChild(input);
+    
+    // Add buttons container
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.justifyContent = 'space-between';
+    buttonContainer.style.marginTop = '20px';
+    
+    // Add join button
+    const joinButton = document.createElement('button');
+    joinButton.textContent = 'Join Game';
+    joinButton.style.padding = '10px 20px';
+    joinButton.style.fontSize = '16px';
+    joinButton.style.cursor = 'pointer';
+    joinButton.style.backgroundColor = '#4CAF50';
+    joinButton.style.color = 'white';
+    joinButton.style.border = 'none';
+    joinButton.style.borderRadius = '3px';
+    joinButton.onclick = () => {
+      const serverId = input.value.trim();
+      if (serverId) {
+        // Close the dialog
+        document.body.removeChild(modal);
+        // Join the game
+        this.joinGame(serverId);
+      } else {
+        // Shake the input to indicate error
+        input.style.border = '2px solid #ff3333';
+        setTimeout(() => {
+          input.style.border = '1px solid #444';
+        }, 500);
+      }
+    };
+    buttonContainer.appendChild(joinButton);
+    
+    // Add browse button
+    const browseButton = document.createElement('button');
+    browseButton.textContent = 'Browse Servers';
+    browseButton.style.padding = '10px 20px';
+    browseButton.style.fontSize = '16px';
+    browseButton.style.cursor = 'pointer';
+    browseButton.style.backgroundColor = '#2196F3';
+    browseButton.style.color = 'white';
+    browseButton.style.border = 'none';
+    browseButton.style.borderRadius = '3px';
+    browseButton.onclick = () => {
+      // Close the dialog
+      document.body.removeChild(modal);
+      // Show server list
+      this.showServerListDialog();
+    };
+    buttonContainer.appendChild(browseButton);
+    
+    // Add cancel button
+    const cancelButton = document.createElement('button');
+    cancelButton.textContent = 'Cancel';
+    cancelButton.style.padding = '10px 20px';
+    cancelButton.style.fontSize = '16px';
+    cancelButton.style.cursor = 'pointer';
+    cancelButton.style.backgroundColor = '#777';
+    cancelButton.style.color = 'white';
+    cancelButton.style.border = 'none';
+    cancelButton.style.borderRadius = '3px';
+    cancelButton.onclick = () => {
+      // Close the dialog
+      document.body.removeChild(modal);
+      
+      // Return to the main menu if it exists
+      if (this.gameEngine && this.gameEngine.startMenu) {
+        this.gameEngine.startMenu.show();
+      } else if (this.gameEngine && typeof this.gameEngine.showMainMenu === 'function') {
+        this.gameEngine.showMainMenu();
+      }
+    };
+    buttonContainer.appendChild(cancelButton);
+    
+    dialog.appendChild(buttonContainer);
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+    
+    // Focus the input field
+    setTimeout(() => {
+      input.focus();
+    }, 100);
+    
+    // Add enter key handler
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        joinButton.click();
+      }
+    });
+  }
+  
+  /**
+   * Create a host ID copy button for the pause menu
+   * @returns {HTMLElement} The host ID copy button
+   */
+  createHostIdCopyButton() {
+    if (!this.isHost || !this.hostId) {
+      return null;
+    }
+    
+    // Create container for the host ID section
+    const container = document.createElement('div');
+    container.style.display = 'flex';
+    container.style.flexDirection = 'column';
+    container.style.alignItems = 'center';
+    container.style.marginBottom = '20px';
+    container.style.width = '100%';
+    
+    // Create label
+    const label = document.createElement('div');
+    label.textContent = 'Server ID (Click to Copy):';
+    label.style.fontSize = '14px';
+    label.style.color = '#aaaaaa';
+    label.style.marginBottom = '5px';
+    container.appendChild(label);
+    
+    // Create ID display
+    const idDisplay = document.createElement('div');
+    idDisplay.style.padding = '10px 15px';
+    idDisplay.style.backgroundColor = '#222222';
+    idDisplay.style.color = '#ffffff';
+    idDisplay.style.fontSize = '16px';
+    idDisplay.style.fontFamily = 'monospace';
+    idDisplay.style.borderRadius = '3px';
+    idDisplay.style.cursor = 'pointer';
+    idDisplay.style.marginBottom = '10px';
+    idDisplay.style.width = '100%';
+    idDisplay.style.textAlign = 'center';
+    idDisplay.style.overflow = 'hidden';
+    idDisplay.style.textOverflow = 'ellipsis';
+    idDisplay.textContent = this.hostId;
+    container.appendChild(idDisplay);
+    
+    // Create copy feedback element
+    const copyFeedback = document.createElement('div');
+    copyFeedback.style.fontSize = '12px';
+    copyFeedback.style.color = '#4CAF50';
+    copyFeedback.style.marginTop = '5px';
+    copyFeedback.style.opacity = '0';
+    copyFeedback.style.transition = 'opacity 0.3s ease';
+    copyFeedback.textContent = 'Copied to clipboard!';
+    container.appendChild(copyFeedback);
+    
+    // Add click-to-copy functionality
+    idDisplay.addEventListener('click', () => {
+      // Copy to clipboard
+      navigator.clipboard.writeText(this.hostId).then(() => {
+        // Show feedback
+        copyFeedback.style.opacity = '1';
+        setTimeout(() => {
+          copyFeedback.style.opacity = '0';
+        }, 2000);
+      }).catch(err => {
+        console.error('Failed to copy to clipboard:', err);
+        // Fallback for browsers that don't support clipboard API
+        this.fallbackCopy(idDisplay, this.hostId, copyFeedback);
+      });
+    });
+    
+    return container;
+  }
+  
+  /**
+   * Fallback copy method for browsers that don't support clipboard API
+   * @param {HTMLElement} element - The element containing the text
+   * @param {string} text - The text to copy
+   * @param {HTMLElement} feedback - The feedback element
+   */
+  fallbackCopy(element, text, feedback) {
+    try {
+      // Create a temporary input element
+      const tempInput = document.createElement('input');
+      tempInput.value = text;
+      tempInput.style.position = 'absolute';
+      tempInput.style.left = '-9999px';
+      document.body.appendChild(tempInput);
+      
+      // Select and copy the text
+      tempInput.select();
+      document.execCommand('copy');
+      
+      // Remove the temporary element
+      document.body.removeChild(tempInput);
+      
+      // Show feedback
+      feedback.style.opacity = '1';
+      setTimeout(() => {
+        feedback.style.opacity = '0';
+      }, 2000);
+    } catch (err) {
+      console.error('Fallback copy failed:', err);
+    }
+  }
+}

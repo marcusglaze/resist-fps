@@ -151,6 +151,14 @@ export class Engine {
       this.networkManager = new NetworkManager(this);
       this.networkManager.init();
       
+      // Add window close handler to ensure clean disconnection
+      window.addEventListener('beforeunload', () => {
+        console.log("Window closing, ensuring clean network disconnection");
+        if (this.networkManager) {
+          this.networkManager.disconnect();
+        }
+      });
+      
       console.log("Engine init completed successfully");
     } catch (error) {
       console.error("Error during engine initialization:", error);
@@ -412,9 +420,15 @@ export class Engine {
       }, 5000);
     }
     
-    // Lock the pointer if we're not on mobile and not in network hosting mode setup
+    // Lock the pointer if we're not on mobile
     if (!this.isMobileDevice()) {
-      this.lockPointer();
+      // Add a small delay to ensure any dialogs have been processed
+      setTimeout(() => {
+        if (this.isGameStarted && !this.isGameOver && !this.isPaused) {
+          console.log("Locking pointer after game start");
+          this.lockPointer();
+        }
+      }, 100);
     }
     
     // Show mobile controls if needed
@@ -497,10 +511,557 @@ export class Engine {
       this.scene.room.enemyManager.setPaused(true);
     }
     
-    // Show game over screen
-    this.showGameOverScreen();
+    // Check if we're in multiplayer mode
+    if (this.networkManager && this.networkManager.isMultiplayer) {
+      this.handleMultiplayerGameOver();
+    } else {
+      // Single player - show regular game over screen
+      this.showGameOverScreen();
+    }
   }
   
+  /**
+   * Handle multiplayer game over scenarios
+   */
+  handleMultiplayerGameOver() {
+    if (!this.networkManager) return;
+    
+    // Disable any existing spectator mode if active
+    if (this.isSpectatorMode) {
+      this.disableSpectatorMode();
+    }
+    
+    // If we're the host, check if all players are dead
+    if (this.networkManager.isHost) {
+      const allPlayersDead = this.checkAllPlayersDead();
+      
+      // If all players are dead, show game over with host controls
+      if (allPlayersDead) {
+        console.log("Host: All players are dead, showing game over screen");
+        this.showMultiplayerHostGameOverScreen();
+      } else {
+        // Not all players dead - show spectate screen
+        console.log("Host: Not all players dead, showing spectate screen");
+        this.showMultiplayerSpectateScreen();
+      }
+    } else {
+      // For clients, check if all players are dead according to latest game state
+      const gameState = this.networkManager.network.getGameState();
+      const allPlayersDead = gameState.gameStatus?.allPlayersDead || false;
+      
+      if (allPlayersDead) {
+        // All players are dead, show game over screen
+        console.log("Client: All players dead, waiting for host to restart");
+        this.networkManager.showMultiplayerGameOverScreen(true);
+      } else {
+        // Not all players dead - show spectate screen
+        console.log("Client: Not all players dead, showing spectate screen");
+        this.showMultiplayerSpectateScreen();
+      }
+    }
+  }
+  
+  /**
+   * Check if all players in the game are dead
+   * @returns {boolean} True if all players are dead
+   */
+  checkAllPlayersDead() {
+    if (!this.networkManager) return true;
+    
+    // The local player is dead (since endGame was called)
+    let anyPlayersAlive = false;
+    
+    // Check remote players
+    this.networkManager.remotePlayers.forEach(player => {
+      if (!player.isDead) {
+        anyPlayersAlive = true;
+      }
+    });
+    
+    return !anyPlayersAlive;
+  }
+  
+  /**
+   * Show the multiplayer host game over screen with host controls
+   */
+  showMultiplayerHostGameOverScreen() {
+    // Create game over container
+    const gameOverContainer = document.createElement('div');
+    gameOverContainer.id = 'game-over-menu';
+    gameOverContainer.className = 'game-over-menu';
+    gameOverContainer.style.position = 'absolute';
+    gameOverContainer.style.top = '0';
+    gameOverContainer.style.left = '0';
+    gameOverContainer.style.width = '100%';
+    gameOverContainer.style.height = '100%';
+    gameOverContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+    gameOverContainer.style.display = 'flex';
+    gameOverContainer.style.flexDirection = 'column';
+    gameOverContainer.style.alignItems = 'center';
+    gameOverContainer.style.justifyContent = 'center';
+    gameOverContainer.style.zIndex = '2000';
+    gameOverContainer.style.color = '#fff';
+    gameOverContainer.style.fontFamily = 'monospace, "Press Start 2P", Courier, fantasy';
+    gameOverContainer.style.touchAction = 'auto'; // Allow normal touch actions in menu
+    
+    // Game over title
+    const title = document.createElement('h1');
+    title.textContent = 'ALL PLAYERS DEAD';
+    title.style.color = '#ff3333';
+    title.style.fontSize = '48px';
+    title.style.textShadow = '0 0 10px #ff3333, 0 0 20px #ff3333';
+    title.style.marginBottom = '30px';
+    title.style.fontFamily = 'Impact, fantasy';
+    title.style.letterSpacing = '2px';
+    
+    // Host message
+    const hostMessage = document.createElement('h2');
+    hostMessage.textContent = 'You are the host';
+    hostMessage.style.color = '#fcba03';
+    hostMessage.style.fontSize = '24px';
+    hostMessage.style.marginBottom = '40px';
+    
+    // Buttons container
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.flexDirection = 'column';
+    buttonContainer.style.gap = '15px';
+    buttonContainer.style.width = '300px';
+    
+    // Create restart button
+    const restartButton = document.createElement('button');
+    restartButton.textContent = 'RESTART GAME';
+    restartButton.style.padding = '15px 20px';
+    restartButton.style.fontSize = '18px';
+    restartButton.style.backgroundColor = '#ff3333';
+    restartButton.style.color = 'white';
+    restartButton.style.border = 'none';
+    restartButton.style.borderRadius = '5px';
+    restartButton.style.cursor = 'pointer';
+    restartButton.style.fontFamily = 'monospace, Courier';
+    restartButton.style.fontWeight = 'bold';
+    restartButton.style.transition = 'all 0.2s ease';
+    
+    // Hover effects
+    restartButton.addEventListener('mouseover', () => {
+      restartButton.style.transform = 'scale(1.05)';
+      restartButton.style.boxShadow = '0 0 10px #ff3333';
+    });
+    
+    restartButton.addEventListener('mouseout', () => {
+      restartButton.style.transform = 'scale(1)';
+      restartButton.style.boxShadow = 'none';
+    });
+    
+    // Restart game when clicked
+    restartButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      
+      // Remove game over screen
+      document.body.removeChild(gameOverContainer);
+      
+      // Tell all connected players to restart
+      if (this.networkManager) {
+        this.networkManager.hostRestartGame();
+      }
+      
+      // Reset game state properly
+      this.restartGame();
+    });
+    
+    // Create main menu button
+    const menuButton = document.createElement('button');
+    menuButton.textContent = 'END SESSION & RETURN TO MENU';
+    menuButton.style.padding = '15px 20px';
+    menuButton.style.fontSize = '18px';
+    menuButton.style.backgroundColor = '#e74c3c';
+    menuButton.style.color = 'white';
+    menuButton.style.border = 'none';
+    menuButton.style.borderRadius = '5px';
+    menuButton.style.cursor = 'pointer';
+    menuButton.style.fontFamily = 'monospace, Courier';
+    menuButton.style.fontWeight = 'bold';
+    menuButton.style.transition = 'all 0.2s ease';
+    
+    // Hover effects
+    menuButton.addEventListener('mouseover', () => {
+      menuButton.style.transform = 'scale(1.05)';
+      menuButton.style.boxShadow = '0 0 10px #e74c3c';
+    });
+    
+    menuButton.addEventListener('mouseout', () => {
+      menuButton.style.transform = 'scale(1)';
+      menuButton.style.boxShadow = 'none';
+    });
+    
+    // Return to main menu when clicked
+    menuButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      
+      // Remove game over screen
+      document.body.removeChild(gameOverContainer);
+      
+      // Disconnect all players
+      if (this.networkManager) {
+        this.networkManager.disconnect();
+      }
+      
+      // Use our comprehensive reset method
+      this.resetGameState();
+      
+      // Show the start menu
+      if (this.startMenu) {
+        this.startMenu.show();
+      } else {
+        // Fallback to the custom main menu
+        this.showMainMenu();
+      }
+    });
+    
+    // Add buttons to container
+    buttonContainer.appendChild(restartButton);
+    buttonContainer.appendChild(menuButton);
+    
+    // Add elements to game over container
+    gameOverContainer.appendChild(title);
+    gameOverContainer.appendChild(hostMessage);
+    gameOverContainer.appendChild(buttonContainer);
+    
+    // Add to the document
+    document.body.appendChild(gameOverContainer);
+  }
+  
+  /**
+   * Show the spectate screen when the host is dead but other players are still alive
+   */
+  showMultiplayerSpectateScreen() {
+    // Create spectate container - use a smaller overlay instead of full screen
+    const spectateContainer = document.createElement('div');
+    spectateContainer.id = 'spectate-overlay'; // Use a different ID
+    spectateContainer.className = 'spectate-overlay';
+    spectateContainer.style.position = 'absolute';
+    spectateContainer.style.top = '0';
+    spectateContainer.style.left = '0';
+    spectateContainer.style.width = '100%';
+    spectateContainer.style.pointerEvents = 'none'; // Allow clicking through
+    spectateContainer.style.display = 'flex';
+    spectateContainer.style.flexDirection = 'column';
+    spectateContainer.style.alignItems = 'center';
+    spectateContainer.style.zIndex = '1000'; // Lower than game over menu
+    spectateContainer.style.color = '#fff';
+    spectateContainer.style.fontFamily = 'monospace, "Press Start 2P", Courier, fantasy';
+    
+    // Create header container for spectator mode info
+    const headerContainer = document.createElement('div');
+    headerContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    headerContainer.style.width = '100%';
+    headerContainer.style.padding = '10px 0';
+    headerContainer.style.textAlign = 'center';
+    headerContainer.style.pointerEvents = 'auto'; // Make this clickable
+    
+    // Title
+    const title = document.createElement('h2');
+    title.textContent = 'SPECTATOR MODE';
+    title.style.color = '#ff3333';
+    title.style.fontSize = '24px';
+    title.style.margin = '0';
+    title.style.fontFamily = 'Impact, fantasy';
+    title.style.letterSpacing = '2px';
+    
+    // Message
+    const message = document.createElement('p');
+    message.textContent = 'You died. Watching surviving player...';
+    message.style.color = '#ffffff';
+    message.style.fontSize = '14px';
+    message.style.margin = '5px 0 0 0';
+    
+    // Add spectator info to header
+    headerContainer.appendChild(title);
+    headerContainer.appendChild(message);
+    
+    // Create footer container for buttons
+    const footerContainer = document.createElement('div');
+    footerContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    footerContainer.style.width = '100%';
+    footerContainer.style.padding = '10px 0';
+    footerContainer.style.marginTop = 'auto'; // Push to bottom
+    footerContainer.style.textAlign = 'center';
+    footerContainer.style.pointerEvents = 'auto'; // Make this clickable
+    
+    // Host message
+    const hostMessage = document.createElement('p');
+    hostMessage.textContent = 'You will respawn when the round ends if any player survives.';
+    hostMessage.style.color = '#ffffff';
+    hostMessage.style.fontSize = '14px';
+    hostMessage.style.margin = '0 0 10px 0';
+    
+    // End session button
+    const endSessionButton = document.createElement('button');
+    endSessionButton.textContent = 'LEAVE SESSION';
+    endSessionButton.style.padding = '8px 15px';
+    endSessionButton.style.fontSize = '14px';
+    endSessionButton.style.backgroundColor = '#e74c3c';
+    endSessionButton.style.color = 'white';
+    endSessionButton.style.border = 'none';
+    endSessionButton.style.borderRadius = '3px';
+    endSessionButton.style.cursor = 'pointer';
+    endSessionButton.style.fontFamily = 'monospace, Courier';
+    endSessionButton.style.fontWeight = 'bold';
+    
+    // Handle click for end session button
+    endSessionButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      
+      // Properly disconnect from multiplayer
+      if (this.networkManager) {
+        this.networkManager.disconnect();
+      }
+      
+      // Use our comprehensive reset method
+      this.resetGameState();
+      
+      // Show the start menu
+      if (this.startMenu) {
+        this.startMenu.show();
+      } else {
+        // Fallback to the custom main menu
+        this.showMainMenu();
+      }
+      
+      // Remove spectate overlay
+      document.body.removeChild(spectateContainer);
+    });
+    
+    // Add elements to footer
+    footerContainer.appendChild(hostMessage);
+    footerContainer.appendChild(endSessionButton);
+    
+    // Add header and footer to container
+    spectateContainer.appendChild(headerContainer);
+    spectateContainer.appendChild(footerContainer);
+    
+    // Add to the document
+    document.body.appendChild(spectateContainer);
+    
+    // Enable spectator camera to follow surviving players
+    this.enableSpectatorMode();
+  }
+  
+  /**
+   * Enable spectator mode to follow surviving players
+   */
+  enableSpectatorMode() {
+    if (!this.networkManager) return;
+    
+    // Flag that we're in spectator mode
+    this.isSpectatorMode = true;
+    
+    // Find a surviving player to spectate
+    let targetPlayerId = null;
+    let targetPlayer = null;
+    
+    this.networkManager.remotePlayers.forEach((player, id) => {
+      if (!player.isDead) {
+        targetPlayerId = id;
+        targetPlayer = player;
+      }
+    });
+    
+    if (!targetPlayerId || !targetPlayer) {
+      console.warn("No surviving players to spectate");
+      return;
+    }
+    
+    console.log(`Spectating player: ${targetPlayerId}`);
+    
+    // Hide local player hands/weapons
+    if (this.controls && this.controls.modelContainer) {
+      this.controls.modelContainer.visible = false;
+    }
+    
+    // Hide UI elements that shouldn't be visible in spectator mode
+    this.hidePlayerUI();
+    
+    // Set up an interval to update the spectator camera position
+    this.spectatorInterval = setInterval(() => {
+      // Check if we should still be in spectator mode
+      if (!this.isSpectatorMode || !this.networkManager) {
+        this.disableSpectatorMode();
+        return;
+      }
+      
+      // Update spectated player if needed (e.g. if current one died)
+      if (targetPlayer.isDead) {
+        // Find a new player to spectate
+        let foundNewTarget = false;
+        this.networkManager.remotePlayers.forEach((player, id) => {
+          if (!player.isDead) {
+            targetPlayerId = id;
+            targetPlayer = player;
+            foundNewTarget = true;
+            console.log(`Switching spectator view to player: ${targetPlayerId}`);
+          }
+        });
+        
+        if (!foundNewTarget) {
+          // No more players to spectate, all dead
+          console.log("All players are now dead");
+          this.disableSpectatorMode();
+          return;
+        }
+      }
+      
+      // Update camera position to match the spectated player's position
+      if (this.controls && this.controls.camera && targetPlayer.position) {
+        // Position camera at player position
+        this.controls.camera.position.set(
+          targetPlayer.position.x,
+          targetPlayer.position.y,
+          targetPlayer.position.z
+        );
+        
+        // Set camera rotation to match player's looking direction
+        if (targetPlayer.position.rotationY !== undefined) {
+          this.controls.camera.rotation.y = targetPlayer.position.rotationY;
+        }
+      }
+    }, 50); // Update 20 times per second
+  }
+  
+  /**
+   * Disable spectator mode
+   */
+  disableSpectatorMode() {
+    // Clear the spectator interval
+    if (this.spectatorInterval) {
+      clearInterval(this.spectatorInterval);
+      this.spectatorInterval = null;
+    }
+    
+    // Reset the flag
+    this.isSpectatorMode = false;
+    
+    // Show local player hands/weapons again
+    if (this.controls && this.controls.modelContainer) {
+      this.controls.modelContainer.visible = true;
+    }
+    
+    // Show UI elements that were hidden
+    this.showPlayerUI();
+    
+    // Remove the spectator overlay if it exists
+    const spectateOverlay = document.getElementById('spectate-overlay');
+    if (spectateOverlay) {
+      document.body.removeChild(spectateOverlay);
+    }
+  }
+  
+  /**
+   * Hide UI elements that shouldn't be visible in spectator mode
+   */
+  hidePlayerUI() {
+    // Hide crosshair
+    const crosshair = document.querySelector('.crosshair');
+    if (crosshair) crosshair.style.display = 'none';
+    
+    // Hide ammo display
+    const ammoDisplay = document.querySelector('.ammo-display');
+    if (ammoDisplay) ammoDisplay.style.display = 'none';
+    
+    // Hide health display
+    const healthDisplay = document.querySelector('.health-display');
+    if (healthDisplay) healthDisplay.style.display = 'none';
+    
+    // You could hide other UI elements as needed
+  }
+  
+  /**
+   * Show UI elements that were hidden in spectator mode
+   */
+  showPlayerUI() {
+    // Show crosshair
+    const crosshair = document.querySelector('.crosshair');
+    if (crosshair) crosshair.style.display = '';
+    
+    // Show ammo display
+    const ammoDisplay = document.querySelector('.ammo-display');
+    if (ammoDisplay) ammoDisplay.style.display = '';
+    
+    // Show health display
+    const healthDisplay = document.querySelector('.health-display');
+    if (healthDisplay) healthDisplay.style.display = '';
+    
+    // Restore other UI elements as needed
+  }
+  
+  /**
+   * Check for end-of-round conditions in multiplayer
+   */
+  checkMultiplayerRoundEnd() {
+    if (!this.networkManager || !this.networkManager.isHost) return;
+    
+    // Check if round is no longer active and there are dead players
+    if (this.scene.room && 
+        this.scene.room.enemyManager && 
+        !this.scene.room.enemyManager.roundActive) {
+      // Round has ended, check if we need to respawn any players
+      this.networkManager.checkPlayersForRespawn();
+      
+      // Disable spectator mode for all players when they respawn
+      if (this.isSpectatorMode && !this.controls.isDead) {
+        this.disableSpectatorMode();
+      }
+    }
+  }
+  
+  /**
+   * Update the game
+   * @param {number} deltaTime - Time elapsed since last update
+   */
+  update(deltaTime) {
+    // Skip if game is not started
+    if (!this.isGameStarted) return;
+    
+    // Skip if game is paused
+    if (this.isPaused) return;
+    
+    // Update UI manager
+    if (this.uiManager) {
+      this.uiManager.update(deltaTime);
+    }
+    
+    // Update controls if available
+    if (this.controls) {
+      this.controls.update(deltaTime);
+    }
+    
+    // Update weapon manager
+    if (this.weaponManager) {
+      this.weaponManager.update(deltaTime);
+    }
+    
+    // Update scene
+    if (this.scene) {
+      this.scene.update(deltaTime);
+    }
+    
+    // Update physics world
+    if (this.physicsWorld) {
+      this.physicsWorld.step(deltaTime);
+    }
+    
+    // Update renderer
+    this.render();
+    
+    // Check for multiplayer round end conditions
+    if (this.networkManager && this.networkManager.isMultiplayer && 
+        this.networkManager.isHost && !this.isGameOver) {
+      this.checkMultiplayerRoundEnd();
+    }
+  }
+
   /**
    * Show the game over screen
    */
@@ -665,6 +1226,12 @@ export class Engine {
     menuButton.addEventListener('mousedown', (e) => e.stopPropagation());
     
     // Touch handling for button
+    menuButton.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      menuButton.style.transform = 'scale(1.05)';
+      menuButton.style.boxShadow = '0 0 10px #555555';
+    }, { passive: false });
+    
     menuButton.addEventListener('touchend', (e) => {
       e.stopPropagation();
       menuButton.style.transform = 'scale(1)';
@@ -724,10 +1291,21 @@ export class Engine {
   restartGame() {
     console.log("Restarting game...");
     
+    // Disable spectator mode if active
+    if (this.isSpectatorMode) {
+      this.disableSpectatorMode();
+    }
+    
     // Hide game over screen
     const gameOverMenu = document.getElementById('game-over-menu');
     if (gameOverMenu) {
       document.body.removeChild(gameOverMenu);
+    }
+    
+    // Remove spectate overlay if it exists
+    const spectateOverlay = document.getElementById('spectate-overlay');
+    if (spectateOverlay) {
+      document.body.removeChild(spectateOverlay);
     }
     
     // Remove pause menu if it exists
@@ -743,6 +1321,8 @@ export class Engine {
     
     // Reset player if it exists
     if (this.controls) {
+      console.log("Resetting player state and controls");
+      
       // Reset player position
       if (typeof this.controls.resetPosition === 'function') {
         this.controls.resetPosition();
@@ -762,69 +1342,63 @@ export class Engine {
       if (typeof this.controls.resetWeapons === 'function') {
         this.controls.resetWeapons();
       }
-    }
-    
-    // Reset room state
-    if (this.scene && this.scene.room) {
-      // Reset windows
-      if (typeof this.scene.room.resetWindows === 'function') {
-        this.scene.room.resetWindows();
-      }
       
-      // Reset enemy manager completely to avoid any lingering state issues
-      if (this.scene.room.enemyManager) {
-        // First clear all existing enemies
-        if (typeof this.scene.room.enemyManager.clearEnemies === 'function') {
-          this.scene.room.enemyManager.clearEnemies();
-        }
-        
-        // Explicitly unpause the enemy manager
-        this.scene.room.enemyManager.setPaused(false);
-        
-        // Disable spawning
-        this.scene.room.enemyManager.toggleSpawning(false);
-        
-        // Recreate the enemy manager to fully reset its state
-        const windows = this.scene.room.windows;
-        this.scene.room.enemyManager = new EnemyManager(this.scene.instance, windows);
-        
-        // Initialize the new enemy manager
-        this.scene.room.enemyManager.init();
-        
-        // Set the player reference for the new enemy manager
-        if (this.controls) {
-          this.scene.room.enemyManager.setPlayer(this.controls);
-        }
-        
-        // Wait a moment, then enable spawning to start round 1
-        setTimeout(() => {
-          // Make sure we're still in an active game
-          if (this.isGameStarted && !this.isGameOver) {
-            this.scene.room.enemyManager.toggleSpawning(true);
-          }
-        }, 1500);
-      }
-      
-      // Reset mystery box if it exists
-      if (this.scene.room.mysteryBox && typeof this.scene.room.mysteryBox.reset === 'function') {
-        this.scene.room.mysteryBox.reset();
-      }
-    }
-    
-    // Show mobile controls if needed
-    this.showMobileControlsIfNeeded();
-    
-    // Re-enable controls
-    if (this.controls) {
+      // Explicitly enable the controls to ensure player can move
       this.controls.enabled = true;
+      console.log("Player controls enabled:", this.controls.enabled);
+      
+      // Ensure player UI is visible
+      this.showPlayerUI();
+      
+      // Make sure player model is visible
+      if (this.controls.modelContainer) {
+        this.controls.modelContainer.visible = true;
+      }
     }
     
-    // Lock pointer again
+    // Reset enemies if in a room
+    if (this.scene && this.scene.room && this.scene.room.enemyManager) {
+      console.log("Resetting enemy manager state");
+      
+      // Clear any existing enemies
+      this.scene.room.enemyManager.despawnAllEnemies();
+      
+      // Reset the round counter
+      this.scene.room.enemyManager.currentRound = 0;
+      
+      // Reset zombies remaining
+      this.scene.room.enemyManager.zombiesRemaining = 0;
+      
+      // Unpause if paused
+      this.scene.room.enemyManager.setPaused(false);
+      
+      // Start a new round
+      this.scene.room.enemyManager.startNextRound();
+    }
+    
+    // Re-lock pointer to regain control - with a small delay to ensure UI is cleared
     setTimeout(() => {
-      if (this.controls) {
-        this.controls.lockPointer();
+      if (this.isGameStarted && !this.isGameOver && !this.isPaused) {
+        console.log("Locking pointer after game restart");
+        
+        // Force pointer lock to regain control
+        if (this.controls) {
+          console.log("Enabling controls and requesting pointer lock");
+          this.controls.enabled = true;
+          
+          if (typeof this.controls.lockPointer === 'function') {
+            console.log("Using controls.lockPointer()");
+            this.controls.lockPointer();
+          } else {
+            console.log("Fallback to document.body.requestPointerLock()");
+            document.body.requestPointerLock();
+          }
+        } else {
+          console.log("No controls object found, using document.body.requestPointerLock()");
+          document.body.requestPointerLock();
+        }
       }
-    }, 100);
+    }, 200); // Slightly longer delay to ensure everything is reset
   }
   
   /**
@@ -1102,27 +1676,46 @@ export class Engine {
   }
 
   /**
-   * Toggle game pause state
+   * Toggle the game's pause state
    */
   togglePause() {
-    // If already paused, resume the game
+    if (this.isGameOver) return; // Don't toggle pause if game is over
+    
     if (this.isPaused) {
-      this.isPaused = false;
-      this.resumeGame();
+      // Resuming the game
+      if (this.networkManager && this.networkManager.isMultiplayer) {
+        if (this.networkManager.isHost) {
+          // As host, resume for everyone
+          console.log("Host resuming game for all clients");
+          this.networkManager.hostResumeGame();
+          this.resumeGame();
+        } else {
+          // As client, can't resume - only host can
+          console.log("Client cannot resume game, only host can resume");
+          // Show a notification to the player
+          this.showNotification("Only the host can resume the game");
+          return; // Don't proceed with resuming
+        }
+      } else {
+        // Single player - just resume
+        this.resumeGame();
+      }
     } else {
-      // Otherwise pause the game
-      this.isPaused = true;
-      
-      // Direct call to show the menu first, then pause game systems
-      this.showPauseMenu();
-      
-      // Pause enemies
-      if (this.scene && this.scene.room && this.scene.room.enemyManager) {
-        this.scene.room.enemyManager.setPaused(true);
+      // Pausing the game
+      if (this.networkManager && this.networkManager.isMultiplayer) {
+        if (this.networkManager.isHost) {
+          // As host, pause for everyone
+          console.log("Host pausing game for all clients");
+          this.networkManager.hostPauseGame();
+        } else {
+          // As client, we can pause locally but need to notify host
+          console.log("Client pausing game locally");
+          // You could add a method to send pause request to host here if needed
+        }
       }
       
-      // Unlock pointer last
-      this.unlockPointer();
+      // Always show pause menu locally
+      this.pauseGame();
     }
   }
   
@@ -1239,13 +1832,24 @@ export class Engine {
     title.style.fontFamily = 'Impact, fantasy';
     title.style.letterSpacing = '2px';
     
-    // Add keyboard shortcut hint
-    const keyboardHint = document.createElement('div');
-    keyboardHint.textContent = 'Press TAB to resume';
-    keyboardHint.style.color = '#cccccc';
-    keyboardHint.style.fontSize = '16px';
-    keyboardHint.style.marginBottom = '30px';
-    keyboardHint.style.fontFamily = 'monospace, Courier';
+    // Determine if we're a client in multiplayer mode
+    const isClient = this.networkManager && this.networkManager.isMultiplayer && !this.networkManager.isHost;
+    
+    // Subtitle message
+    const subtitle = document.createElement('div');
+    if (isClient) {
+      subtitle.textContent = 'Waiting for host to resume the game...';
+      subtitle.style.color = '#fcba03'; // Gold color for important message
+      subtitle.style.fontSize = '18px';
+      subtitle.style.marginBottom = '30px';
+      subtitle.style.textAlign = 'center';
+      subtitle.style.maxWidth = '80%';
+    } else {
+      subtitle.textContent = 'Press TAB to resume';
+      subtitle.style.color = '#cccccc';
+      subtitle.style.fontSize = '16px';
+      subtitle.style.marginBottom = '30px';
+    }
     
     // Buttons container
     const buttonContainer = document.createElement('div');
@@ -1254,139 +1858,242 @@ export class Engine {
     buttonContainer.style.gap = '15px';
     buttonContainer.style.width = '300px';
     
+    // Add host ID copy section if we're hosting a multiplayer game
+    if (this.networkManager && this.networkManager.isMultiplayer && this.networkManager.isHost) {
+      const hostIdButton = this.networkManager.createHostIdCopyButton();
+      if (hostIdButton) {
+        buttonContainer.appendChild(hostIdButton);
+      }
+    }
+    
     // Create resume button
     const resumeButton = document.createElement('button');
-    resumeButton.textContent = 'RESUME GAME';
+    resumeButton.textContent = isClient ? 'WAITING FOR HOST' : 'RESUME GAME';
     resumeButton.style.padding = '15px 20px';
     resumeButton.style.fontSize = '18px';
-    resumeButton.style.backgroundColor = '#33aaff';
+    resumeButton.style.backgroundColor = isClient ? '#888888' : '#33aaff';
     resumeButton.style.color = 'white';
     resumeButton.style.border = 'none';
     resumeButton.style.borderRadius = '5px';
-    resumeButton.style.cursor = 'pointer';
+    resumeButton.style.cursor = isClient ? 'default' : 'pointer';
     resumeButton.style.fontFamily = 'monospace, Courier';
     resumeButton.style.fontWeight = 'bold';
     resumeButton.style.transition = 'all 0.2s ease';
     resumeButton.style.touchAction = 'auto'; // Allow normal touch on button
     
-    // Hover effects
-    resumeButton.addEventListener('mouseover', () => {
-      resumeButton.style.transform = 'scale(1.05)';
-      resumeButton.style.boxShadow = '0 0 10px #33aaff';
-    });
-    
-    resumeButton.addEventListener('mouseout', () => {
-      resumeButton.style.transform = 'scale(1)';
-      resumeButton.style.boxShadow = 'none';
-    });
-    
-    // Prevent pointer lock
-    resumeButton.addEventListener('mousedown', (e) => e.stopPropagation());
-    
-    // Touch handling for button
-    resumeButton.addEventListener('touchstart', (e) => {
-      e.stopPropagation();
-      resumeButton.style.transform = 'scale(1.05)';
-      resumeButton.style.boxShadow = '0 0 10px #33aaff';
-    }, { passive: false });
-    
-    resumeButton.addEventListener('touchend', (e) => {
-      e.stopPropagation();
-      resumeButton.style.transform = 'scale(1)';
-      resumeButton.style.boxShadow = 'none';
-      this.togglePause();
-    }, { passive: false });
-    
-    // Resume game when clicked
-    resumeButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      this.togglePause();
-    });
-    
-    // Create main menu button
-    const menuButton = document.createElement('button');
-    menuButton.textContent = 'MAIN MENU';
-    menuButton.style.padding = '15px 20px';
-    menuButton.style.fontSize = '18px';
-    menuButton.style.backgroundColor = '#333333';
-    menuButton.style.color = '#dddddd';
-    menuButton.style.border = 'none';
-    menuButton.style.borderRadius = '5px';
-    menuButton.style.cursor = 'pointer';
-    menuButton.style.fontFamily = 'monospace, Courier';
-    menuButton.style.fontWeight = 'bold';
-    menuButton.style.transition = 'all 0.2s ease';
-    menuButton.style.touchAction = 'auto'; // Allow normal touch on button
-    
-    // Hover effects
-    menuButton.addEventListener('mouseover', () => {
-      menuButton.style.transform = 'scale(1.05)';
-      menuButton.style.boxShadow = '0 0 10px #555555';
-    });
-    
-    menuButton.addEventListener('mouseout', () => {
-      menuButton.style.transform = 'scale(1)';
-      menuButton.style.boxShadow = 'none';
-    });
-    
-    // Prevent pointer lock
-    menuButton.addEventListener('mousedown', (e) => e.stopPropagation());
-    
-    // Touch handling for button
-    menuButton.addEventListener('touchstart', (e) => {
-      e.stopPropagation();
-      menuButton.style.transform = 'scale(1.05)';
-      menuButton.style.boxShadow = '0 0 10px #555555';
-    }, { passive: false });
-    
-    menuButton.addEventListener('touchend', (e) => {
-      e.stopPropagation();
-      menuButton.style.transform = 'scale(1)';
-      menuButton.style.boxShadow = 'none';
+    // Only add hover effects if not a client
+    if (!isClient) {
+      resumeButton.addEventListener('mouseover', () => {
+        resumeButton.style.transform = 'scale(1.05)';
+        resumeButton.style.boxShadow = '0 0 10px #33aaff';
+      });
       
-      // Remove pause menu
-      document.body.removeChild(pauseContainer);
+      resumeButton.addEventListener('mouseout', () => {
+        resumeButton.style.transform = 'scale(1)';
+        resumeButton.style.boxShadow = 'none';
+      });
       
-      // Use our comprehensive reset method
-      this.resetGameState();
+      // Prevent pointer lock
+      resumeButton.addEventListener('mousedown', (e) => e.stopPropagation());
       
-      // Show the start menu
-      if (this.startMenu) {
-        this.startMenu.show();
-      } else {
-        // Fallback to the custom main menu
-        this.showMainMenu();
-      }
-    }, { passive: false });
+      // Touch handling for button
+      resumeButton.addEventListener('touchstart', (e) => {
+        e.stopPropagation();
+        resumeButton.style.transform = 'scale(1.05)';
+        resumeButton.style.boxShadow = '0 0 10px #33aaff';
+      }, { passive: false });
+      
+      resumeButton.addEventListener('touchend', (e) => {
+        e.stopPropagation();
+        resumeButton.style.transform = 'scale(1)';
+        resumeButton.style.boxShadow = 'none';
+        this.togglePause();
+      }, { passive: false });
+      
+      // Resume game when clicked
+      resumeButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        this.togglePause();
+      });
+    }
     
-    // Return to main menu when clicked
-    menuButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
+    // Create "Leave Game" button for multiplayer
+    if (this.networkManager && this.networkManager.isMultiplayer) {
+      const leaveButton = document.createElement('button');
+      leaveButton.textContent = 'LEAVE MULTIPLAYER';
+      leaveButton.style.padding = '15px 20px';
+      leaveButton.style.fontSize = '18px';
+      leaveButton.style.backgroundColor = '#e74c3c'; // Red color to indicate warning
+      leaveButton.style.color = 'white';
+      leaveButton.style.border = 'none';
+      leaveButton.style.borderRadius = '5px';
+      leaveButton.style.cursor = 'pointer';
+      leaveButton.style.fontFamily = 'monospace, Courier';
+      leaveButton.style.fontWeight = 'bold';
+      leaveButton.style.transition = 'all 0.2s ease';
       
-      // Remove pause menu
-      document.body.removeChild(pauseContainer);
+      // Hover effects
+      leaveButton.addEventListener('mouseover', () => {
+        leaveButton.style.transform = 'scale(1.05)';
+        leaveButton.style.boxShadow = '0 0 10px #e74c3c';
+      });
       
-      // Use our comprehensive reset method
-      this.resetGameState();
+      leaveButton.addEventListener('mouseout', () => {
+        leaveButton.style.transform = 'scale(1)';
+        leaveButton.style.boxShadow = 'none';
+      });
       
-      // Show the start menu
-      if (this.startMenu) {
-        this.startMenu.show();
-      } else {
-        // Fallback to the custom main menu
-        this.showMainMenu();
-      }
-    });
+      // Prevent pointer lock
+      leaveButton.addEventListener('mousedown', (e) => e.stopPropagation());
+      
+      // Touch handling for button
+      leaveButton.addEventListener('touchstart', (e) => {
+        e.stopPropagation();
+        leaveButton.style.transform = 'scale(1.05)';
+        leaveButton.style.boxShadow = '0 0 10px #e74c3c';
+      }, { passive: false });
+      
+      leaveButton.addEventListener('touchend', (e) => {
+        e.stopPropagation();
+        leaveButton.style.transform = 'scale(1)';
+        leaveButton.style.boxShadow = 'none';
+        
+        // Remove pause menu
+        document.body.removeChild(pauseContainer);
+        
+        // Properly disconnect from multiplayer
+        if (this.networkManager) {
+          console.log("Explicitly disconnecting from multiplayer session");
+          this.networkManager.disconnect();
+        }
+        
+        // Use our comprehensive reset method
+        this.resetGameState();
+        
+        // Show the start menu
+        if (this.startMenu) {
+          this.startMenu.show();
+        } else {
+          // Fallback to the custom main menu
+          this.showMainMenu();
+        }
+      }, { passive: false });
+      
+      // Return to main menu when clicked
+      leaveButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        
+        // Remove pause menu
+        document.body.removeChild(pauseContainer);
+        
+        // Properly disconnect from multiplayer
+        if (this.networkManager) {
+          console.log("Explicitly disconnecting from multiplayer session");
+          this.networkManager.disconnect();
+        }
+        
+        // Use our comprehensive reset method
+        this.resetGameState();
+        
+        // Show the start menu
+        if (this.startMenu) {
+          this.startMenu.show();
+        } else {
+          // Fallback to the custom main menu
+          this.showMainMenu();
+        }
+      });
+      
+      // Add to buttonContainer
+      buttonContainer.appendChild(leaveButton);
+    }
     
-    // Add buttons to container
-    buttonContainer.appendChild(resumeButton);
-    buttonContainer.appendChild(menuButton);
+    // Create main menu button - only show if not in multiplayer or if we're the host
+    if (!this.networkManager || !this.networkManager.isMultiplayer || this.networkManager.isHost) {
+      const menuButton = document.createElement('button');
+      menuButton.textContent = 'MAIN MENU';
+      menuButton.style.padding = '15px 20px';
+      menuButton.style.fontSize = '18px';
+      menuButton.style.backgroundColor = '#333333';
+      menuButton.style.color = '#dddddd';
+      menuButton.style.border = 'none';
+      menuButton.style.borderRadius = '5px';
+      menuButton.style.cursor = 'pointer';
+      menuButton.style.fontFamily = 'monospace, Courier';
+      menuButton.style.fontWeight = 'bold';
+      menuButton.style.transition = 'all 0.2s ease';
+      menuButton.style.touchAction = 'auto'; // Allow normal touch on button
+      
+      // Hover effects
+      menuButton.addEventListener('mouseover', () => {
+        menuButton.style.transform = 'scale(1.05)';
+        menuButton.style.boxShadow = '0 0 10px #555555';
+      });
+      
+      menuButton.addEventListener('mouseout', () => {
+        menuButton.style.transform = 'scale(1)';
+        menuButton.style.boxShadow = 'none';
+      });
+      
+      // Prevent pointer lock
+      menuButton.addEventListener('mousedown', (e) => e.stopPropagation());
+      
+      // Touch handling for button
+      menuButton.addEventListener('touchstart', (e) => {
+        e.stopPropagation();
+        menuButton.style.transform = 'scale(1.05)';
+        menuButton.style.boxShadow = '0 0 10px #555555';
+      }, { passive: false });
+      
+      menuButton.addEventListener('touchend', (e) => {
+        e.stopPropagation();
+        menuButton.style.transform = 'scale(1)';
+        menuButton.style.boxShadow = 'none';
+        
+        // Remove pause menu
+        document.body.removeChild(pauseContainer);
+        
+        // Use our comprehensive reset method
+        this.resetGameState();
+        
+        // Show the start menu
+        if (this.startMenu) {
+          this.startMenu.show();
+        } else {
+          // Fallback to the custom main menu
+          this.showMainMenu();
+        }
+      }, { passive: false });
+      
+      // Return to main menu when clicked
+      menuButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        
+        // Remove pause menu
+        document.body.removeChild(pauseContainer);
+        
+        // Use our comprehensive reset method
+        this.resetGameState();
+        
+        // Show the start menu
+        if (this.startMenu) {
+          this.startMenu.show();
+        } else {
+          // Fallback to the custom main menu
+          this.showMainMenu();
+        }
+      });
+      
+      // Add to buttonContainer
+      buttonContainer.appendChild(menuButton);
+    }
     
     // Add elements to pause container
     pauseContainer.appendChild(title);
-    pauseContainer.appendChild(keyboardHint);
+    pauseContainer.appendChild(subtitle);
     pauseContainer.appendChild(buttonContainer);
     
     // Add to the document
@@ -1397,14 +2104,24 @@ export class Engine {
    * Lock pointer for camera control
    */
   lockPointer() {
+    console.log("Engine lockPointer called");
+    
     // Skip pointer locking if using mobile controls
     if (this.isMobileDevice() && this.mobileControls && this.mobileControls.isActive) {
       return;
     }
     
+    // Ensure controls are enabled if they exist
+    if (this.controls) {
+      console.log("Ensuring controls are enabled");
+      this.controls.enabled = true;
+    }
+    
     if (this.controls && typeof this.controls.lockPointer === 'function') {
+      console.log("Using controls.lockPointer()");
       this.controls.lockPointer();
     } else {
+      console.log("No controls.lockPointer method, using document.body.requestPointerLock");
       const element = document.body;
       if (element.requestPointerLock) {
         element.requestPointerLock();
@@ -1954,5 +2671,47 @@ export class Engine {
         this.scene.room.mysteryBox.reset();
       }
     }
+  }
+
+  /**
+   * Show a notification message to the player
+   * @param {string} message - The notification message
+   * @param {number} duration - How long to show the message in ms
+   */
+  showNotification(message, duration = 3000) {
+    // Remove any existing notification
+    const existingNotification = document.getElementById('game-notification');
+    if (existingNotification) {
+      document.body.removeChild(existingNotification);
+    }
+    
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.id = 'game-notification';
+    notification.style.position = 'absolute';
+    notification.style.top = '100px';
+    notification.style.left = '50%';
+    notification.style.transform = 'translateX(-50%)';
+    notification.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    notification.style.color = '#ffaa00';
+    notification.style.padding = '12px 20px';
+    notification.style.borderRadius = '5px';
+    notification.style.fontSize = '16px';
+    notification.style.fontFamily = 'monospace, Courier';
+    notification.style.zIndex = '2100';
+    notification.style.textAlign = 'center';
+    notification.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.5)';
+    notification.style.pointerEvents = 'none'; // Allow clicking through
+    notification.textContent = message;
+    
+    // Add to document
+    document.body.appendChild(notification);
+    
+    // Remove after duration
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.parentNode.removeChild(notification);
+      }
+    }, duration);
   }
 } 

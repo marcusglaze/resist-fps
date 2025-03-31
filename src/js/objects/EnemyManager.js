@@ -12,6 +12,7 @@ export class EnemyManager {
     this.scene = scene;
     this.windows = windows;
     this.enemies = [];
+    this.gameEngine = null; // Reference to game engine for network access
     
     // Round-based game settings
     this.currentRound = 0;
@@ -47,6 +48,19 @@ export class EnemyManager {
     
     // Round display
     this.roundDisplay = null;
+  }
+
+  /**
+   * Set game engine reference
+   * @param {Engine} engine - Reference to the game engine
+   */
+  setGameEngine(engine) {
+    this.gameEngine = engine;
+    
+    // Update reference for existing enemies
+    this.enemies.forEach(enemy => {
+      enemy.gameEngine = engine;
+    });
   }
 
   /**
@@ -789,19 +803,22 @@ export class EnemyManager {
   }
 
   /**
-   * Force spawn an enemy regardless of conditions
-   * @returns {Enemy} The spawned enemy or null if failed
+   * Force spawn a new enemy even if at max enemies
+   * @param {Window} targetWindow - Optional specific window to target
+   * @returns {Enemy} The spawned enemy or null if error
    */
-  forceSpawnEnemy() {
+  forceSpawnEnemy(targetWindow) {
     // Safety check
     if (!this.windows || this.windows.length === 0) {
       return null;
     }
     
     try {
-      // Pick a random window
-      const randomWindowIndex = Math.floor(Math.random() * this.windows.length);
-      const targetWindow = this.windows[randomWindowIndex];
+      // Use provided target window or pick a random window
+      if (!targetWindow) {
+        const randomWindowIndex = Math.floor(Math.random() * this.windows.length);
+        targetWindow = this.windows[randomWindowIndex];
+      }
       
       if (!targetWindow) {
         return null;
@@ -843,11 +860,24 @@ export class EnemyManager {
         enemy = new Enemy(targetWindow);
       }
       
+      // Make sure the enemy has an ID for network synchronization
+      if (!enemy.id) {
+        enemy.id = `enemy_${Math.random().toString(36).substring(2, 15)}_${Date.now().toString(36)}`;
+      }
+      
+      // Set state property for synchronized animations
+      enemy.state = 'idle';
+      
       enemy.init();
       enemy.positionOutsideWindow();
       
       // Set manager reference for pausing
       enemy.manager = this;
+      
+      // Set game engine reference if available
+      if (this.gameEngine) {
+        enemy.gameEngine = this.gameEngine;
+      }
       
       // Set player reference if available
       if (this.player) {
@@ -986,14 +1016,20 @@ export class EnemyManager {
       
       return enemy;
     } catch (error) {
+      console.error("Error in forceSpawnEnemy:", error);
       return null;
     }
   }
 
   /**
-   * Spawn a new enemy
+   * Attempt to spawn a new enemy if conditions are right
+   * @param {number} x - Optional specific x position
+   * @param {number} y - Optional specific y position
+   * @param {number} z - Optional specific z position
+   * @param {string} id - Optional specific enemy ID for network sync
+   * @returns {Enemy} The spawned enemy or null if conditions not met
    */
-  spawnEnemy() {
+  spawnEnemy(x, y, z, id) {
     // Skip if spawning is disabled or we're at max enemies
     if (!this.spawnEnabled || this.enemies.length >= this.maxEnemies) {
       return null;
@@ -1019,7 +1055,23 @@ export class EnemyManager {
         return null;
       }
       
-      return this.forceSpawnEnemy(targetWindow);
+      // Force spawn the enemy
+      const enemy = this.forceSpawnEnemy(targetWindow);
+      
+      // If enemy creation was successful and we have specified position/ID, set them
+      if (enemy) {
+        // If x, y, z are provided, position the enemy there
+        if (x !== undefined && y !== undefined && z !== undefined) {
+          enemy.instance.position.set(x, y, z);
+        }
+        
+        // If an ID is provided, set it (for network synchronization)
+        if (id) {
+          enemy.id = id;
+        }
+      }
+      
+      return enemy;
     } catch (error) {
       console.error("Error spawning enemy:", error);
       return null;

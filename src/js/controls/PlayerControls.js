@@ -1614,13 +1614,19 @@ export class PlayerControls {
    * Request pointer lock to capture mouse movements
    */
   lockPointer(event) {
+    console.log("PlayerControls lockPointer called", event ? "with event" : "without event");
+    
     // Skip if on mobile - handled by touch controls
     if (this.mobileControls && this.mobileControls.isMobile) {
       return;
     }
     
+    // Make sure controls are enabled
+    this.enabled = true;
+    
     // Only lock pointer on non-shooting clicks
     if (this.isLocked && event && event.button === 0) {
+      console.log("Pointer already locked, skipping");
       return;
     }
     
@@ -1632,6 +1638,7 @@ export class PlayerControls {
     
     try {
       // Attempt to lock the pointer
+      console.log("Requesting pointer lock");
       this.domElement.requestPointerLock();
       
       // Unlock audio on user interaction
@@ -1647,12 +1654,18 @@ export class PlayerControls {
   onPointerlockChange() {
     const isLocked = document.pointerLockElement === this.domElement;
     
+    console.log("Pointer lock changed, isLocked:", isLocked);
+    
     if (isLocked) {
+      console.log("Pointer locked, enabling controls and mouse movement");
       document.addEventListener('mousemove', this.onMouseMove, false);
       this.isLocked = true;
+      this.enabled = true; // Make sure controls are enabled when pointer is locked
     } else {
+      console.log("Pointer unlocked, disabling mouse movement");
       document.removeEventListener('mousemove', this.onMouseMove, false);
       this.isLocked = false;
+      // Note: we don't disable controls here to allow keyboard movement still
     }
   }
   
