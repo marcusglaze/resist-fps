@@ -188,13 +188,41 @@ export class PlayerControls {
    * Initialize audio elements for weapon sounds
    */
   initializeAudio() {
-    // Create audio context
+    // Check if mobile first for audio context configuration
+    const isMobile = this.isMobileDevice();
+    const audioContextOptions = isMobile 
+      ? { sampleRate: 22050 } // Lower sample rate on mobile
+      : {}; // Default options on desktop
+    
+    // Create audio context with appropriate options
     try {
-      this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      this.audioContext = new AudioContextClass(audioContextOptions);
+      console.log(`AudioContext created with sample rate: ${this.audioContext.sampleRate}Hz`);
     } catch (e) {
       console.warn('Web Audio API not supported in this browser', e);
       this.audioContext = null;
     }
+    
+    // Mobile-specific audio settings
+    this.mobileAudioSettings = {
+      disableBackgroundMusic: isMobile, // Turn off background music on mobile
+      disableContinuousSounds: isMobile, // Turn off continuous sounds like walking
+      maxConcurrentSounds: isMobile ? 2 : 6, // Limit concurrent sounds more on mobile
+      prioritizeWeaponSounds: true // Always keep weapon sounds for gameplay
+    };
+    
+    console.log("Mobile audio settings:", this.mobileAudioSettings);
+    
+    // Audio pooling and limitations for mobile optimization
+    this.maxConcurrentAudio = isMobile ? 2 : 3; // Limit concurrent sounds on mobile
+    this.activeAudio = [];
+    this.audioPool = {
+      pistolShoot: [],
+      shotgunShoot: [],
+      machineGunShoot: [],
+      zombieSound: []
+    };
     
     // Create audio elements for weapon sounds
     this.audioElements.pistolShoot = new Audio('/audio/pistol-shooting.wav');
@@ -217,6 +245,12 @@ export class PlayerControls {
     
     // Add background music
     this.audioElements.backgroundMusic = new Audio('/audio/game-music.wav');
+    
+    // Create audio pools for common sounds
+    this.createAudioPool('pistolShoot', '/audio/pistol-shooting.wav', 2);
+    this.createAudioPool('shotgunShoot', '/audio/shotgun-shooting.wav', 2);
+    this.createAudioPool('machineGunShoot', '/audio/machine-gun-shooting.wav', 1);
+    this.createAudioPool('zombieSound', '/audio/zombie-1.wav', 3);
     
     // Configure audio elements
     Object.values(this.audioElements).forEach(audio => {
@@ -249,12 +283,92 @@ export class PlayerControls {
       console.log('Background music initialized and configured to loop at lowered volume');
     }
     
+    // Check if mobile for further optimization
+    if (this.isMobileDevice()) {
+      console.log('Mobile device detected - optimizing audio for better performance');
+      this.maxConcurrentAudio = 2; // More strict limitation on mobile
+      
+      // Note: We can't change the sample rate of an existing AudioContext
+      // as it's a read-only property. The optimal approach is to create
+      // AudioContext with the right options at initialization time.
+      
+      // Instead, we'll focus on limiting concurrent sounds and managing audio resources
+      console.log('Audio optimization applied: limited to', this.maxConcurrentAudio, 'concurrent sounds');
+    }
+    
     // We can't play audio until user interaction has occurred
     this.audioUnlocked = false;
     
     console.log('Weapon audio and background music initialized, waiting for user interaction to unlock audio');
   }
-
+  
+  /**
+   * Create a pool of audio elements for a given sound type
+   * @param {string} type - The type of sound to pool
+   * @param {string} src - Source URL of the audio file
+   * @param {number} count - Number of instances to create
+   */
+  createAudioPool(type, src, count) {
+    for (let i = 0; i < count; i++) {
+      const audio = new Audio(src);
+      audio.preload = 'auto';
+      audio.volume = 0.7;
+      this.audioPool[type].push({
+        element: audio,
+        inUse: false
+      });
+    }
+  }
+  
+  /**
+   * Get an available audio element from the pool
+   * @param {string} type - The type of sound to get
+   * @returns {HTMLAudioElement|null} An available audio element or null
+   */
+  getFromAudioPool(type) {
+    if (!this.audioPool[type]) return null;
+    
+    // Check if we're at the concurrent audio limit
+    if (this.isMobileDevice() && this.activeAudio.length >= this.maxConcurrentAudio) {
+      // If at limit, prioritize by stopping less important sounds
+      const lowPrioritySounds = this.activeAudio.filter(audio => 
+        !audio.src.includes('background') && !audio.src.includes('shooting')
+      );
+      
+      if (lowPrioritySounds.length > 0) {
+        const oldestSound = lowPrioritySounds[0];
+        oldestSound.pause();
+        this.activeAudio = this.activeAudio.filter(a => a !== oldestSound);
+      } else if (this.activeAudio.length > 0) {
+        // If no low priority sounds, stop the oldest sound
+        const oldestSound = this.activeAudio[0];
+        oldestSound.pause();
+        this.activeAudio = this.activeAudio.filter(a => a !== oldestSound);
+      }
+    }
+    
+    // Try to find an available audio element in the pool
+    for (const pooled of this.audioPool[type]) {
+      if (!pooled.inUse) {
+        pooled.inUse = true;
+        
+        // Add event to mark as available when playback ends
+        const handleEnded = () => {
+          pooled.inUse = false;
+          pooled.element.removeEventListener('ended', handleEnded);
+          this.activeAudio = this.activeAudio.filter(a => a !== pooled.element);
+        };
+        
+        pooled.element.addEventListener('ended', handleEnded);
+        this.activeAudio.push(pooled.element);
+        
+        return pooled.element;
+      }
+    }
+    
+    return null;
+  }
+  
   /**
    * Unlock audio on user interaction
    * This must be called after a user gesture (click, keypress, etc.)
@@ -306,27 +420,28 @@ export class PlayerControls {
   }
 
   /**
-   * Explicitly play background music
+   * Play background music
    */
   playBackgroundMusic() {
-    if (this.audioElements.backgroundMusic) {
-      console.log('Attempting to play background music explicitly...');
-      
-      // Make sure it's configured properly
-      this.audioElements.backgroundMusic.loop = true;
-      this.audioElements.backgroundMusic.volume = 0.16; // Reduced background music volume
-      this.audioElements.backgroundMusic.currentTime = 0;
-      
-      const playPromise = this.audioElements.backgroundMusic.play();
-      
-      if (playPromise !== undefined) {
-        playPromise.then(() => {
-          console.log('Background music started successfully!');
-        }).catch(error => {
-          console.warn('Could not autoplay background music:', error);
-        });
-      }
+    console.log("Attempting to play background music");
+    
+    // Skip background music on mobile for performance optimization
+    if (this.mobileAudioSettings && this.mobileAudioSettings.disableBackgroundMusic) {
+      console.log("Background music disabled on mobile for performance optimization");
+      return;
     }
+    
+    if (!this.audioUnlocked || !this.audioElements.backgroundMusic) {
+      console.log("Cannot play background music: audio not unlocked or element missing");
+      return;
+    }
+    
+    this.audioElements.backgroundMusic.loop = true;
+    this.audioElements.backgroundMusic.volume = this.musicVolume || 0.5;
+    
+    this.audioElements.backgroundMusic.play().catch(error => {
+      console.warn(`Error playing background music: ${error}`);
+    });
   }
 
   /**
@@ -2981,44 +3096,101 @@ export class PlayerControls {
   }
 
   /**
-   * Play the appropriate shooting sound based on the active weapon
+   * Play weapon shooting sound based on current weapon
+   * @returns {HTMLAudioElement} The audio element being played
    */
   playWeaponShootSound() {
-    if (!this.activeWeapon || !this.audioUnlocked) return;
+    if (!this.audioUnlocked) return null;
     
     try {
       let audio = null;
+      let isContinuousSound = false;
       
-      // Select the appropriate audio based on weapon name
-      if (this.activeWeapon.name === 'Pistol') {
-        audio = this.audioElements.pistolShoot;
-      } else if (this.activeWeapon.name === 'Shotgun') {
-        audio = this.audioElements.shotgunShoot;
-      } else if (this.activeWeapon.name === 'Assault Rifle') {
-        audio = this.audioElements.machineGunShoot;
-        
-        // For machine gun, don't reset if already playing (continuous fire sound)
-        if (audio && !audio.paused && audio.currentTime > 0) {
-          return; // Already playing, don't restart
+      // Determine which sound to play based on weapon type
+      if (this.activeWeapon) {
+        switch (this.activeWeapon.type) {
+          case 'shotgun':
+            // Try to get from pool first
+            audio = this.getFromAudioPool('shotgunShoot');
+            
+            // Fallback to direct audio element
+            if (!audio) {
+              audio = this.audioElements.shotgunShoot;
+            }
+            break;
+          
+          case 'assaultRifle':
+            // For assault rifle, use looping sound if holding trigger
+            if (this.shooting) {
+              audio = this.audioElements.machineGunShoot;
+              audio.loop = true;
+              isContinuousSound = true; // Mark as continuous sound for mobile check
+            } else {
+              // For single shot, use pooled sound
+              audio = this.getFromAudioPool('machineGunShoot');
+              
+              // Fallback to direct audio element
+              if (!audio) {
+                audio = this.audioElements.machineGunShoot;
+                audio.loop = false;
+              }
+            }
+            break;
+          
+          case 'pistol':
+          default:
+            // Try to get from pool first
+            audio = this.getFromAudioPool('pistolShoot');
+            
+            // Fallback to direct audio element
+            if (!audio) {
+              audio = this.audioElements.pistolShoot;
+            }
+            break;
         }
       } else {
-        // Default to pistol for other weapons
+        // Default to pistol sound if no weapon
         audio = this.audioElements.pistolShoot;
       }
       
-      // Play the sound if available
+      // Check if this is a continuous sound that should be skipped on mobile
+      if (isContinuousSound && this.mobileAudioSettings && this.mobileAudioSettings.disableContinuousSounds) {
+        console.log("Skipping continuous weapon sound on mobile");
+        return null;
+      }
+      
+      // Play the sound if we found a valid audio element
       if (audio) {
-        if (this.activeWeapon.name !== 'Assault Rifle') {
-          // For non-continuous weapons, reset audio to start if already playing
-          audio.currentTime = 0;
+        // Reset to start
+        audio.currentTime = 0;
+        
+        // If not already tracked, add to active sounds
+        if (!this.activeAudio.includes(audio)) {
+          this.activeAudio.push(audio);
+          
+          // Remove from active sounds when done (for non-looping sounds)
+          if (!audio.loop) {
+            const handleEnded = () => {
+              this.activeAudio = this.activeAudio.filter(a => a !== audio);
+              audio.removeEventListener('ended', handleEnded);
+            };
+            
+            audio.addEventListener('ended', handleEnded);
+          }
         }
+        
+        // Play the sound
         audio.play().catch(error => {
           console.warn(`Error playing weapon sound: ${error}`);
         });
+        
+        return audio;
       }
     } catch (error) {
       console.error(`Error in playWeaponShootSound: ${error}`);
     }
+    
+    return null;
   }
 
   /**
@@ -3079,21 +3251,25 @@ export class PlayerControls {
   }
 
   /**
-   * Play walking sound when player is moving
+   * Play walking sound
    */
   playWalkingSound() {
-    if (!this.audioUnlocked || this.isWalkSoundPlaying || this.isDead) return;
+    if (!this.audioUnlocked) return;
     
-    try {
-      const audio = this.audioElements.playerWalk;
-      if (audio) {
-        audio.play().catch(error => {
-          console.warn(`Error playing walking sound: ${error}`);
-        });
-        this.isWalkSoundPlaying = true;
-      }
-    } catch (error) {
-      console.error(`Error in playWalkingSound: ${error}`);
+    // Skip walking sounds on mobile to reduce audio load
+    if (this.mobileAudioSettings && this.mobileAudioSettings.disableContinuousSounds) {
+      return;
+    }
+    
+    if (this.audioElements.playerWalk && !this.audioElements.playerWalk.paused) {
+      return; // Already playing
+    }
+    
+    if (this.audioElements.playerWalk) {
+      this.audioElements.playerWalk.currentTime = 0;
+      this.audioElements.playerWalk.play().catch(error => {
+        console.warn(`Error playing walking sound: ${error}`);
+      });
     }
   }
   
@@ -3148,19 +3324,19 @@ export class PlayerControls {
     try {
       const audio = this.audioElements.windowBoardBreaking;
       if (audio) {
-        // Set playback to start at 2 seconds
-        audio.currentTime = 2;
+        // Set playback to start at 0.45 seconds as requested
+        audio.currentTime = 0.45;
         
-        // Create a timeout to stop the sound at 4 seconds (2 seconds of playback)
+        // Create a timeout to stop the sound at 2 seconds (1.55 seconds of actual playback)
         const stopSound = () => {
           audio.pause();
-          audio.currentTime = 2; // Reset to beginning of our segment
+          audio.currentTime = 0.45; // Reset to beginning of our segment
         };
         
         // Play the audio
         audio.play().then(() => {
-          // Set timeout to stop after 2 seconds of playback
-          setTimeout(stopSound, 2000);
+          // Set timeout to stop after 1.55 seconds of playback
+          setTimeout(stopSound, 1550);
         }).catch(error => {
           console.warn(`Error playing window board breaking sound: ${error}`);
         });
@@ -3200,21 +3376,36 @@ export class PlayerControls {
   playRandomZombieSound(zombiePosition) {
     if (!this.audioUnlocked) return null;
     
+    // On mobile, limit zombie sounds more aggressively for better performance
+    if (this.isMobileDevice()) {
+      // Only play 33% of zombie sounds on mobile
+      if (Math.random() > 0.33) return null;
+      
+      // Skip if at sound limit
+      if (this.activeAudio.length >= this.maxConcurrentAudio) return null;
+    }
+    
     try {
-      // Get all zombie sound elements
-      const zombieSounds = [
-        this.audioElements.zombieSound1,
-        this.audioElements.zombieSound2,
-        this.audioElements.zombieSound3,
-        this.audioElements.zombieSound4,
-        this.audioElements.zombieSound5
-      ].filter(sound => sound !== null);
+      // Try to get from the zombie sound pool first
+      let audio = this.getFromAudioPool('zombieSound');
       
-      if (zombieSounds.length === 0) return null;
-      
-      // Choose a random sound
-      const randomIndex = Math.floor(Math.random() * zombieSounds.length);
-      const audio = zombieSounds[randomIndex];
+      // If no pooled sound available, fall back to random selection
+      if (!audio) {
+        // Get all zombie sound elements
+        const zombieSounds = [
+          this.audioElements.zombieSound1,
+          this.audioElements.zombieSound2,
+          this.audioElements.zombieSound3,
+          this.audioElements.zombieSound4,
+          this.audioElements.zombieSound5
+        ].filter(sound => sound !== null);
+        
+        if (zombieSounds.length === 0) return null;
+        
+        // Choose a random sound
+        const randomIndex = Math.floor(Math.random() * zombieSounds.length);
+        audio = zombieSounds[randomIndex];
+      }
       
       if (audio) {
         // Set volume based on distance (simplified for now)
@@ -3222,6 +3413,19 @@ export class PlayerControls {
         
         // Reset to beginning
         audio.currentTime = 0;
+        
+        // Track active sounds (if not already tracked via pool)
+        if (!this.activeAudio.includes(audio)) {
+          this.activeAudio.push(audio);
+          
+          // Remove from active sounds when done
+          const handleEnded = () => {
+            this.activeAudio = this.activeAudio.filter(a => a !== audio);
+            audio.removeEventListener('ended', handleEnded);
+          };
+          
+          audio.addEventListener('ended', handleEnded);
+        }
         
         // Play the sound
         audio.play().catch(error => {
@@ -3326,5 +3530,127 @@ export class PlayerControls {
     
     // Update hand positions for the current weapon
     this.updateHandPositions();
+  }
+
+  /**
+   * Apply mobile movement based on joystick input
+   * @param {number} dirX X direction (-1 to 1)
+   * @param {number} dirY Y direction (-1 to 1)
+   */
+  applyMobileMovement(dirX, dirY) {
+    // Only apply if we're on mobile and not dead
+    if (this.isDead) {
+      return;
+    }
+    
+    // Skip if movement is disabled
+    if (!this.movementEnabled) {
+      return;
+    }
+    
+    // If the joystick is too close to center, ignore it (deadzone)
+    const threshold = 0.2;
+    const hasMovement = Math.abs(dirX) > threshold || Math.abs(dirY) > threshold;
+    
+    if (!hasMovement) {
+      // Reset movement states when in deadzone
+      this.moveForward = false;
+      this.moveBackward = false;
+      this.moveLeft = false;
+      this.moveRight = false;
+      this.stopWalkingSound();
+      return;
+    }
+    
+    console.log("Applying mobile movement, dirX:", dirX.toFixed(2), "dirY:", dirY.toFixed(2));
+    
+    // Calculate the delta time ourselves if not provided
+    const deltaTime = 1/60; // Assume 60fps if no better value
+    
+    // Set movement flags based on joystick position for other systems to use
+    this.moveForward = dirY < -threshold;
+    this.moveBackward = dirY > threshold;
+    this.moveLeft = dirX < -threshold;
+    this.moveRight = dirX > threshold;
+    
+    // Calculate run speed multiplier and update stamina
+    const speedMultiplier = this.running ? this.runMultiplier : 1;
+    
+    // Handle stamina for running
+    if (this.running) {
+      // Reduce stamina when running
+      this.stamina = Math.max(0, this.stamina - this.staminaDecayRate * deltaTime);
+      
+      // If stamina depleted, stop running
+      if (this.stamina <= 0) {
+        this.running = false;
+      }
+    }
+    
+    // Get current position for collision checks
+    const previousPosition = this.camera.position.clone();
+    
+    // Calculate move speed based on dirY (forward/backward) 
+    const moveSpeedZ = this.moveSpeed * speedMultiplier * deltaTime;
+    // Use dirY for forward/backward movement (y is inverted, negative is forward)
+    const forwardAmount = -dirY * moveSpeedZ;
+    
+    // Calculate strafe speed based on dirX (left/right)
+    const moveSpeedX = this.moveSpeed * speedMultiplier * deltaTime;
+    // Use dirX for left/right movement
+    const strafeAmount = dirX * moveSpeedX;
+    
+    // Try to move forward/backward
+    if (forwardAmount !== 0) {
+      // Create a movement vector in the direction the camera is facing
+      const forwardVector = new THREE.Vector3(0, 0, -1);
+      forwardVector.applyQuaternion(this.camera.quaternion);
+      forwardVector.y = 0; // Keep movement on xz plane
+      forwardVector.normalize();
+      
+      // Apply movement
+      this.camera.position.addScaledVector(forwardVector, forwardAmount);
+      
+      // Check for collision and revert if needed
+      if (this.checkWallCollision(this.camera.position)) {
+        this.camera.position.copy(previousPosition);
+      } else {
+        // Update previous position for next movement
+        previousPosition.copy(this.camera.position);
+      }
+    }
+    
+    // Try to move left/right
+    if (strafeAmount !== 0) {
+      // Create a movement vector perpendicular to the direction the camera is facing
+      const strafeVector = new THREE.Vector3(1, 0, 0);
+      strafeVector.applyQuaternion(this.camera.quaternion);
+      strafeVector.y = 0; // Keep movement on xz plane
+      strafeVector.normalize();
+      
+      // Apply movement
+      this.camera.position.addScaledVector(strafeVector, strafeAmount);
+      
+      // Check for collision and revert if needed
+      if (this.checkWallCollision(this.camera.position)) {
+        this.camera.position.copy(previousPosition);
+      }
+    }
+    
+    // Keep player at constant height
+    this.camera.position.y = this.height;
+    
+    // Play walking sound if moving
+    if (hasMovement) {
+      this.playWalkingSound();
+    }
+  }
+  
+  /**
+   * Check if device is mobile
+   * @returns {boolean} True if running on mobile device
+   */
+  isMobileDevice() {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
   }
 } 

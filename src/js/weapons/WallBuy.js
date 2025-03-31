@@ -10,7 +10,7 @@ export class WallBuy {
     this.position = config.position || new THREE.Vector3(0, 1.5, 0);
     this.rotation = config.rotation || new THREE.Euler(0, 0, 0);
     this.weaponType = config.weaponType || WeaponTypes.SHOTGUN;
-    this.cost = config.cost || this.weaponType.cost || 500;
+    this.cost = config.cost || this.weaponType.cost || 5000;
     
     // Create the weapon instance
     this.weapon = new Weapon(this.weaponType);

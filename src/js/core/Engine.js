@@ -51,6 +51,15 @@ export class Engine {
     this.then = performance.now();
     this.delta = 0;
     
+    // Performance optimization for mobile
+    this.lastFrameTime = 0;
+    this.targetFPS = 60;
+    this.targetFrameTime = 1000 / this.targetFPS;
+    this.isMobileOptimized = this.isMobileDevice();
+    this.frameCount = 0;
+    this.lastFPSUpdate = 0;
+    this.currentFPS = 0;
+    
     // Bind the animate method to this instance
     this.animate = this.animate.bind(this);
     
@@ -101,15 +110,15 @@ export class Engine {
       // Initialize mobile controls if needed
       if (this.isMobileDevice()) {
         console.log("Mobile device detected, initializing mobile controls");
-        // Import the MobileControls class dynamically
+        // Import MobileControls dynamically to avoid issues on desktop
         import('../controls/MobileControls.js').then(module => {
           const MobileControls = module.MobileControls;
           this.mobileControls = new MobileControls(this.controls);
-          // Store reference in controls for bi-directional access
-          this.controls.mobileControls = this.mobileControls;
-          console.log("Mobile controls initialized successfully");
+          // Store reference to game engine in mobile controls
+          this.mobileControls.gameEngine = this;
+          console.log("Mobile controls initialized");
         }).catch(error => {
-          console.error("Failed to initialize mobile controls:", error);
+          console.error("Failed to load mobile controls:", error);
         });
       }
       
@@ -185,29 +194,60 @@ export class Engine {
     if (this.scene.room && this.scene.room.enemyManager) {
       const enemyManager = this.scene.room.enemyManager;
       
-      // Set difficulty multipliers based on selected level
+      // Set difficulty multipliers based on selected level and device type
+      const isMobile = this.isMobileDevice();
+      
+      // Base difficulty multipliers
+      let baseHealthMultiplier = 1.0;
+      let baseSpeedMultiplier = 1.0;
+      let baseSpawnRateMultiplier = 1.0;
+      
+      // Set base multipliers according to difficulty setting
       switch(this.difficulty) {
+        case 'very_easy': // Extremely forgiving for beginners
+          baseHealthMultiplier = 0.4;  // Zombies have 40% health
+          baseSpeedMultiplier = 0.5;   // Zombies move at 50% speed
+          baseSpawnRateMultiplier = 0.4; // 40% spawn rate
+          break;
         case 'easy':
-          enemyManager.healthMultiplier = 0.7;
-          enemyManager.speedMultiplier = 0.8;
-          enemyManager.spawnRateMultiplier = 0.7;
+          baseHealthMultiplier = 0.5;  // Further reduced from 0.6
+          baseSpeedMultiplier = 0.6;   // Further reduced from 0.7
+          baseSpawnRateMultiplier = 0.5; // Further reduced from 0.6
           break;
         case 'normal':
-          enemyManager.healthMultiplier = 1.0;
-          enemyManager.speedMultiplier = 1.0;
-          enemyManager.spawnRateMultiplier = 1.0;
+          baseHealthMultiplier = 0.7;  // Further reduced from 0.8
+          baseSpeedMultiplier = 0.75;  // Further reduced from 0.85
+          baseSpawnRateMultiplier = 0.7; // Further reduced from 0.8
           break;
         case 'hard':
-          enemyManager.healthMultiplier = 1.3;
-          enemyManager.speedMultiplier = 1.2;
-          enemyManager.spawnRateMultiplier = 1.3;
+          baseHealthMultiplier = 0.9;  // Further reduced from 1.1
+          baseSpeedMultiplier = 0.9;   // Further reduced from 1.0
+          baseSpawnRateMultiplier = 0.9; // Further reduced from 1.1
           break;
         case 'nightmare':
-          enemyManager.healthMultiplier = 2.0;
-          enemyManager.speedMultiplier = 1.5;
-          enemyManager.spawnRateMultiplier = 1.7;
+          baseHealthMultiplier = 1.2;  // Further reduced from 1.5
+          baseSpeedMultiplier = 1.1;   // Further reduced from 1.3
+          baseSpawnRateMultiplier = 1.2; // Further reduced from 1.4
           break;
       }
+      
+      // Additional reduction for mobile devices
+      if (isMobile) {
+        // Mobile devices get an additional 20% reduction to compensate for touch controls
+        baseHealthMultiplier *= 0.8;
+        baseSpeedMultiplier *= 0.7;  // Larger speed reduction for mobile (30%)
+        baseSpawnRateMultiplier *= 0.7; // 30% fewer zombies on mobile
+        
+        console.log("Applied mobile difficulty reduction");
+      }
+      
+      // Apply the final multipliers
+      enemyManager.healthMultiplier = baseHealthMultiplier;
+      enemyManager.speedMultiplier = baseSpeedMultiplier;
+      enemyManager.spawnRateMultiplier = baseSpawnRateMultiplier;
+      
+      // Save base values for later reference
+      enemyManager.baseMaxEnemies = isMobile ? 3 : 5; // Reduced from 5/7 to make game more manageable
       
       console.log(`Difficulty set to ${this.difficulty} with multipliers:`, {
         health: enemyManager.healthMultiplier,
@@ -220,12 +260,43 @@ export class Engine {
   /**
    * Animation loop
    */
-  animate() {
-    requestAnimationFrame(this.animate.bind(this));
+  animate(timestamp) {
+    requestAnimationFrame(this.animate);
+    
+    // Frame limiting for better performance on mobile
+    if (this.isMobileOptimized) {
+      // Skip frames to maintain target FPS
+      const elapsed = timestamp - this.lastFrameTime;
+      if (elapsed < this.targetFrameTime * 0.98) {
+        return; // Skip this frame
+      }
+      
+      // Update FPS counter every second
+      this.frameCount++;
+      if (timestamp - this.lastFPSUpdate > 1000) {
+        this.currentFPS = Math.round((this.frameCount * 1000) / (timestamp - this.lastFPSUpdate));
+        this.lastFPSUpdate = timestamp;
+        this.frameCount = 0;
+        
+        // Adjust target FPS based on performance
+        if (this.currentFPS < 30 && this.targetFPS > 30) {
+          // Lower target FPS if device is struggling
+          console.log("Lowering target FPS for better performance");
+          this.targetFPS = 30;
+          this.targetFrameTime = 1000 / this.targetFPS;
+        }
+      }
+      
+      this.lastFrameTime = timestamp;
+    }
     
     // Calculate time delta for consistent animations
     const now = performance.now();
     this.delta = (now - this.then) / 1000;
+    
+    // Clamp delta to avoid huge jumps after tab switching or significant lag
+    this.delta = Math.min(this.delta, 0.1);
+    
     this.then = now;
     
     // Only update game logic if the game has started and is not paused
@@ -330,11 +401,13 @@ export class Engine {
         this.scene.room.enemyManager.init();
       }
       
-      // Start spawning enemies (with a short delay) only if we're not in network hosting mode
-      // or if we've explicitly been told to start by the NetworkManager
+      // Use the same approach as restartGame to ensure consistent round numbering
       setTimeout(() => {
-        if (typeof this.scene.room.enemyManager.startNextRound === 'function') {
-          this.scene.room.enemyManager.startNextRound();
+        // Make sure we're still in an active game
+        if (this.isGameStarted && !this.isGameOver) {
+          // Enable spawning instead of directly starting the next round
+          // This ensures the game always starts at round 1
+          this.scene.room.enemyManager.toggleSpawning(true);
         }
       }, 5000);
     }
@@ -353,28 +426,22 @@ export class Engine {
    */
   showMobileControlsIfNeeded() {
     if (this.isMobileDevice() && this.isGameStarted && !this.isPaused && !this.isGameOver) {
-      console.log("Showing mobile controls");
-      
-      // If mobileControls is not initialized yet, try to initialize it now
-      if (!this.mobileControls) {
-        console.log("Mobile controls not initialized yet, attempting to initialize now");
+      if (this.mobileControls) {
+        console.log("Showing mobile controls");
+        this.mobileControls.show();
+      } else {
+        console.log("Mobile controls not yet initialized, setting up...");
+        // If we're mobile but controls aren't initialized yet, try to initialize them
         import('../controls/MobileControls.js').then(module => {
           const MobileControls = module.MobileControls;
           this.mobileControls = new MobileControls(this.controls);
-          this.controls.mobileControls = this.mobileControls;
-          
-          // Now show the controls
-          if (this.mobileControls) {
-            this.mobileControls.show();
-            console.log("Mobile controls initialized and shown");
-          }
+          this.mobileControls.gameEngine = this;
+          // Show controls immediately
+          this.mobileControls.show();
+          console.log("Mobile controls initialized and shown");
         }).catch(error => {
-          console.error("Failed to initialize mobile controls:", error);
+          console.error("Failed to load mobile controls:", error);
         });
-      } else {
-        // Controls already initialized, just show them
-        this.mobileControls.show();
-        console.log("Mobile controls shown");
       }
     }
   }
@@ -383,10 +450,27 @@ export class Engine {
    * Hide mobile controls
    */
   hideMobileControls() {
-    console.log("Hiding mobile controls");
     if (this.mobileControls) {
+      console.log("Hiding mobile controls");
       this.mobileControls.hide();
-      console.log("Mobile controls hidden");
+    }
+  }
+  
+  /**
+   * Toggle mobile controls (show/hide)
+   */
+  toggleMobileControls() {
+    if (!this.isMobileDevice()) return;
+    
+    if (this.mobileControls) {
+      if (this.mobileControls.isActive) {
+        this.hideMobileControls();
+      } else {
+        this.mobileControls.show();
+      }
+    } else {
+      // Initialize if not available
+      this.showMobileControlsIfNeeded();
     }
   }
 
@@ -580,13 +664,7 @@ export class Engine {
     // Prevent pointer lock
     menuButton.addEventListener('mousedown', (e) => e.stopPropagation());
     
-    // Touch handling for menu button
-    menuButton.addEventListener('touchstart', (e) => {
-      e.stopPropagation();
-      menuButton.style.transform = 'scale(1.05)';
-      menuButton.style.boxShadow = '0 0 10px #555555';
-    }, { passive: false });
-    
+    // Touch handling for button
     menuButton.addEventListener('touchend', (e) => {
       e.stopPropagation();
       menuButton.style.transform = 'scale(1)';
@@ -595,8 +673,16 @@ export class Engine {
       // Remove game over screen
       document.body.removeChild(gameOverContainer);
       
-      // Reset game state and show main menu
-      this.showMainMenu();
+      // Use our comprehensive reset method
+      this.resetGameState();
+      
+      // Show the start menu
+      if (this.startMenu) {
+        this.startMenu.show();
+      } else {
+        // Fallback to the custom main menu
+        this.showMainMenu();
+      }
     }, { passive: false });
     
     // Return to main menu when clicked
@@ -607,8 +693,16 @@ export class Engine {
       // Remove game over screen
       document.body.removeChild(gameOverContainer);
       
-      // Reset game state and show main menu
-      this.showMainMenu();
+      // Use our comprehensive reset method
+      this.resetGameState();
+      
+      // Show the start menu
+      if (this.startMenu) {
+        this.startMenu.show();
+      } else {
+        // Fallback to the custom main menu
+        this.showMainMenu();
+      }
     });
     
     // Add buttons to container
@@ -634,6 +728,12 @@ export class Engine {
     const gameOverMenu = document.getElementById('game-over-menu');
     if (gameOverMenu) {
       document.body.removeChild(gameOverMenu);
+    }
+    
+    // Remove pause menu if it exists
+    const pauseMenu = document.getElementById('pause-menu');
+    if (pauseMenu) {
+      document.body.removeChild(pauseMenu);
     }
     
     // Reset game state flags
@@ -677,6 +777,9 @@ export class Engine {
         if (typeof this.scene.room.enemyManager.clearEnemies === 'function') {
           this.scene.room.enemyManager.clearEnemies();
         }
+        
+        // Explicitly unpause the enemy manager
+        this.scene.room.enemyManager.setPaused(false);
         
         // Disable spawning
         this.scene.room.enemyManager.toggleSpawning(false);
@@ -970,14 +1073,31 @@ export class Engine {
    * @param {KeyboardEvent} event 
    */
   handleKeyDown(event) {
-    // Only handle Escape if the game is active and not over
-    if (event.code === 'Escape' && this.isGameStarted && !this.isGameOver) {
-      // Prevent default behavior (which exits pointer lock)
+    // Use Tab key for pause menu instead of Escape
+    if (event.code === 'Tab' && this.isGameStarted && !this.isGameOver) {
+      // Prevent default tab behavior (which would change focus)
       event.preventDefault();
       event.stopPropagation();
       
-      // Toggle pause state
-      this.togglePause();
+      // If not already paused, show the pause menu immediately
+      if (!this.isPaused) {
+        this.isPaused = true;
+        
+        // Show pause menu before anything else
+        this.showPauseMenu();
+        
+        // Pause enemies
+        if (this.scene && this.scene.room && this.scene.room.enemyManager) {
+          this.scene.room.enemyManager.setPaused(true);
+        }
+        
+        // Unlock pointer last
+        this.unlockPointer();
+      } else {
+        // If already paused, resume
+        this.isPaused = false;
+        this.resumeGame();
+      }
     }
   }
 
@@ -985,12 +1105,24 @@ export class Engine {
    * Toggle game pause state
    */
   togglePause() {
-    this.isPaused = !this.isPaused;
-    
+    // If already paused, resume the game
     if (this.isPaused) {
-      this.pauseGame();
-    } else {
+      this.isPaused = false;
       this.resumeGame();
+    } else {
+      // Otherwise pause the game
+      this.isPaused = true;
+      
+      // Direct call to show the menu first, then pause game systems
+      this.showPauseMenu();
+      
+      // Pause enemies
+      if (this.scene && this.scene.room && this.scene.room.enemyManager) {
+        this.scene.room.enemyManager.setPaused(true);
+      }
+      
+      // Unlock pointer last
+      this.unlockPointer();
     }
   }
   
@@ -1000,16 +1132,16 @@ export class Engine {
   pauseGame() {
     console.log("Game paused");
     
-    // Unlock pointer
-    this.unlockPointer();
+    // Create and show pause menu first
+    this.showPauseMenu();
     
     // Pause enemies
-    if (this.scene.room && this.scene.room.enemyManager) {
+    if (this.scene && this.scene.room && this.scene.room.enemyManager) {
       this.scene.room.enemyManager.setPaused(true);
     }
     
-    // Show pause menu
-    this.showPauseMenu();
+    // Unlock pointer last (after menu is already shown)
+    this.unlockPointer();
   }
   
   /**
@@ -1103,9 +1235,17 @@ export class Engine {
     title.style.color = '#33aaff';
     title.style.fontSize = '48px';
     title.style.textShadow = '0 0 10px #33aaff, 0 0 20px #33aaff';
-    title.style.marginBottom = '40px';
+    title.style.marginBottom = '20px';
     title.style.fontFamily = 'Impact, fantasy';
     title.style.letterSpacing = '2px';
+    
+    // Add keyboard shortcut hint
+    const keyboardHint = document.createElement('div');
+    keyboardHint.textContent = 'Press TAB to resume';
+    keyboardHint.style.color = '#cccccc';
+    keyboardHint.style.fontSize = '16px';
+    keyboardHint.style.marginBottom = '30px';
+    keyboardHint.style.fontFamily = 'monospace, Courier';
     
     // Buttons container
     const buttonContainer = document.createElement('div');
@@ -1208,11 +1348,16 @@ export class Engine {
       // Remove pause menu
       document.body.removeChild(pauseContainer);
       
-      // Reset pause state
-      this.isPaused = false;
+      // Use our comprehensive reset method
+      this.resetGameState();
       
-      // Reset game state and show main menu
-      this.showMainMenu();
+      // Show the start menu
+      if (this.startMenu) {
+        this.startMenu.show();
+      } else {
+        // Fallback to the custom main menu
+        this.showMainMenu();
+      }
     }, { passive: false });
     
     // Return to main menu when clicked
@@ -1223,11 +1368,16 @@ export class Engine {
       // Remove pause menu
       document.body.removeChild(pauseContainer);
       
-      // Reset pause state
-      this.isPaused = false;
+      // Use our comprehensive reset method
+      this.resetGameState();
       
-      // Reset game state and show main menu
-      this.showMainMenu();
+      // Show the start menu
+      if (this.startMenu) {
+        this.startMenu.show();
+      } else {
+        // Fallback to the custom main menu
+        this.showMainMenu();
+      }
     });
     
     // Add buttons to container
@@ -1236,6 +1386,7 @@ export class Engine {
     
     // Add elements to pause container
     pauseContainer.appendChild(title);
+    pauseContainer.appendChild(keyboardHint);
     pauseContainer.appendChild(buttonContainer);
     
     // Add to the document
@@ -1287,6 +1438,8 @@ export class Engine {
    * Start a single player game
    */
   startSinglePlayerGame() {
+    console.log("Starting single player game");
+    
     // Reset game state
     this.isGameStarted = true;
     this.isPaused = false;
@@ -1329,22 +1482,90 @@ export class Engine {
           this.scene.room.enemyManager.clearEnemies();
         }
         
+        // CRITICAL FIX: Explicitly unpause the enemy manager
+        // This ensures enemies aren't frozen when coming from pause menu
+        this.scene.room.enemyManager.setPaused(false);
+        
         // Enable spawning
         this.scene.room.enemyManager.toggleSpawning(true);
       }
     }
     
-    // Lock pointer to game
-    if (this.controls) {
+    // Show control hints to the player
+    this.showControlHints();
+    
+    // Lock pointer to game if not on mobile
+    if (!this.isMobileDevice() && this.controls) {
       this.controls.lockPointer();
     }
     
-    // Show mobile controls if on mobile
-    if (this.mobileControls && this.mobileControls.isMobile) {
-      this.mobileControls.showControls();
+    // Show mobile controls if on mobile - with a short delay to ensure initialization
+    if (this.isMobileDevice()) {
+      setTimeout(() => {
+        console.log("Initializing mobile controls with delay");
+        if (this.mobileControls) {
+          console.log("Mobile controls found, showing");
+          // Make sure the player controls have a reference to the mobile controls
+          this.controls.mobileControls = this.mobileControls;
+          this.mobileControls.show();
+        } else {
+          console.log("Mobile controls not yet initialized, creating with delay");
+          // If we're mobile but controls aren't initialized yet, try to initialize them
+          import('../controls/MobileControls.js').then(module => {
+            const MobileControls = module.MobileControls;
+            this.mobileControls = new MobileControls(this.controls);
+            this.mobileControls.gameEngine = this;
+            
+            // Make sure the player controls have a reference to the mobile controls
+            this.controls.mobileControls = this.mobileControls;
+            
+            // Show controls immediately
+            this.mobileControls.show();
+            
+            console.log("Mobile controls initialized and shown for game after delay");
+          }).catch(error => {
+            console.error("Failed to load mobile controls for game:", error);
+          });
+        }
+      }, 1000); // 1-second delay to ensure proper initialization
     }
   }
   
+  /**
+   * Show control hints to the player
+   */
+  showControlHints() {
+    // Create a control hints container
+    const hintsContainer = document.createElement('div');
+    hintsContainer.id = 'control-hints';
+    hintsContainer.style.position = 'absolute';
+    hintsContainer.style.bottom = '20px';
+    hintsContainer.style.left = '50%';
+    hintsContainer.style.transform = 'translateX(-50%)';
+    hintsContainer.style.color = 'white';
+    hintsContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    hintsContainer.style.padding = '10px 20px';
+    hintsContainer.style.borderRadius = '5px';
+    hintsContainer.style.fontFamily = 'monospace, Courier';
+    hintsContainer.style.fontSize = '14px';
+    hintsContainer.style.textAlign = 'center';
+    hintsContainer.style.zIndex = '1000';
+    hintsContainer.style.pointerEvents = 'none'; // Don't interfere with mouse events
+    
+    // Set the hint text
+    hintsContainer.textContent = 'Press TAB to pause/resume game';
+    
+    // Add to the document
+    document.body.appendChild(hintsContainer);
+    
+    // Remove hint after 5 seconds
+    setTimeout(() => {
+      if (document.body.contains(hintsContainer)) {
+        document.body.removeChild(hintsContainer);
+      }
+    }, 5000);
+  }
+
   /**
    * Show multiplayer options
    */
@@ -1656,5 +1877,82 @@ export class Engine {
     
     // Add to the document
     document.body.appendChild(multiplayerContainer);
+  }
+
+  /**
+   * Reset all game state when returning to the menu
+   */
+  resetGameState() {
+    console.log("Performing complete game state reset");
+    
+    // Reset game state flags
+    this.isGameStarted = false;
+    this.isPaused = false;
+    this.isGameOver = false;
+    
+    // Reset player if it exists
+    if (this.controls) {
+      // Reset player position to starting position
+      if (typeof this.controls.resetPosition === 'function') {
+        this.controls.resetPosition();
+      }
+      
+      // Reset player health
+      if (typeof this.controls.resetHealth === 'function') {
+        this.controls.resetHealth();
+      }
+      
+      // Reset player score
+      if (typeof this.controls.resetScore === 'function') {
+        this.controls.resetScore();
+      }
+      
+      // Reset player weapons
+      if (typeof this.controls.resetWeapons === 'function') {
+        this.controls.resetWeapons();
+      }
+      
+      // Disable controls while in menu
+      this.controls.enabled = false;
+    }
+    
+    // Reset room and enemies
+    if (this.scene && this.scene.room) {
+      // Reset windows
+      if (typeof this.scene.room.resetWindows === 'function') {
+        this.scene.room.resetWindows();
+      }
+      
+      // Reset enemy manager
+      if (this.scene.room.enemyManager) {
+        // Clear all existing enemies
+        if (typeof this.scene.room.enemyManager.clearEnemies === 'function') {
+          this.scene.room.enemyManager.clearEnemies();
+        }
+        
+        // Explicitly unpause the enemy manager to ensure it doesn't stay paused
+        // when starting a new game later
+        this.scene.room.enemyManager.setPaused(false);
+        
+        // Disable enemy spawning
+        this.scene.room.enemyManager.toggleSpawning(false);
+        
+        // Reset enemy manager round counter if possible
+        if (typeof this.scene.room.enemyManager.resetRounds === 'function') {
+          this.scene.room.enemyManager.resetRounds();
+        } else {
+          // Manually reset round properties if method doesn't exist
+          this.scene.room.enemyManager.currentRound = 0;
+          this.scene.room.enemyManager.zombiesRemaining = 0;
+          this.scene.room.enemyManager.zombiesSpawned = 0;
+          this.scene.room.enemyManager.roundActive = false;
+        }
+      }
+      
+      // Reset mystery box if it exists
+      if (this.scene.room.mysteryBox && typeof this.scene.room.mysteryBox.reset === 'function') {
+        this.scene.room.mysteryBox.reset();
+      }
+    }
   }
 } 

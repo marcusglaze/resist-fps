@@ -11,7 +11,7 @@ export class StartMenu {
     this.doomMode = true; // Default to doom mode
     this.soundVolume = 0.8; // Default sound volume
     this.musicVolume = 0.5; // Default music volume
-    this.difficultyLevel = 'normal'; // Default difficulty
+    this.difficultyLevel = 'very_easy'; // Default to very_easy difficulty for better initial experience
     this.engine = engine; // Store reference to the engine
     this.gameMode = 'singleplayer'; // Default game mode
   }
@@ -64,22 +64,14 @@ export class StartMenu {
 
     // Create title
     const title = document.createElement('h1');
-    title.textContent = 'RESIST: MATRIX';
+    title.textContent = 'RESIST';
     title.style.color = '#ff3333';
-    title.style.fontSize = '48px';
+    title.style.fontSize = '64px';
     title.style.textShadow = '0 0 10px #ff3333, 0 0 20px #ff3333';
-    title.style.marginBottom = '30px';
+    title.style.marginBottom = '50px';
     title.style.fontFamily = 'Impact, fantasy';
     title.style.letterSpacing = '2px';
     
-    // Subtitle
-    const subtitle = document.createElement('h2');
-    subtitle.textContent = 'Zombie Window Defense';
-    subtitle.style.color = '#aaaaaa';
-    subtitle.style.fontSize = '24px';
-    subtitle.style.marginBottom = '40px';
-    subtitle.style.fontFamily = 'monospace';
-
     // Create menu buttons container
     const menuOptions = document.createElement('div');
     menuOptions.style.display = 'flex';
@@ -133,92 +125,23 @@ export class StartMenu {
       return button;
     };
 
-    // Create game mode container
-    const gameModeContainer = document.createElement('div');
-    gameModeContainer.style.display = 'flex';
-    gameModeContainer.style.flexDirection = 'column';
-    gameModeContainer.style.alignItems = 'center';
-    gameModeContainer.style.marginBottom = '20px';
-    
-    // Game mode title
-    const gameModeTitle = document.createElement('h3');
-    gameModeTitle.textContent = 'GAME MODE';
-    gameModeTitle.style.color = '#dddddd';
-    gameModeTitle.style.marginBottom = '15px';
-    
-    // Game mode buttons
-    const gameModeButtons = document.createElement('div');
-    gameModeButtons.style.display = 'flex';
-    gameModeButtons.style.gap = '10px';
-    
-    const singlePlayerButton = document.createElement('button');
-    singlePlayerButton.textContent = 'SINGLE PLAYER';
-    singlePlayerButton.style.padding = '10px 15px';
-    singlePlayerButton.style.backgroundColor = this.gameMode === 'singleplayer' ? '#ff3333' : '#333333';
-    singlePlayerButton.style.color = '#ffffff';
-    singlePlayerButton.style.border = 'none';
-    singlePlayerButton.style.borderRadius = '3px';
-    singlePlayerButton.style.cursor = 'pointer';
-    singlePlayerButton.style.fontFamily = 'monospace';
-    singlePlayerButton.style.fontWeight = 'bold';
-    
-    const multiplayerButton = document.createElement('button');
-    multiplayerButton.textContent = 'MULTIPLAYER';
-    multiplayerButton.style.padding = '10px 15px';
-    multiplayerButton.style.backgroundColor = this.gameMode !== 'singleplayer' ? '#ff3333' : '#333333';
-    multiplayerButton.style.color = '#ffffff';
-    multiplayerButton.style.border = 'none';
-    multiplayerButton.style.borderRadius = '3px';
-    multiplayerButton.style.cursor = 'pointer';
-    multiplayerButton.style.fontFamily = 'monospace';
-    multiplayerButton.style.fontWeight = 'bold';
-    
-    singlePlayerButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.gameMode = 'singleplayer';
-      singlePlayerButton.style.backgroundColor = '#ff3333';
-      multiplayerButton.style.backgroundColor = '#333333';
-      startButton.textContent = 'START GAME';
-      hostButton.style.display = 'none';
-      joinButton.style.display = 'none';
-    });
-    
-    multiplayerButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.gameMode = 'multiplayer';
-      singlePlayerButton.style.backgroundColor = '#333333';
-      multiplayerButton.style.backgroundColor = '#ff3333';
-      startButton.textContent = 'MULTIPLAYER OPTIONS';
-      hostButton.style.display = 'block';
-      joinButton.style.display = 'block';
-    });
-    
-    gameModeButtons.appendChild(singlePlayerButton);
-    gameModeButtons.appendChild(multiplayerButton);
-    
-    gameModeContainer.appendChild(gameModeTitle);
-    gameModeContainer.appendChild(gameModeButtons);
-
-    // Single Player button
-    const startButton = createButton('START GAME', () => {
-      if (this.gameMode === 'singleplayer') {
-        this.hide();
-        if (this.onStartGame) {
-          // Start single player game
-          this.engine.networkManager.startSingleplayer();
-        }
-      } else {
-        // Toggle visibility of multiplayer options
-        if (hostButton.style.display === 'none') {
-          hostButton.style.display = 'block';
-          joinButton.style.display = 'block';
-        } else {
-          hostButton.style.display = 'none';
-          joinButton.style.display = 'none';
-        }
+    // Singleplayer button
+    const singleplayerButton = createButton('SINGLEPLAYER', () => {
+      this.hide();
+      if (this.onStartGame) {
+        // Start single player game
+        this.gameMode = 'singleplayer';
+        this.engine.networkManager.startSingleplayer();
       }
     }, true);
 
+    // Multiplayer button
+    const multiplayerButton = createButton('MULTIPLAYER', () => {
+      // Switch to multiplayer menu
+      this.gameMode = 'multiplayer';
+      this.showMultiplayerMenu();
+    });
+    
     // Host Game button
     const hostButton = createButton('HOST GAME', () => {
       this.hide();
@@ -226,7 +149,6 @@ export class StartMenu {
         this.engine.networkManager.startHosting();
       }
     });
-    hostButton.style.display = 'none';
     hostButton.style.backgroundColor = '#4CAF50'; // Green color for host button
 
     // Join Game button
@@ -235,7 +157,6 @@ export class StartMenu {
         this.engine.networkManager.joinGame();
       }
     });
-    joinButton.style.display = 'none';
     joinButton.style.backgroundColor = '#2196F3'; // Blue color for join button
 
     // Settings button
@@ -248,24 +169,37 @@ export class StartMenu {
       this.showInstructions();
     });
 
-    // Credits button
-    const creditsButton = createButton('CREDITS', () => {
-      this.showCredits();
+    // Store references to main menu items
+    this.mainMenuOptions = [singleplayerButton, multiplayerButton, settingsButton, instructionsButton];
+    
+    // Store references to multiplayer menu options
+    this.multiplayerOptions = [hostButton, joinButton];
+    
+    // Create back button for multiplayer menu
+    const backButton = createButton('BACK', () => {
+      this.showMainMenu();
     });
-
-    // Assemble menu
-    menuOptions.appendChild(gameModeContainer);
-    menuOptions.appendChild(startButton);
+    backButton.style.backgroundColor = '#555555';
+    backButton.style.marginTop = '20px';
+    this.backButton = backButton;
+    
+    // Add elements to container
+    this.container.appendChild(title);
+    this.container.appendChild(menuOptions);
+    
+    // Initially hide multiplayer options
+    hostButton.style.display = 'none';
+    joinButton.style.display = 'none';
+    backButton.style.display = 'none';
+    
+    // Add all buttons to the menu
+    menuOptions.appendChild(singleplayerButton);
+    menuOptions.appendChild(multiplayerButton);
     menuOptions.appendChild(hostButton);
     menuOptions.appendChild(joinButton);
     menuOptions.appendChild(settingsButton);
     menuOptions.appendChild(instructionsButton);
-    menuOptions.appendChild(creditsButton);
-
-    // Add elements to container
-    this.container.appendChild(title);
-    this.container.appendChild(subtitle);
-    this.container.appendChild(menuOptions);
+    menuOptions.appendChild(backButton);
 
     // Add to DOM
     document.body.appendChild(this.container);
@@ -395,11 +329,21 @@ export class StartMenu {
     difficultySelect.style.color = '#ffffff';
     difficultySelect.style.border = '1px solid #555555';
     
-    const difficulties = ['easy', 'normal', 'hard', 'nightmare'];
+    const difficulties = ['very_easy', 'easy', 'normal', 'hard', 'nightmare'];
     difficulties.forEach(diff => {
       const option = document.createElement('option');
       option.value = diff;
-      option.textContent = diff.charAt(0).toUpperCase() + diff.slice(1);
+      
+      // Format the display text
+      let displayText;
+      if (diff === 'very_easy') {
+        displayText = 'Very Easy';
+      } else {
+        displayText = diff.charAt(0).toUpperCase() + diff.slice(1);
+      }
+      
+      option.textContent = displayText;
+      
       if (diff === this.difficultyLevel) {
         option.selected = true;
       }
@@ -555,85 +499,6 @@ export class StartMenu {
   }
 
   /**
-   * Show the credits panel
-   */
-  showCredits() {
-    const creditsPanel = document.createElement('div');
-    creditsPanel.style.position = 'absolute';
-    creditsPanel.style.top = '50%';
-    creditsPanel.style.left = '50%';
-    creditsPanel.style.transform = 'translate(-50%, -50%)';
-    creditsPanel.style.backgroundColor = '#222222';
-    creditsPanel.style.padding = '30px';
-    creditsPanel.style.borderRadius = '10px';
-    creditsPanel.style.boxShadow = '0 0 20px rgba(255, 51, 51, 0.5)';
-    creditsPanel.style.zIndex = '1001';
-    creditsPanel.style.width = '500px';
-    creditsPanel.style.color = '#ffffff';
-    
-    // Prevent pointer lock
-    creditsPanel.addEventListener('mousedown', (e) => {
-      e.stopPropagation();
-    });
-    creditsPanel.addEventListener('click', (e) => {
-      e.stopPropagation();
-    });
-    
-    // Credits title
-    const title = document.createElement('h2');
-    title.textContent = 'CREDITS';
-    title.style.color = '#ff3333';
-    title.style.marginBottom = '20px';
-    title.style.textAlign = 'center';
-    
-    // Credits content
-    const content = document.createElement('div');
-    content.style.marginBottom = '25px';
-    content.style.lineHeight = '1.6';
-    content.style.textAlign = 'center';
-    
-    content.innerHTML = `
-      <p><b>RESIST: MATRIX</b></p>
-      <p>A Zombie Window Defense Game</p>
-      <br>
-      <p><b>DEVELOPMENT</b></p>
-      <p>Created by: Marcus Glaze</p>
-      <br>
-      <p><b>TECHNOLOGIES</b></p>
-      <p>THREE.js - 3D Graphics Engine</p>
-      <p>JavaScript - Programming</p>
-      <br>
-      <p><b>SPECIAL THANKS</b></p>
-      <p>To all zombie apocalypse survivors</p>
-      <br>
-      <p>© 2023 All Rights Reserved</p>
-    `;
-    
-    // Close button in credits panel
-    const closeButton = document.createElement('button');
-    closeButton.textContent = 'CLOSE';
-    closeButton.style.padding = '10px 20px';
-    closeButton.style.backgroundColor = '#ff3333';
-    closeButton.style.color = '#ffffff';
-    closeButton.style.border = 'none';
-    closeButton.style.borderRadius = '5px';
-    closeButton.style.cursor = 'pointer';
-    closeButton.style.display = 'block';
-    closeButton.style.margin = '0 auto';
-    closeButton.addEventListener('mousedown', (e) => e.stopPropagation());
-    closeButton.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      document.body.removeChild(creditsPanel);
-    };
-    
-    creditsPanel.appendChild(title);
-    creditsPanel.appendChild(content);
-    creditsPanel.appendChild(closeButton);
-    document.body.appendChild(creditsPanel);
-  }
-
-  /**
    * Get the current settings
    * @returns {Object} Current settings
    */
@@ -680,5 +545,41 @@ export class StartMenu {
       document.body.removeChild(this.container);
       this.container = null;
     }
+  }
+
+  /**
+   * Show the main menu options
+   */
+  showMainMenu() {
+    // Show main menu options
+    this.mainMenuOptions.forEach(option => {
+      option.style.display = 'block';
+    });
+    
+    // Hide multiplayer options
+    this.multiplayerOptions.forEach(option => {
+      option.style.display = 'none';
+    });
+    
+    // Hide back button
+    this.backButton.style.display = 'none';
+  }
+  
+  /**
+   * Show the multiplayer menu options
+   */
+  showMultiplayerMenu() {
+    // Hide main menu options
+    this.mainMenuOptions.forEach(option => {
+      option.style.display = 'none';
+    });
+    
+    // Show multiplayer options
+    this.multiplayerOptions.forEach(option => {
+      option.style.display = 'block';
+    });
+    
+    // Show back button
+    this.backButton.style.display = 'block';
   }
 } 

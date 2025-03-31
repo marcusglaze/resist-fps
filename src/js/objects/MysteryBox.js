@@ -7,7 +7,7 @@ import { Weapon } from '../weapons/Weapon';
 export class MysteryBox {
   constructor() {
     // Mystery box properties
-    this.cost = 1000; // Reduced from 10000 to 1000 for easier testing
+    this.cost = 50000; // Increased from 1000 to 50000 to make the game more challenging
     this.isActive = true;
     
     // Visual elements

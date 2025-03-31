@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import nipplejs from 'nipplejs';
 
 /**
  * Mobile touch controls for the game
@@ -10,18 +11,31 @@ export class MobileControls {
     this.gameEngine = playerControls.gameEngine;
     this.isMobile = this.detectMobileDevice();
     this.touchControls = {};
-    this.joystickPosition = { x: 0, y: 0 };
-    this.joystickRadius = 50;
-    this.isDraggingJoystick = false;
-    this.joystickStartPosition = { x: 0, y: 0 };
-    this.isAiming = false;
-    this.lastTouchPosition = { x: 0, y: 0 };
-    this.touchStartTime = 0;
     this.isActive = false;
+    this.isInitialized = false;
+    this.joystickManager = null;
+    
+    // Sensitivity settings for aim control
+    this.aimSensitivity = {
+      horizontal: 0.008, // Increased from 0.004 (was 0.002 * 2.0)
+      vertical: 0.007    // Slightly lower than horizontal for better control
+    };
+    
+    // Touch tracking for aim control - supporting multiple aim touches
+    this.touchTracking = {
+      aimTouches: {}, // Map of touch IDs to their tracking data
+      activeTouchCount: 0,
+      // Add throttling for performance optimization
+      lastProcessTime: 0,
+      throttleInterval: 10 // Process touch moves at most every 10ms
+    };
+    
+    console.log("MobileControls constructor called, isMobile:", this.isMobile);
     
     // Initialize if on mobile
     if (this.isMobile) {
-      this.init();
+      // Don't initialize immediately - wait until show() is called
+      // This avoids creating DOM elements prematurely
     }
   }
   
@@ -30,107 +44,131 @@ export class MobileControls {
    * @returns {boolean} True if mobile device is detected
    */
   detectMobileDevice() {
-    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
            (window.innerWidth <= 800 && window.innerHeight <= 900);
+    console.log("Mobile device detection:", isMobile, window.innerWidth, window.innerHeight);
+    return isMobile;
   }
   
   /**
    * Initialize mobile controls
    */
   init() {
+    if (this.isInitialized) {
+      console.log("Mobile controls already initialized");
+      return;
+    }
+    
     console.log("Initializing mobile controls");
+    
+    // Remove any existing controls (in case of reinit)
+    this.removeExistingControls();
     
     // Create control elements
     this.createJoystick();
     this.createActionButtons();
     
-    // Add touch event listeners
-    this.addTouchEventListeners();
+    // Add document-level touch event listeners for aiming
+    this.setupGlobalTouchHandling();
     
     // Flag for initialization
     this.isInitialized = true;
+    
+    console.log("Mobile controls initialization complete");
   }
   
   /**
-   * Create virtual joystick for movement
+   * Remove any existing control elements from the DOM
+   */
+  removeExistingControls() {
+    // Remove joystick container if it exists
+    const existingJoystick = document.getElementById('joystick-zone');
+    if (existingJoystick) {
+      existingJoystick.remove();
+    }
+    
+    // Remove action buttons container if it exists
+    const existingButtons = document.querySelector('.action-buttons-container');
+    if (existingButtons) {
+      existingButtons.remove();
+    }
+    
+    // Remove any individual buttons that might be outside the container
+    document.querySelectorAll('.mobile-control-button').forEach(btn => btn.remove());
+    
+    // Remove the global aim touch handlers
+    this.removeGlobalTouchHandling();
+    
+    // Destroy nipplejs instance if it exists
+    if (this.joystickManager) {
+      this.joystickManager.destroy();
+      this.joystickManager = null;
+    }
+  }
+  
+  /**
+   * Create virtual joystick for movement using nipplejs
    */
   createJoystick() {
+    console.log("Creating joystick with nipplejs");
+    
     // Create joystick container
     const joystickContainer = document.createElement('div');
-    joystickContainer.className = 'joystick-container';
-    joystickContainer.style.position = 'absolute';
-    joystickContainer.style.left = '20px';
-    joystickContainer.style.bottom = '20px';
-    joystickContainer.style.width = '120px';
-    joystickContainer.style.height = '120px';
-    joystickContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.3)';
-    joystickContainer.style.borderRadius = '60px';
-    joystickContainer.style.zIndex = '1000';
-    joystickContainer.style.touchAction = 'none';
-    
-    // Create joystick stick
-    const joystick = document.createElement('div');
-    joystick.className = 'joystick';
-    joystick.style.position = 'absolute';
-    joystick.style.left = '35px';
-    joystick.style.top = '35px';
-    joystick.style.width = '50px';
-    joystick.style.height = '50px';
-    joystick.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
-    joystick.style.borderRadius = '25px';
-    joystick.style.zIndex = '1001';
-    joystick.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.5)';
-    joystick.style.touchAction = 'none';
-    
-    // Directional indicators
-    const createDirectionalIndicator = (rotation, symbol) => {
-      const indicator = document.createElement('div');
-      indicator.style.position = 'absolute';
-      indicator.style.width = '25px';
-      indicator.style.height = '25px';
-      indicator.style.display = 'flex';
-      indicator.style.justifyContent = 'center';
-      indicator.style.alignItems = 'center';
-      indicator.style.color = 'white';
-      indicator.style.fontSize = '20px';
-      indicator.style.fontWeight = 'bold';
-      indicator.textContent = symbol;
-      
-      // Position based on rotation
-      const radius = 45;
-      const angle = rotation * Math.PI / 180;
-      indicator.style.left = `${60 + radius * Math.cos(angle) - 12.5}px`;
-      indicator.style.top = `${60 + radius * Math.sin(angle) - 12.5}px`;
-      
-      return indicator;
-    };
-    
-    // Add directional indicators
-    joystickContainer.appendChild(createDirectionalIndicator(270, '↑')); // Up
-    joystickContainer.appendChild(createDirectionalIndicator(90, '↓'));  // Down
-    joystickContainer.appendChild(createDirectionalIndicator(180, '←')); // Left
-    joystickContainer.appendChild(createDirectionalIndicator(0, '→'));   // Right
-    
-    // Add joystick to container
-    joystickContainer.appendChild(joystick);
+    joystickContainer.id = 'joystick-zone';
+    joystickContainer.style.position = 'fixed';
+    joystickContainer.style.left = '25px';
+    joystickContainer.style.bottom = '25px';
+    joystickContainer.style.width = '195px';  // Increased from 150px to 195px (30% larger)
+    joystickContainer.style.height = '195px'; // Increased from 150px to 195px (30% larger)
+    joystickContainer.style.zIndex = '2500';
+    joystickContainer.style.borderRadius = '50%';
+    joystickContainer.style.opacity = '0.8';
+    joystickContainer.style.background = 'rgba(50, 50, 50, 0.2)'; // Light background to see the joystick zone
+    joystickContainer.style.border = '1px solid rgba(255, 255, 255, 0.2)'; // Subtle border to see the bounds
+    joystickContainer.dataset.control = 'joystick'; // Add data attribute for identification
     
     // Add to document
     document.body.appendChild(joystickContainer);
     
-    // Store references
+    // Store reference
     this.touchControls.joystickContainer = joystickContainer;
-    this.touchControls.joystick = joystick;
     
-    // Store joystick center position for calculations
-    const rect = joystickContainer.getBoundingClientRect();
-    this.joystickStartPosition = {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2
-    };
-    this.joystickPosition = { 
-      x: this.joystickStartPosition.x, 
-      y: this.joystickStartPosition.y 
-    };
+    try {
+      // Initialize nipplejs
+      this.joystickManager = nipplejs.create({
+        zone: joystickContainer,
+        mode: 'static',
+        position: { left: '97px', bottom: '97px' }, // Adjusted from 75px to 97px to center in the larger container
+        color: 'white',
+        size: 130, // Increased from 100 to 130 (30% larger)
+        restOpacity: 0.8,
+        fadeTime: 100,
+        multitouch: true, // Enable multi-touch for joystick
+        catchDistance: 150 // Added catch distance to improve responsiveness for touches near the joystick
+      });
+      
+      // Add event listeners
+      this.joystickManager.on('move', (evt, data) => {
+        // Calculate movement vector from joystick input
+        if (data.vector) {
+          // Apply movement to player controls
+          if (this.playerControls) {
+            this.playerControls.applyMobileMovement(data.vector.x, -data.vector.y);
+          }
+        }
+      });
+      
+      this.joystickManager.on('end', () => {
+        // Reset movement when joystick is released
+        if (this.playerControls) {
+          this.playerControls.applyMobileMovement(0, 0);
+        }
+      });
+      
+      console.log("Nipplejs joystick created successfully");
+    } catch (error) {
+      console.error("Error creating nipplejs joystick:", error);
+    }
   }
   
   /**
@@ -140,13 +178,14 @@ export class MobileControls {
     // Create action buttons container
     const buttonContainer = document.createElement('div');
     buttonContainer.className = 'action-buttons-container';
-    buttonContainer.style.position = 'absolute';
+    buttonContainer.style.position = 'fixed';
     buttonContainer.style.right = '20px';
     buttonContainer.style.bottom = '20px';
     buttonContainer.style.display = 'flex';
     buttonContainer.style.flexDirection = 'column';
     buttonContainer.style.gap = '15px';
-    buttonContainer.style.zIndex = '1000';
+    buttonContainer.style.zIndex = '2500';
+    buttonContainer.dataset.control = 'buttons'; // Add data attribute for identification
     
     // Create shoot button
     const shootButton = this.createActionButton('SHOOT', '#ff3333');
@@ -161,37 +200,10 @@ export class MobileControls {
     // Create interact button
     const interactButton = this.createActionButton('F', '#33cc33');
     
-    // Create aim button (target icon)
-    const aimButton = this.createActionButton('🎯', 'rgba(255, 255, 255, 0.7)');
-    aimButton.style.position = 'absolute';
-    aimButton.style.right = '120px';
-    aimButton.style.bottom = '80px';
-    
-    // Create run button (sprint icon)
-    const runButton = this.createActionButton('🏃', 'rgba(255, 255, 255, 0.7)');
-    runButton.style.position = 'absolute';
-    runButton.style.left = '150px';
-    runButton.style.bottom = '20px';
-    
-    // Create weapon switch buttons
-    const prevWeaponButton = this.createActionButton('◀', 'rgba(255, 255, 255, 0.7)');
-    prevWeaponButton.style.position = 'absolute';
-    prevWeaponButton.style.right = '150px';
-    prevWeaponButton.style.top = '20px';
-    
-    const nextWeaponButton = this.createActionButton('▶', 'rgba(255, 255, 255, 0.7)');
-    nextWeaponButton.style.position = 'absolute';
-    nextWeaponButton.style.right = '80px';
-    nextWeaponButton.style.top = '20px';
-    
-    // Add buttons to container
+    // Add to container
     buttonContainer.appendChild(shootButton);
     buttonContainer.appendChild(reloadButton);
     buttonContainer.appendChild(interactButton);
-    document.body.appendChild(aimButton);
-    document.body.appendChild(runButton);
-    document.body.appendChild(prevWeaponButton);
-    document.body.appendChild(nextWeaponButton);
     document.body.appendChild(buttonContainer);
     
     // Store references
@@ -199,21 +211,370 @@ export class MobileControls {
     this.touchControls.shootButton = shootButton;
     this.touchControls.reloadButton = reloadButton;
     this.touchControls.interactButton = interactButton;
-    this.touchControls.aimButton = aimButton;
-    this.touchControls.runButton = runButton;
-    this.touchControls.prevWeaponButton = prevWeaponButton;
-    this.touchControls.nextWeaponButton = nextWeaponButton;
+    
+    // Add event listeners for the buttons using multiple event types for better reliability
+    
+    // Shoot button - handle with both touch and mouse events for better reliability
+    const handleShootStart = (event) => {
+    event.preventDefault();
+      event.stopPropagation();
+      
+      // Log for debugging
+      console.log("Shoot button pressed");
+      
+      // Make sure audio is unlocked
+      if (this.playerControls && typeof this.playerControls.unlockAudio === 'function') {
+        this.playerControls.unlockAudio();
+      }
+      
+      if (this.playerControls) {
+        // Set shooting flag
+        this.playerControls.shooting = true;
+        
+        // Also directly call shoot if the method exists
+        if (typeof this.playerControls.shoot === 'function') {
+        this.playerControls.shoot();
+        }
+      }
+    };
+    
+    const handleShootEnd = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      
+      // Log for debugging
+      console.log("Shoot button released");
+      
+      if (this.playerControls) {
+        this.playerControls.shooting = false;
+      }
+    };
+    
+    // Add multiple event types for better mobile compatibility
+    shootButton.addEventListener('touchstart', handleShootStart, { passive: false });
+    shootButton.addEventListener('mousedown', handleShootStart);
+    shootButton.addEventListener('touchend', handleShootEnd, { passive: false });
+    shootButton.addEventListener('mouseup', handleShootEnd);
+    
+    // Reload button - handle with multiple event types
+    const handleReloadStart = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      
+      // Log for debugging
+      console.log("Reload button pressed");
+      
+      // Make sure audio is unlocked
+      if (this.playerControls && typeof this.playerControls.unlockAudio === 'function') {
+        this.playerControls.unlockAudio();
+      }
+      
+      if (this.playerControls) {
+        // If reload method exists, call it directly
+        if (typeof this.playerControls.reload === 'function') {
+          this.playerControls.reload();
+        } else if (this.playerControls.keys) {
+          // Fallback to key press
+          this.playerControls.keys.r = true;
+          
+          // Reset key after a short delay
+          setTimeout(() => {
+            if (this.playerControls && this.playerControls.keys) {
+              this.playerControls.keys.r = false;
+            }
+          }, 100);
+        } else {
+          console.warn("Reload function not available on player controls");
+        }
+      }
+    };
+    
+    // Add multiple event types for better mobile compatibility
+    reloadButton.addEventListener('touchstart', handleReloadStart, { passive: false });
+    reloadButton.addEventListener('mousedown', handleReloadStart);
+    
+    // Interact button - with multiple event types
+    const handleInteractStart = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      
+      // Log for debugging
+      console.log("Interact button pressed");
+      
+      // Make sure audio is unlocked
+      if (this.playerControls && typeof this.playerControls.unlockAudio === 'function') {
+        this.playerControls.unlockAudio();
+      }
+      
+      if (this.playerControls) {
+        if (this.playerControls.keys) {
+          this.playerControls.keys.f = true;
+        }
+        this.playerControls.isInteracting = true;
+      }
+    };
+    
+    const handleInteractEnd = (event) => {
+    event.preventDefault();
+      event.stopPropagation();
+      
+      // Log for debugging
+      console.log("Interact button released");
+      
+      if (this.playerControls) {
+        if (this.playerControls.keys) {
+          this.playerControls.keys.f = false;
+        }
+        this.playerControls.isInteracting = false;
+      }
+    };
+    
+    // Add multiple event types for better mobile compatibility
+    interactButton.addEventListener('touchstart', handleInteractStart, { passive: false });
+    interactButton.addEventListener('mousedown', handleInteractStart);
+    interactButton.addEventListener('touchend', handleInteractEnd, { passive: false });
+    interactButton.addEventListener('mouseup', handleInteractEnd);
+    
+    // Make buttons more visually distinct and touchable on mobile
+    this.makeButtonsMobileReady();
+  }
+  
+  /**
+   * Make buttons more mobile-friendly with better visual feedback
+   */
+  makeButtonsMobileReady() {
+    const buttons = [
+      this.touchControls.shootButton,
+      this.touchControls.reloadButton,
+      this.touchControls.interactButton
+    ];
+    
+    buttons.forEach(button => {
+      if (!button) return;
+      
+      // Add active state visual feedback
+      button.addEventListener('touchstart', () => {
+        button.style.transform = 'scale(0.95)';
+        button.style.opacity = '0.9';
+      });
+      
+      button.addEventListener('touchend', () => {
+        button.style.transform = 'scale(1)';
+        button.style.opacity = '1';
+      });
+      
+      // Add hover effects for visual feedback
+      button.addEventListener('mouseover', () => {
+        button.style.transform = 'scale(1.05)';
+        button.style.opacity = '0.9';
+      });
+      
+      button.addEventListener('mouseout', () => {
+        button.style.transform = 'scale(1)';
+        button.style.opacity = '1';
+      });
+      
+      // Improve touch target size
+      button.style.minWidth = '60px';
+      button.style.minHeight = '60px';
+    });
+    
+    // Make shoot button larger and more prominent
+    if (this.touchControls.shootButton) {
+      this.touchControls.shootButton.style.boxShadow = '0 0 15px rgba(255, 51, 51, 0.7)';
+    }
+  }
+  
+  /**
+   * Set up global touch handling for aiming
+   * This allows any touch outside of control areas to move the aim reticle
+   */
+  setupGlobalTouchHandling() {
+    // Bind methods to this instance
+    this.handleTouchStart = this.handleTouchStart.bind(this);
+    this.handleTouchMove = this.handleTouchMove.bind(this);
+    this.handleTouchEnd = this.handleTouchEnd.bind(this);
+    
+    // Add document-level touch event listeners
+    document.addEventListener('touchstart', this.handleTouchStart, { passive: false });
+    document.addEventListener('touchmove', this.handleTouchMove, { passive: false });
+    document.addEventListener('touchend', this.handleTouchEnd, { passive: false });
+    document.addEventListener('touchcancel', this.handleTouchEnd, { passive: false });
+  }
+  
+  /**
+   * Remove global touch handlers
+   */
+  removeGlobalTouchHandling() {
+    if (this.handleTouchStart) {
+      document.removeEventListener('touchstart', this.handleTouchStart);
+      document.removeEventListener('touchmove', this.handleTouchMove);
+      document.removeEventListener('touchend', this.handleTouchEnd);
+      document.removeEventListener('touchcancel', this.handleTouchEnd);
+    }
+  }
+  
+  /**
+   * Handle touch start events for aiming
+   * @param {TouchEvent} event Touch event
+   */
+  handleTouchStart(event) {
+    // Skip if not active
+    if (!this.isActive) return;
+    
+    // Unlock audio on touch
+    if (this.playerControls && typeof this.playerControls.unlockAudio === 'function') {
+      this.playerControls.unlockAudio();
+    }
+    
+    // Process all new touches
+    for (let i = 0; i < event.changedTouches.length; i++) {
+      const touch = event.changedTouches[i];
+      
+      // Skip touches on control elements
+      if (this.isTouchingControl(touch)) continue;
+      
+      // Prevent default for this touch to avoid browser handling
+      event.preventDefault();
+      
+      // Start tracking this touch for aim control
+      this.touchTracking.aimTouches[touch.identifier] = {
+        lastX: touch.clientX,
+        lastY: touch.clientY
+      };
+      
+      this.touchTracking.activeTouchCount++;
+    }
+  }
+  
+  /**
+   * Handle touch move events for aiming
+   * @param {TouchEvent} event Touch event
+   */
+  handleTouchMove(event) {
+    // Skip if not active
+    if (!this.isActive) return;
+    
+    // Performance optimization: Throttle touch move processing
+    const now = performance.now();
+    if (now - this.touchTracking.lastProcessTime < this.touchTracking.throttleInterval) {
+      event.preventDefault(); // Still prevent default
+      return;
+    }
+    this.touchTracking.lastProcessTime = now;
+    
+    let aimingInProgress = false;
+    
+    // Process all moving touches
+    for (let i = 0; i < event.changedTouches.length; i++) {
+      const touch = event.changedTouches[i];
+      const touchId = touch.identifier;
+      
+      // Skip touches we're not tracking for aiming
+      if (!this.touchTracking.aimTouches[touchId]) continue;
+      
+      // Mark that we're processing an aim touch
+      aimingInProgress = true;
+      
+      // Get the tracking data for this touch
+      const tracking = this.touchTracking.aimTouches[touchId];
+      
+      // Calculate delta movement - floor to integers for better performance
+      const deltaX = Math.floor(touch.clientX - tracking.lastX);
+      const deltaY = Math.floor(touch.clientY - tracking.lastY);
+      
+      // Skip tiny movements (reduces calculations for small jitters)
+      if (deltaX === 0 && deltaY === 0) continue;
+      
+      // Update camera rotation if player controls exist
+      if (this.playerControls && this.playerControls.camera) {
+        // Apply horizontal rotation with increased sensitivity
+        this.playerControls.camera.rotation.y -= deltaX * this.aimSensitivity.horizontal;
+        
+        // Apply vertical rotation with increased sensitivity - inverted for natural feel
+        const verticalRotation = this.playerControls.camera.rotation.x - deltaY * this.aimSensitivity.vertical;
+        const MAX_VERTICAL_ANGLE = Math.PI / 2 - 0.1;
+        this.playerControls.camera.rotation.x = Math.max(
+          -MAX_VERTICAL_ANGLE,
+          Math.min(MAX_VERTICAL_ANGLE, verticalRotation)
+        );
+      }
+      
+      // Update last touch position
+      tracking.lastX = touch.clientX;
+      tracking.lastY = touch.clientY;
+    }
+    
+    // Prevent default only if we processed aim touches
+    if (aimingInProgress) {
+      event.preventDefault();
+    }
+  }
+  
+  /**
+   * Handle touch end events for aiming
+   * @param {TouchEvent} event Touch event
+   */
+  handleTouchEnd(event) {
+    // Skip if not active
+    if (!this.isActive) return;
+    
+    // Process all ended touches
+    for (let i = 0; i < event.changedTouches.length; i++) {
+      const touch = event.changedTouches[i];
+      const touchId = touch.identifier;
+      
+      // Skip touches we're not tracking for aiming
+      if (!this.touchTracking.aimTouches[touchId]) continue;
+      
+      // Remove this touch from tracking
+      delete this.touchTracking.aimTouches[touchId];
+      this.touchTracking.activeTouchCount--;
+    }
+  }
+  
+  /**
+   * Check if a touch is targeting a control element
+   * @param {Touch} touch The touch object to check
+   * @returns {boolean} True if touching a control element
+   */
+  isTouchingControl(touch) {
+    const element = document.elementFromPoint(touch.clientX, touch.clientY);
+    
+    // Check if the touch is on a control element
+    if (element) {
+      // Check for data-control attribute
+      if (element.dataset.control || element.closest('[data-control]')) {
+        return true;
+      }
+      
+      // Check for nipplejs elements
+      if (element.classList.contains('nipple') || 
+          element.closest('.nipple') || 
+          element.closest('#joystick-zone')) {
+        return true;
+      }
+      
+      // Check for action buttons
+      if (element.classList.contains('action-button') || 
+          element.closest('.action-button') || 
+          element.closest('.action-buttons-container')) {
+        return true;
+      }
+    }
+    
+    return false;
   }
   
   /**
    * Create a single action button
-   * @param {string} text - Button text
-   * @param {string} color - Button background color
-   * @returns {HTMLElement} The created button
+   * @param {string} text Button text
+   * @param {string} color Button color
+   * @returns {HTMLElement} Button element
    */
   createActionButton(text, color) {
     const button = document.createElement('div');
-    button.className = 'action-button';
+    button.className = 'action-button mobile-control-button';
     button.textContent = text;
     button.style.width = '60px';
     button.style.height = '60px';
@@ -224,557 +585,75 @@ export class MobileControls {
     button.style.alignItems = 'center';
     button.style.color = 'white';
     button.style.fontWeight = 'bold';
-    button.style.fontSize = '24px';
     button.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.5)';
     button.style.userSelect = 'none';
-    button.style.touchAction = 'none';
-    
+    button.style.border = '2px solid rgba(255, 255, 255, 0.7)';
+    button.style.fontSize = '14px';
+    button.style.touchAction = 'none'; // Disable browser handling of touches
+    button.dataset.control = 'button'; // Add data attribute for identification
     return button;
   }
   
   /**
-   * Add touch event listeners for mobile controls
-   */
-  addTouchEventListeners() {
-    document.addEventListener('touchstart', this.handleTouchStart.bind(this), { passive: false });
-    document.addEventListener('touchmove', this.handleTouchMove.bind(this), { passive: false });
-    document.addEventListener('touchend', this.handleTouchEnd.bind(this), { passive: false });
-    
-    // Prevent default touch actions to avoid browser gestures
-    document.addEventListener('touchstart', (e) => {
-      if (e.target.closest('.joystick-container, .action-button, .action-buttons-container')) {
-        e.preventDefault();
-      }
-    }, { passive: false });
-  }
-  
-  /**
-   * Handle touch start events
-   * @param {TouchEvent} event - Touch event
-   */
-  handleTouchStart(event) {
-    // Log for debugging
-    console.log("Touch start detected", event.touches.length);
-    
-    // Skip processing if game is paused, in menu, or controls are not active
-    if (!this.isActive) {
-      console.log("Touch ignored - controls not active");
-      return;
-    }
-    
-    if (!this.gameEngine) {
-      console.log("Touch ignored - no game engine reference");
-      return;
-    }
-    
-    if (this.gameEngine.isPaused || !this.gameEngine.isGameStarted || this.gameEngine.isGameOver) {
-      console.log("Touch ignored - game state:", {
-        isPaused: this.gameEngine.isPaused,
-        isGameStarted: this.gameEngine.isGameStarted,
-        isGameOver: this.gameEngine.isGameOver
-      });
-      return;
-    }
-
-    // Check if touching a menu element
-    if (event.target.closest('.pause-menu, #pause-menu, .start-menu, #start-menu, #game-over-menu, button, .main-menu, #main-menu, .multiplayer-menu, #multiplayer-menu')) {
-      console.log("Touch ignored - on menu element");
-      return;
-    }
-    
-    event.preventDefault();
-    
-    // Check each touch point
-    for (let i = 0; i < event.touches.length; i++) {
-      const touch = event.touches[i];
-      
-      // Store touch start time for potential tap detection
-      this.touchStartTime = Date.now();
-      this.lastTouchPosition = { x: touch.clientX, y: touch.clientY };
-      
-      // Check if touching the joystick area
-      if (this.isTouchingElement(touch, this.touchControls.joystickContainer)) {
-        console.log("Touch on joystick");
-        this.isDraggingJoystick = true;
-        this.updateJoystickPosition(touch.clientX, touch.clientY);
-      }
-      
-      // Check action buttons
-      if (this.isTouchingElement(touch, this.touchControls.shootButton)) {
-        console.log("Touch on shoot button");
-        this.playerControls.shooting = true;
-        this.playerControls.shoot();
-      }
-      
-      if (this.isTouchingElement(touch, this.touchControls.reloadButton)) {
-        console.log("Touch on reload button");
-        this.playerControls.reload();
-      }
-      
-      if (this.isTouchingElement(touch, this.touchControls.interactButton)) {
-        console.log("Touch on interact button");
-        this.playerControls.isInteracting = true;
-        if (this.playerControls.keys) {
-          this.playerControls.keys.f = true;
-        }
-      }
-      
-      if (this.isTouchingElement(touch, this.touchControls.aimButton)) {
-        console.log("Touch on aim button");
-        this.isAiming = true;
-      }
-      
-      if (this.isTouchingElement(touch, this.touchControls.runButton)) {
-        console.log("Touch on run button");
-        this.playerControls.running = true;
-      }
-      
-      if (this.isTouchingElement(touch, this.touchControls.prevWeaponButton)) {
-        console.log("Touch on prev weapon button");
-        this.playerControls.prevWeapon();
-      }
-      
-      if (this.isTouchingElement(touch, this.touchControls.nextWeaponButton)) {
-        console.log("Touch on next weapon button");
-        this.playerControls.nextWeapon();
-      }
-      
-      // If not touching any control, it's for aiming
-      if (!this.isTouchingAnyControl(touch) && !this.isAiming) {
-        console.log("Touch for aiming");
-        // Update camera rotation based on touch
-        this.updateCameraRotation(touch.clientX, touch.clientY, true);
-      }
-    }
-  }
-  
-  /**
-   * Handle touch move events
-   * @param {TouchEvent} event - Touch event
-   */
-  handleTouchMove(event) {
-    // Skip processing if game is paused, in menu, or controls are not active
-    if (!this.isActive || !this.gameEngine || this.gameEngine.isPaused || !this.gameEngine.isGameStarted || this.gameEngine.isGameOver) {
-      return;
-    }
-
-    // Check if touching a menu element
-    if (event.target.closest('.pause-menu, #pause-menu, .start-menu, #start-menu, #game-over-menu, button, .main-menu, #main-menu, .multiplayer-menu, #multiplayer-menu')) {
-      return;
-    }
-    
-    event.preventDefault();
-    
-    // Check each touch point
-    for (let i = 0; i < event.touches.length; i++) {
-      const touch = event.touches[i];
-      
-      // Update joystick if we're dragging it
-      if (this.isDraggingJoystick) {
-        const joystickTouch = this.findJoystickTouch(event.touches);
-        if (joystickTouch) {
-          this.updateJoystickPosition(joystickTouch.clientX, joystickTouch.clientY);
-        }
-      }
-      
-      // If aiming, update camera rotation
-      if (this.isAiming || (!this.isTouchingAnyControl(touch) && !this.isDraggingJoystick)) {
-        this.updateCameraRotation(touch.clientX, touch.clientY);
-      }
-      
-      // Store last touch position
-      this.lastTouchPosition = { x: touch.clientX, y: touch.clientY };
-    }
-  }
-  
-  /**
-   * Handle touch end events
-   * @param {TouchEvent} event - Touch event
-   */
-  handleTouchEnd(event) {
-    // Log for debugging
-    console.log("Touch end detected", event.touches.length);
-    
-    // Skip processing if game is paused, in menu, or controls are not active
-    if (!this.isActive || !this.gameEngine || this.gameEngine.isPaused || !this.gameEngine.isGameStarted || this.gameEngine.isGameOver) {
-      return;
-    }
-
-    // If all touches are gone, reset joystick
-    if (event.touches.length === 0) {
-      console.log("All touches ended, resetting joystick and controls");
-      this.resetJoystick();
-      this.isDraggingJoystick = false;
-      this.isAiming = false;
-      
-      // Reset movement
-      this.playerControls.moveForward = false;
-      this.playerControls.moveBackward = false;
-      this.playerControls.moveLeft = false;
-      this.playerControls.moveRight = false;
-      this.playerControls.shooting = false;
-      this.playerControls.running = false;
-      
-      // Reset key states
-      if (this.playerControls.keys) {
-        this.playerControls.keys.f = false;
-      }
-      
-      // Stop weapon sound
-      this.playerControls.stopWeaponSound();
-      
-      return;
-    }
-    
-    // If some touches remain, check if we're still touching the joystick
-    let stillTouchingJoystick = false;
-    for (let i = 0; i < event.touches.length; i++) {
-      if (this.isTouchingElement(event.touches[i], this.touchControls.joystickContainer)) {
-        stillTouchingJoystick = true;
-        break;
-      }
-    }
-    
-    if (!stillTouchingJoystick) {
-      console.log("No longer touching joystick, resetting");
-      this.resetJoystick();
-      this.isDraggingJoystick = false;
-      
-      // Reset movement
-      this.playerControls.moveForward = false;
-      this.playerControls.moveBackward = false;
-      this.playerControls.moveLeft = false;
-      this.playerControls.moveRight = false;
-    }
-    
-    // Check if still shooting
-    let stillShooting = false;
-    for (let i = 0; i < event.touches.length; i++) {
-      if (this.isTouchingElement(event.touches[i], this.touchControls.shootButton)) {
-        stillShooting = true;
-        break;
-      }
-    }
-    
-    if (!stillShooting) {
-      console.log("No longer shooting");
-      this.playerControls.shooting = false;
-      this.playerControls.stopWeaponSound();
-    }
-    
-    // Check if still running
-    let stillRunning = false;
-    for (let i = 0; i < event.touches.length; i++) {
-      if (this.isTouchingElement(event.touches[i], this.touchControls.runButton)) {
-        stillRunning = true;
-        break;
-      }
-    }
-    
-    if (!stillRunning) {
-      this.playerControls.running = false;
-    }
-    
-    // Check if still aiming
-    let stillAiming = false;
-    for (let i = 0; i < event.touches.length; i++) {
-      if (this.isTouchingElement(event.touches[i], this.touchControls.aimButton)) {
-        stillAiming = true;
-        break;
-      }
-    }
-    
-    if (!stillAiming) {
-      this.isAiming = false;
-    }
-    
-    // Reset F key if needed
-    let stillInteracting = false;
-    for (let i = 0; i < event.touches.length; i++) {
-      if (this.isTouchingElement(event.touches[i], this.touchControls.interactButton)) {
-        stillInteracting = true;
-        break;
-      }
-    }
-    
-    if (!stillInteracting && this.playerControls.keys) {
-      this.playerControls.keys.f = false;
-      this.playerControls.isInteracting = false;
-    }
-  }
-  
-  /**
-   * Find the touch that's on the joystick
-   * @param {TouchList} touches - List of current touches
-   * @returns {Touch|null} The touch on the joystick or null
-   */
-  findJoystickTouch(touches) {
-    for (let i = 0; i < touches.length; i++) {
-      if (this.isTouchingElement(touches[i], this.touchControls.joystickContainer)) {
-        return touches[i];
-      }
-    }
-    return null;
-  }
-  
-  /**
-   * Update joystick position based on touch
-   * @param {number} touchX - Touch X coordinate
-   * @param {number} touchY - Touch Y coordinate
-   */
-  updateJoystickPosition(touchX, touchY) {
-    // Get joystick container position
-    const containerRect = this.touchControls.joystickContainer.getBoundingClientRect();
-    const centerX = containerRect.left + containerRect.width / 2;
-    const centerY = containerRect.top + containerRect.height / 2;
-    
-    // Calculate distance from center
-    const deltaX = touchX - centerX;
-    const deltaY = touchY - centerY;
-    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-    
-    // Normalize to joystick radius
-    const maxRadius = containerRect.width / 2 - 10; // 10px margin
-    const normalizedDistance = Math.min(distance, maxRadius);
-    const angle = Math.atan2(deltaY, deltaX);
-    
-    // Calculate new position
-    const newX = centerX + normalizedDistance * Math.cos(angle);
-    const newY = centerY + normalizedDistance * Math.sin(angle);
-    
-    // Update joystick visual position
-    this.touchControls.joystick.style.left = `${newX - containerRect.left - 25}px`;
-    this.touchControls.joystick.style.top = `${newY - containerRect.top - 25}px`;
-    
-    // Update movement based on joystick position
-    this.updateMovementFromJoystick(deltaX, deltaY, maxRadius);
-  }
-  
-  /**
-   * Reset joystick to center position
-   */
-  resetJoystick() {
-    if (this.touchControls.joystick) {
-      this.touchControls.joystick.style.left = '35px';
-      this.touchControls.joystick.style.top = '35px';
-    }
-  }
-  
-  /**
-   * Update player movement based on joystick position
-   * @param {number} deltaX - X distance from center
-   * @param {number} deltaY - Y distance from center
-   * @param {number} maxRadius - Maximum joystick radius
-   */
-  updateMovementFromJoystick(deltaX, deltaY, maxRadius) {
-    // Log joystick position for debugging
-    console.log("Joystick movement:", {deltaX, deltaY, maxRadius});
-    
-    // Calculate normalized direction (-1 to 1 range)
-    const dirX = deltaX / maxRadius;
-    const dirY = deltaY / maxRadius;
-    
-    console.log("Normalized joystick:", {dirX, dirY});
-    
-    // Set movement flags based on joystick position
-    // Use threshold to create dead zone in center
-    const threshold = 0.3;
-    
-    // Reset all movement first
-    this.playerControls.moveForward = false;
-    this.playerControls.moveBackward = false;
-    this.playerControls.moveLeft = false;
-    this.playerControls.moveRight = false;
-    
-    // Set movement based on joystick position
-    if (dirY < -threshold) {
-      this.playerControls.moveForward = true;
-      console.log("Move FORWARD set");
-    } else if (dirY > threshold) {
-      this.playerControls.moveBackward = true;
-      console.log("Move BACKWARD set");
-    }
-    
-    if (dirX < -threshold) {
-      this.playerControls.moveLeft = true;
-      console.log("Move LEFT set");
-    } else if (dirX > threshold) {
-      this.playerControls.moveRight = true;
-      console.log("Move RIGHT set");
-    }
-    
-    // Log the state of movement flags
-    console.log("Movement flags:", {
-      forward: this.playerControls.moveForward,
-      backward: this.playerControls.moveBackward,
-      left: this.playerControls.moveLeft,
-      right: this.playerControls.moveRight
-    });
-    
-    // Ensure the playerControls are updated
-    if (this.playerControls.update && typeof this.playerControls.update === 'function') {
-      // Force an update to apply the movement immediately
-      const delta = 1/60; // Fake delta time of ~16.6ms (60fps)
-      this.playerControls.update(delta);
-    }
-  }
-  
-  /**
-   * Update camera rotation based on touch movement
-   * @param {number} touchX - Current touch X position
-   * @param {number} touchY - Current touch Y position
-   * @param {boolean} isStart - Whether this is the start of a touch
-   */
-  updateCameraRotation(touchX, touchY, isStart = false) {
-    if (isStart) {
-      this.lastTouchPosition = { x: touchX, y: touchY };
-      return;
-    }
-    
-    // Calculate movement delta
-    const movementX = touchX - this.lastTouchPosition.x;
-    const movementY = touchY - this.lastTouchPosition.y;
-    
-    // Update camera rotation - similar to mouse but with touch sensitivity adjustment
-    const touchSensitivity = this.playerControls.mouseSensitivity * 0.5;
-    this.playerControls.camera.rotation.y -= movementX * touchSensitivity;
-    this.playerControls.camera.rotation.x -= movementY * touchSensitivity;
-    
-    // Limit vertical look angle
-    this.playerControls.camera.rotation.x = Math.max(
-      -Math.PI / 2, 
-      Math.min(Math.PI / 2, this.playerControls.camera.rotation.x)
-    );
-  }
-  
-  /**
-   * Check if a touch is intersecting with an element
-   * @param {Touch} touch - The touch to check
-   * @param {HTMLElement} element - The element to check against
-   * @returns {boolean} True if the touch is on the element
-   */
-  isTouchingElement(touch, element) {
-    if (!element) return false;
-    
-    const rect = element.getBoundingClientRect();
-    return (
-      touch.clientX >= rect.left &&
-      touch.clientX <= rect.right &&
-      touch.clientY >= rect.top &&
-      touch.clientY <= rect.bottom
-    );
-  }
-  
-  /**
-   * Check if touch is on any control element
-   * @param {Touch} touch - The touch to check
-   * @returns {boolean} True if touching any control
-   */
-  isTouchingAnyControl(touch) {
-    return (
-      this.isTouchingElement(touch, this.touchControls.joystickContainer) ||
-      this.isTouchingElement(touch, this.touchControls.buttonContainer) ||
-      this.isTouchingElement(touch, this.touchControls.shootButton) ||
-      this.isTouchingElement(touch, this.touchControls.reloadButton) ||
-      this.isTouchingElement(touch, this.touchControls.interactButton) ||
-      this.isTouchingElement(touch, this.touchControls.aimButton) ||
-      this.isTouchingElement(touch, this.touchControls.runButton) ||
-      this.isTouchingElement(touch, this.touchControls.prevWeaponButton) ||
-      this.isTouchingElement(touch, this.touchControls.nextWeaponButton)
-    );
-  }
-  
-  /**
-   * Show or hide mobile controls
-   * @param {boolean} show - Whether to show or hide controls
+   * Toggle controls visibility
+   * @param {boolean} show Whether to show or hide controls
    */
   toggleControls(show) {
-    console.log("Toggle mobile controls:", show);
+    console.log("Toggling mobile controls:", show);
     
-    if (!this.isInitialized) {
-      console.log("Controls not initialized, initializing now");
+    // Initialize controls if showing for the first time
+    if (show && !this.isInitialized) {
       this.init();
     }
     
-    // Set visibility flag to prevent touch events when hidden
     this.isActive = show;
     
-    if (!this.touchControls || !this.touchControls.joystickContainer) {
-      console.error("Touch controls not properly initialized");
-      return;
+    // Set visibility for all control elements
+    Object.values(this.touchControls).forEach(element => {
+      if (element && element.style) {
+        element.style.display = show ? 'flex' : 'none';
+      }
+    });
+    
+    // Special handling for joystick container
+    if (this.touchControls.joystickContainer) {
+      this.touchControls.joystickContainer.style.display = show ? 'block' : 'none';
     }
     
-    // Set display for all controls
-    const display = show ? 'block' : 'none';
+    // Ensure nipplejs is properly managed
+    if (this.joystickManager) {
+      if (!show) {
+        // Reset player movement when hiding controls
+        if (this.playerControls) {
+          this.playerControls.applyMobileMovement(0, 0);
+        }
+      }
+    }
     
-    try {
-      // Set display for all controls
-      this.touchControls.joystickContainer.style.display = display;
-      this.touchControls.buttonContainer.style.display = display;
-      this.touchControls.aimButton.style.display = display;
-      this.touchControls.runButton.style.display = display;
-      this.touchControls.prevWeaponButton.style.display = display;
-      this.touchControls.nextWeaponButton.style.display = display;
-      
-      console.log("Mobile controls visibility updated:", display);
-    } catch (error) {
-      console.error("Error updating control visibility:", error);
+    // Reset touch tracking when hiding
+    if (!show) {
+      this.touchTracking.aimTouches = {};
+      this.touchTracking.activeTouchCount = 0;
     }
   }
 
   /**
-   * Show mobile controls
+   * Show the controls
    */
   show() {
-    console.log("Showing mobile controls - MobileControls.js");
-    // Ensure we're initialized before showing
-    if (!this.isInitialized && this.detectMobileDevice()) {
-      console.log("Initializing mobile controls before showing");
-      this.init();
+    // Try to unlock audio right when controls are shown
+    if (this.playerControls && typeof this.playerControls.unlockAudio === 'function') {
+      console.log("Attempting to unlock audio when showing mobile controls");
+      this.playerControls.unlockAudio();
     }
     
-    // Set active flag first to ensure touch events are processed
-    this.isActive = true;
-    
-    // Then show the controls
     this.toggleControls(true);
-    
-    // Log the state of the controls for debugging
-    console.log("Mobile controls active state:", this.isActive);
-    if (this.touchControls.joystickContainer) {
-      console.log("Joystick container display:", this.touchControls.joystickContainer.style.display);
-    }
   }
 
   /**
-   * Hide mobile controls
+   * Hide the controls
    */
   hide() {
-    console.log("Hiding mobile controls - MobileControls.js");
-    this.isActive = false;
     this.toggleControls(false);
-    
-    // Reset all control states when hiding
-    this.resetJoystick();
-    this.isDraggingJoystick = false;
-    this.isAiming = false;
-    
-    // Reset player movement
-    if (this.playerControls) {
-      this.playerControls.moveForward = false;
-      this.playerControls.moveBackward = false;
-      this.playerControls.moveLeft = false;
-      this.playerControls.moveRight = false;
-      this.playerControls.shooting = false;
-      this.playerControls.running = false;
-      
-      // Reset key states
-      if (this.playerControls.keys) {
-        this.playerControls.keys.f = false;
-      }
-      
-      // Stop weapon sound
-      this.playerControls.stopWeaponSound();
-    }
   }
 } 

@@ -9,19 +9,20 @@ export class CrawlingZombie extends Enemy {
     super(targetWindow);
     
     // Override default enemy properties
-    this.health = 75; // Less health than standard zombies
+    this.health = 30; // Less health than standard zombies
     this.maxHealth = 75;
-    this.speed = 0.3 + Math.random() * 0.3; // Slower than standard zombies (0.3-0.6)
+    this.speed = 0.75; // Crawlers move slower (relative to base Enemy speed)
     this.attackRate = 1.5; // Slightly slower attack rate
     this.attackDamage = 7; // Slightly less damage
     this.playerDamage = 15; // Less damage to player
+    this.attackRange = 0.6;
     
     // Crawling zombie is closer to the ground
     this.height = 0.7; // Lower height than standard zombie
     this.floorLevel = 0;
     
     // Different sound properties
-    this.soundFrequency = 0.7; // Make crawling sounds more often
+    this.soundFrequency = 0.15; // Make crawling sounds slightly more often than base zombies
     
     // Override materials to make them distinct
     this.bodyMaterial = new THREE.MeshStandardMaterial({

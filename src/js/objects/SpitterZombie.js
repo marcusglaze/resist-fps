@@ -27,7 +27,7 @@ export class SpitterZombie extends Enemy {
     this.lastProjectileTime = 0; // Time since last projectile was fired
     
     // Different sound properties
-    this.soundFrequency = 0.6; // Make spitting sounds more often
+    this.soundFrequency = 0.14; // Make spitting sounds slightly more often than regular zombies
     
     // Override materials to make them distinct
     this.bodyMaterial = new THREE.MeshStandardMaterial({

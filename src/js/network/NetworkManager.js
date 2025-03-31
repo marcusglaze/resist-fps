@@ -395,24 +395,9 @@ export class NetworkManager {
    * Create a status element to show connection status
    */
   createStatusElement() {
-    // Create a status element if it doesn't exist
-    if (!this.connectionStatusElement) {
-      this.connectionStatusElement = document.createElement('div');
-      this.connectionStatusElement.id = 'connection-status';
-      this.connectionStatusElement.style.position = 'absolute';
-      this.connectionStatusElement.style.bottom = '10px';
-      this.connectionStatusElement.style.right = '10px';
-      this.connectionStatusElement.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
-      this.connectionStatusElement.style.color = 'white';
-      this.connectionStatusElement.style.padding = '5px 10px';
-      this.connectionStatusElement.style.borderRadius = '5px';
-      this.connectionStatusElement.style.fontFamily = 'Arial, sans-serif';
-      this.connectionStatusElement.style.fontSize = '14px';
-      this.connectionStatusElement.style.zIndex = '1000';
-      document.body.appendChild(this.connectionStatusElement);
-    }
-    
-    this.updateConnectionStatus('Singleplayer');
+    // Status element has been disabled as requested
+    // This method is kept as a placeholder in case functionality needs to be restored
+    this.connectionStatusElement = null;
   }
   
   /**
@@ -420,9 +405,8 @@ export class NetworkManager {
    * @param {string} status - The status text to display
    */
   updateConnectionStatus(status) {
-    if (this.connectionStatusElement) {
-      this.connectionStatusElement.textContent = status;
-    }
+    // Status updates have been disabled as requested
+    // This method is kept as a placeholder in case functionality needs to be restored
   }
   
   /**

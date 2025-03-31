@@ -17,7 +17,7 @@ export class Enemy {
     this.lastPlayerAttackTime = 0;
     
     // Sound properties
-    this.soundFrequency = 0.5; // Sound frequency in Hz (once every 2 seconds)
+    this.soundFrequency = 0.1; // Sound frequency in Hz (once every 10 seconds)
     this.nextSoundTime = Math.random() * (1 / this.soundFrequency); // Randomize initial sound time
     this.lastSoundTime = 0;
     

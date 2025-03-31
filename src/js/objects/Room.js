@@ -544,43 +544,12 @@ export class Room {
    * Create a status display for zombie count
    */
   createStatusDisplay() {
-    // Create main container
-    const statusContainer = document.createElement('div');
-    statusContainer.className = 'status-display';
-    statusContainer.style.position = 'absolute';
-    statusContainer.style.top = '20px';
-    statusContainer.style.right = '20px';
-    statusContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-    statusContainer.style.color = 'white';
-    statusContainer.style.padding = '10px';
-    statusContainer.style.borderRadius = '5px';
-    statusContainer.style.fontFamily = 'Arial, sans-serif';
-    statusContainer.style.fontSize = '14px';
-    statusContainer.style.width = '200px';
-    statusContainer.style.pointerEvents = 'none';
+    // Status display has been disabled as requested
+    // This method is kept as a placeholder in case functionality needs to be restored
     
-    // Create title
-    const title = document.createElement('div');
-    title.style.fontWeight = 'bold';
-    title.style.fontSize = '16px';
-    title.style.marginBottom = '10px';
-    title.style.textAlign = 'center';
-    title.textContent = 'SURVIVE THE ZOMBIES';
-    statusContainer.appendChild(title);
-    
-    // Create zombie counter
-    const zombieCounter = document.createElement('div');
-    zombieCounter.style.marginBottom = '15px';
-    zombieCounter.style.fontWeight = 'bold';
-    zombieCounter.textContent = 'Zombies: 0';
-    statusContainer.appendChild(zombieCounter);
-    this.uiElements.zombieCounter = zombieCounter;
-    
-    // Add to document
-    document.body.appendChild(statusContainer);
-    
-    // Store reference
-    this.uiElements.statusDisplay = statusContainer;
+    // Initialize uiElements.zombieCounter as null to prevent errors in other methods
+    this.uiElements.zombieCounter = null;
+    this.uiElements.statusDisplay = null;
   }
 
   /**
@@ -1086,12 +1055,8 @@ export class Room {
    * Update the status display with current zombie information
    */
   updateStatusDisplay() {
-    if (!this.uiElements) return;
-    
-    // Update zombie counter
-    if (this.enemyManager && this.uiElements.zombieCounter) {
-      this.uiElements.zombieCounter.textContent = `Zombies: ${this.enemyManager.enemies.length}`;
-    }
+    // Status display updates have been disabled as requested
+    // This method is kept as a placeholder in case functionality needs to be restored
   }
 
   /**

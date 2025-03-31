@@ -21,7 +21,7 @@ export class RunnerZombie extends Enemy {
     this.floorLevel = 0;
     
     // Different sound properties
-    this.soundFrequency = 0.5; // Make running sounds more often
+    this.soundFrequency = 0.12; // Slightly more frequent sounds than base zombies
     
     // Override materials to make them distinct
     this.bodyMaterial = new THREE.MeshStandardMaterial({

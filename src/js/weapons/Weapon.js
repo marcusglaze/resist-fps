@@ -407,7 +407,7 @@ export const WeaponTypes = {
   SHOTGUN: {
     name: 'Shotgun',
     description: 'Close range devastation',
-    cost: 1000,
+    cost: 2500,
     bodyDamage: 20, // Per pellet
     headDamage: 30, // Per pellet
     cooldown: 0.8,
@@ -422,7 +422,7 @@ export const WeaponTypes = {
   ASSAULT_RIFLE: {
     name: 'Assault Rifle',
     description: 'Balanced firepower',
-    cost: 2000,
+    cost: 5000,
     bodyDamage: 25,
     headDamage: 50,
     cooldown: 0.15,
