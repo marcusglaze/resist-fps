@@ -214,6 +214,9 @@ export class NetworkManager {
       clearInterval(this._positionUpdateInterval);
     }
     
+    // Lower the interval for more frequent updates
+    this.positionUpdateInterval = 25; // Reduced from 50ms for smoother updates
+    
     this._positionUpdateInterval = setInterval(() => {
       if (!this.isConnected || !this.network) {
         console.log("Position updates stopping - no longer connected");
@@ -222,23 +225,39 @@ export class NetworkManager {
         return;
       }
       
+      // Ensure we have a reference to the player controls
+      if (!this.gameEngine || !this.gameEngine.controls) {
+        return;
+      }
+      
       const now = Date.now();
       
-      // Limit update frequency
-      if (now - this.lastPositionUpdate > this.positionUpdateInterval) {
-        // Get weapon information if available
-        let weaponInfo = null;
-        if (this.gameEngine.weaponManager && this.gameEngine.weaponManager.currentWeapon) {
-          weaponInfo = {
-            type: this.gameEngine.weaponManager.currentWeapon.type || 'PISTOL',
-            isReloading: this.gameEngine.weaponManager.isReloading || false,
-            isFiring: this.gameEngine.weaponManager.isFiring || false
-          };
-        }
-        
-        this.network.sendPlayerPosition(weaponInfo);
-        this.lastPositionUpdate = now;
+      // Get weapon information if available
+      let weaponInfo = null;
+      if (this.gameEngine.weaponManager && this.gameEngine.weaponManager.currentWeapon) {
+        weaponInfo = {
+          type: this.gameEngine.weaponManager.currentWeapon.type || 'PISTOL',
+          isReloading: this.gameEngine.weaponManager.isReloading || false,
+          isFiring: this.gameEngine.weaponManager.isFiring || false
+        };
       }
+      
+      // Always include current health and death state
+      const playerInfo = {
+        health: this.gameEngine.controls.health || 100,
+        isDead: this.gameEngine.controls.isDead || false
+      };
+      
+      // Log major state changes (especially death state)
+      if (this._lastSentIsDead !== playerInfo.isDead) {
+        console.log(`Player death state changed: isDead=${playerInfo.isDead}`);
+        this._lastSentIsDead = playerInfo.isDead;
+      }
+      
+      // Send position updates even if we're dead (to ensure death state is synced)
+      this.network.sendPlayerPosition(weaponInfo);
+      this.lastPositionUpdate = now;
+      
     }, this.positionUpdateInterval);
     
     console.log("Position updates started with interval:", this.positionUpdateInterval);
@@ -652,6 +671,20 @@ export class NetworkManager {
       playerData = this.remotePlayers.get(playerId);
     }
     
+    // Check for significant position changes (to detect teleporting or other issues)
+    if (playerData.position && position.x !== undefined) {
+      const distance = Math.sqrt(
+        Math.pow(position.x - playerData.position.x, 2) +
+        Math.pow(position.y - playerData.position.y, 2) +
+        Math.pow(position.z - playerData.position.z, 2)
+      );
+      
+      // Log larger movements to help with debugging
+      if (distance > 10) {
+        console.log(`Large player movement detected for ${playerId}: ${distance.toFixed(2)} units`);
+      }
+    }
+    
     // Update the player's position and weapon info
     playerData.position = position;
     playerData.lastUpdate = Date.now();
@@ -661,14 +694,23 @@ export class NetworkManager {
       playerData.health = position.health;
     }
     
+    // Track death state changes explicitly with logging
     if (position.isDead !== undefined) {
+      const wasDeadBefore = playerData.isDead;
       playerData.isDead = position.isDead;
+      
+      // Log state changes
+      if (wasDeadBefore !== position.isDead) {
+        console.log(`Remote player ${playerId} death state changed: isDead=${position.isDead}`);
+      }
       
       // If the player just died, update their model to show death state
       if (position.isDead && !playerData.wasDeadLastUpdate) {
+        console.log(`Player ${playerId} died, updating visual state`);
         this.updatePlayerDeathState(playerId, true);
       } else if (!position.isDead && playerData.wasDeadLastUpdate) {
         // Player was respawned
+        console.log(`Player ${playerId} respawned, updating visual state`);
         this.updatePlayerDeathState(playerId, false);
       }
       
@@ -739,6 +781,68 @@ export class NetworkManager {
           }
         }
       }
+    }
+    
+    // Update any enemies targeting this player
+    this.updateEnemyTargeting(playerId, position, playerData.isDead);
+  }
+  
+  /**
+   * Update enemies to correctly target players at their new positions
+   * @param {string} playerId - The ID of the player
+   * @param {Object} position - The player's position
+   * @param {boolean} isDead - Whether the player is dead
+   */
+  updateEnemyTargeting(playerId, position, isDead) {
+    if (!this.gameEngine || !this.gameEngine.scene || 
+        !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
+      return;
+    }
+    
+    // Only update if we're the host (since the host handles enemy AI)
+    if (!this.isHost) return;
+    
+    const enemyManager = this.gameEngine.scene.room.enemyManager;
+    const enemies = enemyManager.enemies;
+    
+    // If no enemies, nothing to update
+    if (!enemies || enemies.length === 0) return;
+    
+    // If player is dead, enemies should not target them
+    if (isDead) {
+      // Find any enemies targeting this player and redirect them
+      enemies.forEach(enemy => {
+        if (enemy.targetPlayer && enemy.targetPlayer.id === playerId) {
+          console.log(`Player ${playerId} is dead, redirecting enemy ${enemy.id}`);
+          // Reset target player - the enemy AI will pick a new target
+          enemy.targetPlayer = null;
+          
+          // Force the enemy to look for a new target
+          if (typeof enemy.findNewTarget === 'function') {
+            enemy.findNewTarget();
+          }
+        }
+      });
+      return;
+    }
+    
+    // Update position for enemies targeting this player
+    let updatedCount = 0;
+    enemies.forEach(enemy => {
+      if (enemy.targetPlayer && enemy.targetPlayer.id === playerId) {
+        // Update the target position for this enemy
+        enemy.targetPosition = {
+          x: position.x,
+          y: position.y,
+          z: position.z
+        };
+        updatedCount++;
+      }
+    });
+    
+    // Log if multiple enemies were updated
+    if (updatedCount > 0) {
+      console.log(`Updated targeting for ${updatedCount} enemies tracking player ${playerId}`);
     }
   }
   

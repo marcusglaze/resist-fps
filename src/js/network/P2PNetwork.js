@@ -510,10 +510,14 @@ export class P2PNetwork {
    * @param {string} playerId - The ID of the player to update
    */
   updatePlayerPosition(position, playerId) {
-    // This would be implemented to update the remote player's position in the game
-    console.log(`Updating position for player ${playerId}:`, position);
+    // Ensure NetworkManager actually updates the positions of remote players
+    if (this.gameEngine && this.gameEngine.networkManager) {
+      // Update the player's position in the NetworkManager
+      console.log(`Updating position for player ${playerId}:`, position);
+      this.gameEngine.networkManager.updateRemotePlayerPosition(playerId, position);
+    }
     
-    // If we're the host, broadcast this to all other clients
+    // Forward this position update to other clients if we're the host
     if (this.isHost) {
       this.broadcastToOthers({
         type: 'playerPosition',
@@ -860,16 +864,27 @@ export class P2PNetwork {
   sendPlayerPosition(weaponInfo = null) {
     if (!this.isConnected || !this.gameEngine || !this.gameEngine.controls) return;
     
+    // Get current position and orientation
     const position = {
       x: this.gameEngine.controls.camera.position.x,
       y: this.gameEngine.controls.camera.position.y,
       z: this.gameEngine.controls.camera.position.z,
       rotationY: this.gameEngine.controls.camera.rotation.y,
-      weapon: weaponInfo, // Include weapon information if provided
-      health: this.gameEngine.controls.health || 100,
-      isDead: this.gameEngine.controls.isDead || false
+      weapon: weaponInfo // Include weapon information if provided
     };
     
+    // Always include critical state information
+    position.health = this.gameEngine.controls.health || 100;
+    position.isDead = this.gameEngine.controls.isDead || false;
+    
+    // Special logging for death state changes
+    const prevIsDead = this._lastSentDeathState || false;
+    if (prevIsDead !== position.isDead) {
+      console.log(`Sending player death state change: isDead=${position.isDead}, health=${position.health}`);
+      this._lastSentDeathState = position.isDead;
+    }
+    
+    // Send position update to all connected peers
     this.broadcastToAll({
       type: 'playerPosition',
       position: position,
