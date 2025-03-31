@@ -1743,15 +1743,33 @@ export class Engine {
   resumeGame() {
     console.log("Game resumed");
     
+    // Ensure pause state is properly set
+    this.isPaused = false;
+    
+    // Clear any pending pause-related UI
+    const clientWaitingElements = document.querySelectorAll('.client-waiting-indicator');
+    clientWaitingElements.forEach(element => {
+      if (element && element.parentNode) {
+        element.parentNode.removeChild(element);
+      }
+    });
+    
     // Remove pause menu if it exists
     const pauseMenu = document.getElementById('pause-menu');
     if (pauseMenu) {
+      console.log("Removing pause menu");
       document.body.removeChild(pauseMenu);
     }
     
+    // Log multiplayer status for debugging
+    if (this.networkManager && this.networkManager.isMultiplayer) {
+      console.log(`Resuming game as ${this.networkManager.isHost ? 'host' : 'client'}`);
+    }
+    
     // Unpause enemies and refresh player reference
-    if (this.scene.room && this.scene.room.enemyManager) {
+    if (this.scene && this.scene.room && this.scene.room.enemyManager) {
       const enemyManager = this.scene.room.enemyManager;
+      console.log("Unpausing enemy manager");
       
       // Reset player reference in enemy manager and all enemies
       if (this.controls) {
@@ -1770,10 +1788,17 @@ export class Engine {
     // Show mobile controls if needed
     this.showMobileControlsIfNeeded();
     
-    // Lock pointer immediately
+    // Lock pointer immediately - only if game is actually active
     if (this.isGameStarted && !this.isPaused && !this.isGameOver) {
+      console.log("Locking pointer after resuming");
       // Force pointer lock
       this.lockPointer();
+    } else {
+      console.log("Not locking pointer: game state not appropriate", {
+        isGameStarted: this.isGameStarted,
+        isPaused: this.isPaused,
+        isGameOver: this.isGameOver
+      });
     }
   }
   

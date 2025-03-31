@@ -790,10 +790,24 @@ export class P2PNetwork {
     
     switch (action.type) {
       case 'pause':
+        // Set pause state before showing UI
+        this.gameEngine.isPaused = true;
         this.gameEngine.pauseGame();
         break;
         
       case 'resume':
+        console.log('Processing resume command from host');
+        // Set unpause state immediately
+        this.gameEngine.isPaused = false;
+        
+        // Remove pause UI if it exists
+        const pauseMenu = document.getElementById('pause-menu');
+        if (pauseMenu) {
+          console.log('Removing pause menu from host resume command');
+          pauseMenu.remove();
+        }
+        
+        // Resume game
         this.gameEngine.resumeGame();
         break;
         
@@ -1045,12 +1059,26 @@ export class P2PNetwork {
     
     console.log("Host sending resume command to all clients");
     
+    // First update the gameStatus to reflect the new unpaused state
+    if (this.gameEngine) {
+      this.gameEngine.isPaused = false;
+    }
+    
+    // Send a specific resume command
     this.broadcastToAll({
       type: 'hostAction',
       action: {
         type: 'resume'
       }
     });
+    
+    // Also immediately send the updated game state to ensure synchronization
+    setTimeout(() => {
+      this.broadcastToAll({
+        type: 'gameState',
+        state: this.getGameState()
+      });
+    }, 100); // Small delay to ensure clients process the resume command first
   }
   
   /**

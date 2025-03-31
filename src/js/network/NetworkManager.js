@@ -1718,6 +1718,9 @@ export class NetworkManager {
         // Host paused the game
         console.log("Host paused the game, updating client pause state");
         
+        // Set the pause state first
+        this.gameEngine.isPaused = true;
+        
         // If we already have a pause menu, don't create another one
         if (!document.getElementById('pause-menu')) {
           this.gameEngine.pauseGame();
@@ -1726,15 +1729,20 @@ export class NetworkManager {
         // Host resumed the game
         console.log("Host resumed the game, updating client pause state");
         
+        // Force update the pause state
+        this.gameEngine.isPaused = false;
+        
         // If we have a pause menu, remove it
         const pauseMenu = document.getElementById('pause-menu');
         if (pauseMenu) {
           pauseMenu.remove();
         }
         
-        // Resume the game engine
-        this.gameEngine.isPaused = false;
-        this.gameEngine.resumeGame();
+        // Resume the game engine with a small delay to ensure UI updates first
+        setTimeout(() => {
+          console.log("Executing client resumeGame after host command");
+          this.gameEngine.resumeGame();
+        }, 50);
       }
     }
   }
