@@ -166,22 +166,109 @@ export class NetworkManager {
     loadingText.style.color = '#ffffff';
     loadingText.style.animation = 'pulse 1.5s infinite ease-in-out';
     
-    // Add secondary text with dots animation
+    // Add status text that will update
     const statusText = document.createElement('p');
-    statusText.textContent = 'Establishing connection';
+    statusText.id = 'loading-status-text';
+    statusText.textContent = 'Establishing connection...';
     statusText.style.marginTop = '10px';
     statusText.style.color = '#aaaaaa';
     
-    // Add dots animation
-    const dots = document.createElement('span');
-    dots.textContent = '...';
-    dots.style.animation = 'pulse 1.5s infinite ease-in-out';
-    statusText.appendChild(dots);
+    // Create a container for the progress indicators
+    const progressContainer = document.createElement('div');
+    progressContainer.style.display = 'flex';
+    progressContainer.style.marginTop = '20px';
+    progressContainer.style.gap = '5px';
+    
+    // Create 3 progress dots
+    const updateProgressDots = () => {
+      const dots = ['⚪', '⚪', '⚪'];
+      let currentDot = 0;
+      
+      // Update status message with connection progress
+      let statusMessages = [
+        'Establishing connection',
+        'Connecting to game server',
+        'Syncing game state',
+        'Initializing player',
+        'Loading game world',
+        'Almost ready'
+      ];
+      let currentMessage = 0;
+      
+      // Update both dots and messages periodically
+      const updateInterval = setInterval(() => {
+        // Update progress dots
+        for (let i = 0; i < 3; i++) {
+          dots[i] = i === currentDot ? '🟢' : '⚪';
+        }
+        progressContainer.innerHTML = dots.join(' ');
+        currentDot = (currentDot + 1) % 3;
+        
+        // Update status message every 3 dot cycles
+        if (currentDot === 0) {
+          statusText.textContent = statusMessages[currentMessage] + '...';
+          currentMessage = (currentMessage + 1) % statusMessages.length;
+        }
+        
+        // Check if loading screen is still in DOM
+        if (!document.getElementById('multiplayer-loading-screen')) {
+          clearInterval(updateInterval);
+        }
+      }, 500);
+      
+      return progressContainer;
+    };
+    
+    const progressDots = updateProgressDots();
     
     // Add all elements to the loading screen
     loadingScreen.appendChild(spinner);
     loadingScreen.appendChild(loadingText);
     loadingScreen.appendChild(statusText);
+    loadingScreen.appendChild(progressDots);
+    
+    // Add a "Cancel" button to allow users to abort if it takes too long
+    const cancelButton = document.createElement('button');
+    cancelButton.textContent = 'Cancel';
+    cancelButton.style.marginTop = '40px';
+    cancelButton.style.padding = '10px 20px';
+    cancelButton.style.backgroundColor = '#e74c3c';
+    cancelButton.style.color = 'white';
+    cancelButton.style.border = 'none';
+    cancelButton.style.borderRadius = '5px';
+    cancelButton.style.cursor = 'pointer';
+    cancelButton.style.fontSize = '16px';
+    
+    cancelButton.addEventListener('mouseover', () => {
+      cancelButton.style.backgroundColor = '#c0392b';
+    });
+    
+    cancelButton.addEventListener('mouseout', () => {
+      cancelButton.style.backgroundColor = '#e74c3c';
+    });
+    
+    cancelButton.addEventListener('click', () => {
+      // Hide loading screen
+      this.hideLoadingScreen();
+      
+      // Disconnect from any pending connections
+      if (this.network) {
+        this.network.disconnect();
+      }
+      
+      // Reset network state
+      this.isConnected = false;
+      this.isMultiplayer = false;
+      
+      // Return to main menu
+      if (this.gameEngine && this.gameEngine.startMenu) {
+        this.gameEngine.startMenu.show();
+      } else if (this.gameEngine && typeof this.gameEngine.showMainMenu === 'function') {
+        this.gameEngine.showMainMenu();
+      }
+    });
+    
+    loadingScreen.appendChild(cancelButton);
     
     // Add to the document body
     document.body.appendChild(loadingScreen);
@@ -224,6 +311,13 @@ export class NetworkManager {
     // Show loading screen immediately
     const loadingScreen = this.showLoadingScreen();
     
+    // Set a safety timeout to ensure the loading screen is removed after a maximum time
+    // This prevents it from getting stuck indefinitely if something goes wrong
+    const safetyTimeout = setTimeout(() => {
+      console.log("Safety timeout: forcing loading screen removal");
+      this.hideLoadingScreen();
+    }, 15000); // 15 seconds maximum wait time
+    
     this.gameMode = 'client';
     this.isMultiplayer = true;
     this.isHost = false;
@@ -246,26 +340,72 @@ export class NetworkManager {
       console.log("Starting the game as a client");
       this.gameEngine.startGame();
       
-      // Wait for the game to initialize
-      setTimeout(() => {
-        console.log("Game started, now syncing with host");
-        
-        // Important: Only start sending position updates AFTER the connection is established
-        // This fixes the "Connection is not open" error
-        setTimeout(() => {
-          // Starting position updates with a slight delay to ensure connection is ready
-          this.startPositionUpdates();
-          console.log("Started sending position updates after connection established");
+      // Set up a visibility change listener to check if the game scene is visible
+      const checkGameReady = () => {
+        // Check if game has started rendering (scene exists and is visible)
+        if (this.gameEngine && 
+            this.gameEngine.scene && 
+            this.gameEngine.scene.instance && 
+            this.gameEngine.controls &&
+            this.gameEngine.controls.enabled) {
           
-          // Hide loading screen after everything is ready
+          console.log("Game scene detected and controls enabled, hiding loading screen");
+          
+          // Clear safety timeout since we're handling it properly
+          clearTimeout(safetyTimeout);
+          
+          // Start position updates
+          this.startPositionUpdates();
+          
+          // Hide loading screen
           this.hideLoadingScreen();
-        }, 1000); // 1 second delay to ensure connection is fully established
-      }, 1000); // Wait 1 second for the game to initialize properly
+          
+          // Remove this listener
+          document.removeEventListener('visibilitychange', visibilityListener);
+          
+          return true;
+        }
+        return false;
+      };
+      
+      // Check immediately if the game is already ready
+      if (!checkGameReady()) {
+        // Set up a visibility listener to detect when the tab becomes visible
+        // This helps with cases where the game loads while the tab is in the background
+        const visibilityListener = () => {
+          if (document.visibilityState === 'visible') {
+            checkGameReady();
+          }
+        };
+        document.addEventListener('visibilitychange', visibilityListener);
+        
+        // Also set up a periodic check in case the visibility event isn't reliable
+        let checkCount = 0;
+        const maxChecks = 20; // Check up to 20 times (10 seconds)
+        
+        const intervalCheck = setInterval(() => {
+          checkCount++;
+          if (checkGameReady() || checkCount >= maxChecks) {
+            clearInterval(intervalCheck);
+            document.removeEventListener('visibilitychange', visibilityListener);
+            
+            // If we've reached max checks but the game isn't ready, force hide the loading screen
+            if (checkCount >= maxChecks && document.getElementById('multiplayer-loading-screen')) {
+              console.log("Max check count reached, forcing loading screen removal");
+              this.hideLoadingScreen();
+              clearTimeout(safetyTimeout);
+            }
+          }
+        }, 500); // Check every 500ms
+      }
       
       this.updateConnectionStatus(`Connected to ${this.truncateId(hostId)}`);
     } catch (err) {
       console.error("Failed to join game:", err);
       this.updateConnectionStatus('Failed to connect');
+      
+      // Clear safety timeout
+      clearTimeout(safetyTimeout);
       
       // Hide loading screen and show error
       this.hideLoadingScreen();
@@ -817,6 +957,17 @@ export class NetworkManager {
       // Log state changes
       if (wasDeadBefore !== position.isDead) {
         console.log(`Remote player ${playerId} death state changed: isDead=${position.isDead}`);
+        
+        // If player was dead but is now alive, ensure health is reset to full
+        if (wasDeadBefore && !position.isDead) {
+          console.log(`Remote player ${playerId} respawned, resetting health to 100`);
+          playerData.health = 100;
+          
+          // Publish debug message to confirm respawn
+          if (this.gameEngine && this.gameEngine.ui && typeof this.gameEngine.ui.showDebugMessage === 'function') {
+            this.gameEngine.ui.showDebugMessage(`Player ${playerId} respawned`, 3000);
+          }
+        }
       }
       
       // If the player just died, update their model to show death state
@@ -843,6 +994,12 @@ export class NetworkManager {
       // Update position and rotation
       model.position.set(position.x, position.y, position.z);
       model.rotation.y = position.rotationY;
+      
+      // If player was recently respawned, double-check that the visual state is correct
+      if (playerData.wasDeadLastUpdate === false && playerData.isDead === false) {
+        // Ensure the player is visually shown as alive
+        this.updatePlayerDeathState(playerId, false);
+      }
       
       // Update weapon visualization if weapon info is available
       if (position.weapon && position.weapon.type) {

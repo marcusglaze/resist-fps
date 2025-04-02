@@ -857,6 +857,22 @@ export class P2PNetwork {
         this.gameEngine.resumeGame();
       }
       
+      // Send an immediate position update to broadcast the new death state
+      // This ensures that other clients update the visual state correctly
+      this.sendPlayerPosition();
+      
+      // Force multiple position updates to ensure the update propagates
+      const sendAdditionalUpdates = () => {
+        if (!this.isConnected || !this.gameEngine || !this.gameEngine.controls) return;
+        this.sendPlayerPosition();
+      };
+      
+      // Send additional updates over the next second to ensure sync
+      setTimeout(sendAdditionalUpdates, 100);
+      setTimeout(sendAdditionalUpdates, 300);
+      setTimeout(sendAdditionalUpdates, 600);
+      setTimeout(sendAdditionalUpdates, 1000);
+      
       console.log('Player respawned successfully');
     }
   }
@@ -1114,5 +1130,30 @@ export class P2PNetwork {
         type: 'restart'
       }
     });
+  }
+  
+  /**
+   * Host control: Respawn a specific player
+   * @param {string} playerId - The ID of the player to respawn
+   */
+  hostRespawnPlayer(playerId) {
+    if (!this.isHost || !this.isConnected) return;
+    
+    console.log(`Host sending respawn command to player: ${playerId}`);
+    
+    // Find the connection for this player
+    const playerConn = this.connections.find(conn => conn.peer === playerId);
+    
+    if (playerConn && playerConn.open) {
+      // Send respawn command to the specific player
+      playerConn.send({
+        type: 'respawnPlayer',
+        playerId: playerId
+      });
+      
+      console.log(`Respawn command sent to player: ${playerId}`);
+    } else {
+      console.warn(`Failed to send respawn command: Connection to player ${playerId} not found or not open`);
+    }
   }
 } 
