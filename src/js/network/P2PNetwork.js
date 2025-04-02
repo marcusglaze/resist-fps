@@ -480,6 +480,31 @@ export class P2PNetwork {
         }
         break;
         
+      case 'gameStatus':
+        console.log("Received game status update:", data.status);
+        
+        // Special handling for respawnAll flag which forces respawn at round end
+        if (data.status.respawnAll && this.gameEngine.controls.isDead) {
+          console.log("Received respawnAll command, forcing respawn");
+          this.handleRespawn();
+          
+          // Also force-disable spectator mode if active
+          if (this.gameEngine.isSpectatorMode) {
+            this.gameEngine.disableSpectatorMode();
+          }
+        }
+        
+        // Notify the game engine if onGameStateUpdate is set
+        if (this.onGameStateUpdate) {
+          this.onGameStateUpdate(data.status);
+        }
+        break;
+        
+      case 'windowUpdate':
+        console.log("Received window update for window index:", data.windowIndex);
+        this.updateWindow(data.windowIndex, data.boardsCount, data.isOpen, data.boardHealths);
+        break;
+        
       default:
         console.warn('Unknown data type received:', data.type);
     }
@@ -628,22 +653,19 @@ export class P2PNetwork {
   
   /**
    * Get the current game state
-   * @returns {Object} The game state object
+   * @returns {Object} Current game state
    */
   getGameState() {
-    // This would be implemented to extract the relevant game state
-    // from the game engine for synchronization
+    // Only get full state if we're the host
+    if (!this.isHost) return {};
     
-    if (!this.gameEngine) return {};
-    
-    return {
+    const gameState = {
       playerPositions: this.getPlayerPositions(),
-      enemies: this.getEnemiesState(),
-      round: this.getRoundInfo(),
-      windows: this.getWindowsState(),
       gameStatus: this.getGameStatus(),
-      // Add other relevant game state data
+      windowState: this.getWindowsState()
     };
+    
+    return gameState;
   }
   
   /**
@@ -734,8 +756,9 @@ export class P2PNetwork {
       return [];
     }
     
-    // Example implementation
-    return this.gameEngine.scene.room.windows.map(window => ({
+    // Create window states with all necessary information
+    return this.gameEngine.scene.room.windows.map((window, index) => ({
+      index: index,
       position: {
         x: window.instance.position.x,
         y: window.instance.position.y,
@@ -743,7 +766,7 @@ export class P2PNetwork {
       },
       boardsCount: window.boardsCount,
       isOpen: window.isOpen,
-      health: window.boardHealths // Array of health values for each board
+      boardHealths: window.boardHealths.slice() // Clone the array
     }));
   }
   
@@ -1154,6 +1177,74 @@ export class P2PNetwork {
       console.log(`Respawn command sent to player: ${playerId}`);
     } else {
       console.warn(`Failed to send respawn command: Connection to player ${playerId} not found or not open`);
+    }
+  }
+  
+  /**
+   * Send a window update to all peers
+   * @param {number} windowIndex - Index of the window that changed
+   * @param {number} boardsCount - New board count
+   * @param {boolean} isOpen - Whether the window is open
+   * @param {Array} boardHealths - Health values for each board
+   */
+  sendWindowUpdate(windowIndex, boardsCount, isOpen, boardHealths) {
+    if (!this.isConnected) return;
+    
+    this.broadcastToAll({
+      type: 'windowUpdate',
+      windowIndex: windowIndex,
+      boardsCount: boardsCount,
+      isOpen: isOpen,
+      boardHealths: boardHealths
+    });
+  }
+  
+  /**
+   * Update a window based on received data
+   * @param {number} windowIndex - Index of the window to update
+   * @param {number} boardsCount - New board count
+   * @param {boolean} isOpen - Whether the window is open
+   * @param {Array} boardHealths - Health values for each board
+   */
+  updateWindow(windowIndex, boardsCount, isOpen, boardHealths) {
+    if (!this.gameEngine.scene || !this.gameEngine.scene.room) {
+      console.warn("Cannot update window: scene or room not available");
+      return;
+    }
+    
+    const windows = this.gameEngine.scene.room.windows;
+    if (!windows || !windows[windowIndex]) {
+      console.warn(`Cannot update window: window at index ${windowIndex} not found`);
+      return;
+    }
+    
+    const window = windows[windowIndex];
+    console.log(`Updating window ${windowIndex}. Current boards: ${window.boardsCount}, Target boards: ${boardsCount}`);
+    
+    // Update window open/closed state if needed
+    if (window.isOpen !== isOpen) {
+      window.isOpen = isOpen;
+      window.init(); // Reinitialize to reflect open/closed state
+    }
+    
+    // Update boards: remove or add as needed
+    if (window.boardsCount > boardsCount) {
+      // Remove boards to match target
+      while (window.boardsCount > boardsCount) {
+        window.removeBoard();
+      }
+    } else if (window.boardsCount < boardsCount) {
+      // Add boards to match target
+      while (window.boardsCount < boardsCount) {
+        window.addBoard();
+      }
+    }
+    
+    // Update board health values
+    if (boardHealths && boardHealths.length > 0) {
+      for (let i = 0; i < window.boardHealths.length && i < boardHealths.length; i++) {
+        window.boardHealths[i] = boardHealths[i];
+      }
     }
   }
 } 

@@ -412,8 +412,38 @@ export class Window {
     // Increment boards count
     this.boardsCount++;
     
+    // Notify network if available (for multiplayer sync)
+    if (window.gameEngine && window.gameEngine.networkManager && 
+        window.gameEngine.networkManager.network && 
+        window.gameEngine.networkManager.isHost) {
+      
+      // Find this window's index in the room windows array
+      const windowIndex = this.findWindowIndex();
+      if (windowIndex !== -1) {
+        window.gameEngine.networkManager.network.sendWindowUpdate(
+          windowIndex,
+          this.boardsCount,
+          this.isOpen,
+          this.boardHealths
+        );
+      }
+    }
+    
     // Return success
     return true;
+  }
+
+  /**
+   * Find this window's index in the room windows array
+   * @returns {number} The index or -1 if not found
+   */
+  findWindowIndex() {
+    if (!window.gameEngine || !window.gameEngine.scene || 
+        !window.gameEngine.scene.room || !window.gameEngine.scene.room.windows) {
+      return -1;
+    }
+    
+    return window.gameEngine.scene.room.windows.findIndex(w => w === this);
   }
 
   /**
@@ -486,6 +516,23 @@ export class Window {
     this.instance.remove(board);
     this.boardHealths.pop();
     this.boardsCount--;
+    
+    // Notify network if available (for multiplayer sync)
+    if (window.gameEngine && window.gameEngine.networkManager && 
+        window.gameEngine.networkManager.network && 
+        window.gameEngine.networkManager.isHost) {
+      
+      // Find this window's index in the room windows array
+      const windowIndex = this.findWindowIndex();
+      if (windowIndex !== -1) {
+        window.gameEngine.networkManager.network.sendWindowUpdate(
+          windowIndex,
+          this.boardsCount,
+          this.isOpen,
+          this.boardHealths
+        );
+      }
+    }
     
     // Return success
     return true;

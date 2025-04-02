@@ -934,6 +934,8 @@ export class Engine {
    * Disable spectator mode
    */
   disableSpectatorMode() {
+    console.log("Disabling spectator mode");
+    
     // Clear the spectator interval
     if (this.spectatorInterval) {
       clearInterval(this.spectatorInterval);
@@ -948,8 +950,29 @@ export class Engine {
       this.controls.modelContainer.visible = true;
     }
     
+    // Reset player position if needed
+    if (this.controls && this.controls.camera && this.scene && this.scene.spawnPoint) {
+      // Reset to spawn point
+      this.controls.camera.position.copy(this.scene.spawnPoint);
+      
+      // Reset rotation to look forward
+      this.controls.camera.rotation.set(0, 0, 0);
+    }
+    
     // Show UI elements that were hidden
     this.showPlayerUI();
+    
+    // Ensure controls are enabled
+    if (this.controls) {
+      this.controls.enabled = true;
+      
+      // If we're still in an active game, try to lock pointer again
+      if (this.isGameStarted && !this.isGameOver && !this.isPaused) {
+        setTimeout(() => {
+          document.body.requestPointerLock();
+        }, 100);
+      }
+    }
     
     // Remove the spectator overlay if it exists
     const spectateOverlay = document.getElementById('spectate-overlay');

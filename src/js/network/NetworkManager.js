@@ -101,7 +101,7 @@ export class NetworkManager {
       // This fixes the "Connection is not open" error
       setTimeout(() => {
         // Starting position updates with a slight delay to ensure connection is ready
-        this.startPositionUpdates();
+      this.startPositionUpdates();
         console.log("Started sending position updates after host connection established");
       }, 1000); // 1 second delay to ensure connection is fully established
       
@@ -1175,7 +1175,7 @@ export class NetworkManager {
       console.log("Using server unique ID:", this.serverUniqueId);
       
       const requestBody = {
-        id: hostId,
+          id: hostId,
         name: this.serverName || `Game Server ${hostId.substring(0, 6)}`,
         uniqueId: this.serverUniqueId,
         playerCount: 1, // Start with 1 player (the host)
@@ -1324,7 +1324,7 @@ export class NetworkManager {
       
       // Copy to clipboard
       try {
-        document.execCommand('copy');
+      document.execCommand('copy');
         
         // Show copied message
         const copyMsg = document.createElement('div');
@@ -1343,11 +1343,11 @@ export class NetworkManager {
         dialog.insertBefore(copyMsg, idDisplay.nextSibling);
         
         // Remove message after 2 seconds
-        setTimeout(() => {
+      setTimeout(() => {
           if (dialog.contains(copyMsg)) {
             dialog.removeChild(copyMsg);
           }
-        }, 2000);
+      }, 2000);
       } catch (err) {
         console.error('Failed to copy:', err);
       }
@@ -1390,12 +1390,12 @@ export class NetworkManager {
       // Hide and remove the modal
       modal.style.display = 'none';
       document.body.removeChild(modal);
-      
+    
       // IMPORTANT: Request pointer lock after closing the dialog
       console.log("Dialog closed, locking pointer");
-      
+    
       // Add a short delay to ensure the dialog is fully removed before requesting pointer lock
-      setTimeout(() => {
+    setTimeout(() => {
         console.log("Attempting to lock pointer after dialog close");
         
         if (this.gameEngine) {
@@ -1417,7 +1417,7 @@ export class NetworkManager {
         } else {
           console.warn("gameEngine reference not found for pointer lock");
         }
-      }, 100);
+    }, 100);
     };
     dialog.appendChild(closeButton);
     
@@ -1595,8 +1595,8 @@ export class NetworkManager {
         
         // Show server list container
         serverListContainer.style.display = 'block';
-        
-        if (servers.length === 0) {
+          
+          if (servers.length === 0) {
           // No servers found
           const noServersMsg = document.createElement('div');
           noServersMsg.textContent = 'No active servers found';
@@ -1671,14 +1671,14 @@ export class NetworkManager {
             if (canJoin) {
               joinButton.onclick = () => {
                 // Close the dialog
-                document.body.removeChild(modal);
+              document.body.removeChild(modal);
                 
                 // Show the loading screen immediately when joining
                 this.showLoadingScreen();
                 
                 // Join the game
-                this.joinGame(server.id);
-              };
+              this.joinGame(server.id);
+            };
             }
             
             joinButtonContainer.appendChild(joinButton);
@@ -1805,7 +1805,7 @@ export class NetworkManager {
         })
       });
       
-      if (!response.ok) {
+        if (!response.ok) {
         throw new Error(`Failed to remove server: ${response.statusText}`);
       }
       
@@ -2113,8 +2113,9 @@ export class NetworkManager {
   checkPlayersForRespawn() {
     if (!this.isHost || !this.network) return;
     
-    // If no round active and there are dead players but at least one player alive,
-    // respawn the dead players
+    console.log("Host checking if players need respawning at round end");
+    
+    // If there are dead players, respawn them regardless of round state
     const deadPlayers = [];
     let anyAlive = !this.gameEngine.controls.isDead; // Check if host is alive
     
@@ -2127,19 +2128,46 @@ export class NetworkManager {
       }
     });
     
-    // If at least one player is alive, respawn all dead players
-    if (anyAlive && deadPlayers.length > 0) {
+    // Always respawn dead players at round end, even if no one is alive
+    // This ensures everyone respawns for the next round
+    if (deadPlayers.length > 0) {
       console.log(`Host respawning ${deadPlayers.length} players at round end`);
       
       // Respawn each dead player
       deadPlayers.forEach(playerId => {
         this.network.hostRespawnPlayer(playerId);
+        
+        // Also update the local player data to ensure visual state is corrected
+        const playerData = this.remotePlayers.get(playerId);
+        if (playerData) {
+          playerData.isDead = false;
+          playerData.health = 100;
+          playerData.wasDeadLastUpdate = false;
+          this.updatePlayerDeathState(playerId, false);
+        }
       });
       
       // If host is dead, respawn locally
       if (this.gameEngine.controls.isDead) {
         this.respawnLocalPlayer();
       }
+      
+      // If spectator mode is active on host, disable it
+      if (this.gameEngine.isSpectatorMode) {
+        this.gameEngine.disableSpectatorMode();
+      }
+      
+      // Notify all clients that players have been respawned for a new round
+      this.network.broadcastToAll({
+        type: 'gameStatus',
+        status: {
+          isGameOver: false,
+          isPaused: false,
+          allPlayersDead: false,
+          roundOver: true,
+          respawnAll: true
+        }
+      });
     }
   }
   
@@ -2443,4 +2471,4 @@ export class NetworkManager {
       loadingScreen.parentNode.removeChild(loadingScreen);
     }
   }
-}
+} 
