@@ -569,7 +569,11 @@ export class Enemy {
    * @param {number} deltaTime - Time elapsed since last update
    */
   chasePlayer(deltaTime) {
-    if (!this.player) return;
+    // Check if we have a player reference
+    if (!this.player) {
+      this.moveRandomly(deltaTime);
+      return;
+    }
     
     // Default to chasing local player
     let closestPlayerPos = new THREE.Vector3(
@@ -579,19 +583,28 @@ export class Enemy {
     );
     
     let closestDistance = this.instance.position.distanceTo(closestPlayerPos);
+    let targetingRemotePlayer = false;
+    let localPlayerIsDead = this.player.isDead;
     
     // Check for remote players via NetworkManager if we have access to game engine
     if (this.manager && this.manager.gameEngine && 
         this.manager.gameEngine.networkManager && 
         this.manager.gameEngine.networkManager.remotePlayers) {
       
-      // Log that we're checking for remote players
-      if (this.manager.gameEngine.networkManager.remotePlayers.size > 0) {
-        console.log(`Checking ${this.manager.gameEngine.networkManager.remotePlayers.size} remote players for closest target`);
+      const remotePlayers = this.manager.gameEngine.networkManager.remotePlayers;
+      
+      // Only log if we actually have remote players to check
+      if (remotePlayers.size > 0) {
+        console.log(`Checking ${remotePlayers.size} remote players for closest target. Local player dead: ${localPlayerIsDead}`);
       }
       
-      // Loop through remote players to find the closest one
-      this.manager.gameEngine.networkManager.remotePlayers.forEach((remotePlayer) => {
+      // Loop through remote players to find the closest one that's alive
+      remotePlayers.forEach((remotePlayer) => {
+        // Skip dead remote players
+        if (remotePlayer.isDead) {
+          return;
+        }
+        
         if (remotePlayer.position) {
           const remotePlayerPos = new THREE.Vector3(
             remotePlayer.position.x,
@@ -601,14 +614,22 @@ export class Enemy {
           
           const distance = this.instance.position.distanceTo(remotePlayerPos);
           
-          // If this remote player is closer than current closest, target them instead
-          if (distance < closestDistance) {
+          // Prioritize remote players if local player is dead
+          // OR if the remote player is simply closer
+          if ((localPlayerIsDead && !remotePlayer.isDead) || distance < closestDistance) {
             closestPlayerPos = remotePlayerPos;
             closestDistance = distance;
-            console.log(`Found closer player at distance ${distance.toFixed(2)}`);
+            targetingRemotePlayer = true;
+            console.log(`Targeting remote player at distance ${distance.toFixed(2)}. Player dead: ${remotePlayer.isDead}`);
           }
         }
       });
+    }
+    
+    // If local player is dead and we didn't find any living remote players, move randomly
+    if (localPlayerIsDead && !targetingRemotePlayer) {
+      this.moveRandomly(deltaTime);
+      return;
     }
     
     // Calculate direction to closest player (only on x and z axes)
@@ -636,6 +657,7 @@ export class Enemy {
    * Try to attack player if in range
    */
   tryAttackPlayer() {
+    // Check if we have a player reference
     if (!this.player) return;
     
     // Check cooldown
@@ -654,14 +676,22 @@ export class Enemy {
     
     let closestDistance = this.instance.position.distanceTo(closestPlayerPos);
     let foundCloserPlayer = false;
+    let localPlayerIsDead = this.player.isDead;
     
     // Check for remote players via NetworkManager if we have access to game engine
     if (this.manager && this.manager.gameEngine && 
         this.manager.gameEngine.networkManager && 
         this.manager.gameEngine.networkManager.remotePlayers) {
       
-      // Loop through remote players to find the closest one
-      this.manager.gameEngine.networkManager.remotePlayers.forEach((remotePlayer) => {
+      const remotePlayers = this.manager.gameEngine.networkManager.remotePlayers;
+      
+      // Loop through remote players to find the closest one that's alive
+      remotePlayers.forEach((remotePlayer) => {
+        // Skip dead remote players
+        if (remotePlayer.isDead) {
+          return;
+        }
+        
         if (remotePlayer.position) {
           const remotePlayerPos = new THREE.Vector3(
             remotePlayer.position.x,
@@ -671,8 +701,9 @@ export class Enemy {
           
           const distance = this.instance.position.distanceTo(remotePlayerPos);
           
-          // If this remote player is closer than current closest
-          if (distance < closestDistance) {
+          // Prioritize remote players if local player is dead
+          // OR if the remote player is simply closer
+          if ((localPlayerIsDead && !remotePlayer.isDead) || distance < closestDistance) {
             closestPlayerPos = remotePlayerPos;
             closestDistance = distance;
             foundCloserPlayer = true;
@@ -681,11 +712,16 @@ export class Enemy {
       });
     }
     
+    // If local player is dead and we didn't find any living remote players, don't attack
+    if (localPlayerIsDead && !foundCloserPlayer) {
+      return;
+    }
+    
     // Attack if close enough (1.5 units)
     if (closestDistance < 1.5) {
-      // Apply damage to player only if it's the local player
+      // Apply damage to player only if it's the local player and they're not dead
       // (damage to remote players is handled by their own game instances)
-      if (!foundCloserPlayer) {
+      if (!foundCloserPlayer && !localPlayerIsDead) {
         this.player.takeDamage(this.playerDamage);
       }
       

@@ -1025,6 +1025,16 @@ export class PlayerControls {
               if (zombieObject.userData.enemy.health <= 0) {
                 this.addPoints(100, true, true); // Headshot kill bonus
               }
+              
+              // If we're a client (not host), notify the host about the damage
+              if (this.networkManager && !this.networkManager.isHost && this.networkManager.network) {
+                console.log(`Client notifying host of headshot damage: ${damageDealt} to enemy ${zombieObject.userData.enemy.id}`);
+                this.networkManager.network.sendPlayerAction('damageEnemy', {
+                  enemyId: zombieObject.userData.enemy.id,
+                  damage: damageDealt,
+                  isHeadshot: true
+                });
+              }
             } else {
               const damageDealt = fireData.bodyDamage;
               zombieObject.userData.enemy.takeDamage(damageDealt);
@@ -1036,6 +1046,16 @@ export class PlayerControls {
               // If this damage kills the zombie, award bonus points
               if (zombieObject.userData.enemy.health <= 0) {
                 this.addPoints(50, true, false); // Regular kill bonus
+              }
+              
+              // If we're a client (not host), notify the host about the damage
+              if (this.networkManager && !this.networkManager.isHost && this.networkManager.network) {
+                console.log(`Client notifying host of body damage: ${damageDealt} to enemy ${zombieObject.userData.enemy.id}`);
+                this.networkManager.network.sendPlayerAction('damageEnemy', {
+                  enemyId: zombieObject.userData.enemy.id,
+                  damage: damageDealt,
+                  isHeadshot: false
+                });
               }
             }
           }

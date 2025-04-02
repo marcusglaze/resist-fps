@@ -494,6 +494,12 @@ export class P2PNetwork {
     // This would be implemented based on the game mechanics
     console.log(`Player ${playerId} performed action:`, action);
     
+    // Handle specific action types
+    if (action.type === 'damageEnemy' && this.isHost) {
+      // Apply damage to the enemy if we're the host
+      this.applyEnemyDamage(action.data, playerId);
+    }
+    
     // If we're the host, broadcast this to all other clients
     if (this.isHost) {
       this.broadcastToOthers({
@@ -501,6 +507,50 @@ export class P2PNetwork {
         action: action,
         playerId: playerId
       }, playerId);
+    }
+  }
+  
+  /**
+   * Apply damage to an enemy from a client request (host only)
+   * @param {Object} damageData - The damage data
+   * @param {string} playerId - The ID of the player who did the damage
+   */
+  applyEnemyDamage(damageData, playerId) {
+    if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
+        !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
+      console.warn("Cannot apply enemy damage: not host or game scene not fully initialized");
+      return;
+    }
+    
+    try {
+      const { enemyId, damage, isHeadshot } = damageData;
+      console.log(`Host applying damage from client ${playerId}: ${damage} to enemy ${enemyId} (headshot: ${isHeadshot})`);
+      
+      // Find the enemy by ID
+      const enemyManager = this.gameEngine.scene.room.enemyManager;
+      const enemy = enemyManager.enemies.find(e => e.id === enemyId);
+      
+      if (enemy) {
+        // Apply damage to the enemy
+        enemy.takeDamage(damage);
+        console.log(`Applied ${damage} damage to enemy ${enemyId}, health now: ${enemy.health}`);
+        
+        // Ensure immediate state update to all clients
+        if (enemy.health <= 0) {
+          console.log(`Enemy ${enemyId} killed by client ${playerId}`);
+          
+          // Force a game state update after a short delay to ensure death is synchronized
+          setTimeout(() => {
+            if (this.broadcastGameState) {
+              this.broadcastGameState(true); // Force immediate update
+            }
+          }, 100);
+        }
+      } else {
+        console.warn(`Enemy with ID ${enemyId} not found`);
+      }
+    } catch (error) {
+      console.error("Error applying enemy damage:", error);
     }
   }
   

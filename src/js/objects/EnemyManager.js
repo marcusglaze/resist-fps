@@ -190,8 +190,30 @@ export class EnemyManager {
       }
     }
     
+    // Check if host player is dead but there are remote players
+    let hasLivingRemotePlayers = false;
+    
+    // Only check for remote players if we have access to the network manager
+    if (this.gameEngine && this.gameEngine.networkManager) {
+      const networkManager = this.gameEngine.networkManager;
+      
+      // Check if there are any remote players that are not dead
+      if (networkManager.remotePlayers && networkManager.remotePlayers.size > 0) {
+        networkManager.remotePlayers.forEach(remotePlayer => {
+          if (!remotePlayer.isDead) {
+            hasLivingRemotePlayers = true;
+          }
+        });
+        
+        if (hasLivingRemotePlayers) {
+          console.log("Host player may be dead, but there are living remote players. Enemies will continue functioning.");
+        }
+      }
+    }
+    
     // Update all existing enemies
     this.enemies.forEach(enemy => {
+      // Even if local player is dead, update enemies if there are living remote players
       enemy.update(deltaTime);
       
       // Safety check: ensure enemies with 0 or negative health are marked for removal
