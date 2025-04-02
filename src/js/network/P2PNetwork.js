@@ -769,6 +769,9 @@ export class P2PNetwork {
     // Check local player
     const localPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
     
+    // If the local player (host) is alive, then not all players are dead
+    if (!localPlayerDead) return false;
+    
     // Check remote players
     let allRemotePlayersDead = true;
     
@@ -780,7 +783,8 @@ export class P2PNetwork {
       });
     }
     
-    return localPlayerDead && allRemotePlayersDead;
+    // If host is dead but at least one remote player is alive, return false
+    return allRemotePlayersDead;
   }
   
   /**

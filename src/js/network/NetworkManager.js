@@ -114,8 +114,103 @@ export class NetworkManager {
   }
   
   /**
-   * Join a multiplayer game as a client
-   * @param {string} hostId - The host ID to connect to
+   * Show a loading screen while joining a game
+   * @param {string} message - Message to display on the loading screen
+   * @returns {HTMLElement} The loading screen element
+   */
+  showLoadingScreen(message = 'Joining game...') {
+    // Create the loading screen container
+    const loadingScreen = document.createElement('div');
+    loadingScreen.id = 'multiplayer-loading-screen';
+    loadingScreen.style.position = 'fixed';
+    loadingScreen.style.top = '0';
+    loadingScreen.style.left = '0';
+    loadingScreen.style.width = '100%';
+    loadingScreen.style.height = '100%';
+    loadingScreen.style.backgroundColor = 'rgba(0, 0, 0, 0.9)';
+    loadingScreen.style.display = 'flex';
+    loadingScreen.style.flexDirection = 'column';
+    loadingScreen.style.justifyContent = 'center';
+    loadingScreen.style.alignItems = 'center';
+    loadingScreen.style.zIndex = '3000'; // Higher than other UI elements
+    loadingScreen.style.color = '#ffffff';
+    loadingScreen.style.fontFamily = 'Arial, sans-serif';
+    
+    // Add a spinner animation
+    const spinner = document.createElement('div');
+    spinner.style.width = '60px';
+    spinner.style.height = '60px';
+    spinner.style.border = '6px solid rgba(255, 255, 255, 0.1)';
+    spinner.style.borderTopColor = '#4CAF50'; // Green color for the spinner
+    spinner.style.borderRadius = '50%';
+    spinner.style.animation = 'spin 1s linear infinite';
+    
+    // Add animation keyframes
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes pulse {
+        0% { opacity: 0.3; }
+        50% { opacity: 1; }
+        100% { opacity: 0.3; }
+      }
+    `;
+    document.head.appendChild(style);
+    
+    // Add loading text
+    const loadingText = document.createElement('h2');
+    loadingText.textContent = message;
+    loadingText.style.marginTop = '30px';
+    loadingText.style.color = '#ffffff';
+    loadingText.style.animation = 'pulse 1.5s infinite ease-in-out';
+    
+    // Add secondary text with dots animation
+    const statusText = document.createElement('p');
+    statusText.textContent = 'Establishing connection';
+    statusText.style.marginTop = '10px';
+    statusText.style.color = '#aaaaaa';
+    
+    // Add dots animation
+    const dots = document.createElement('span');
+    dots.textContent = '...';
+    dots.style.animation = 'pulse 1.5s infinite ease-in-out';
+    statusText.appendChild(dots);
+    
+    // Add all elements to the loading screen
+    loadingScreen.appendChild(spinner);
+    loadingScreen.appendChild(loadingText);
+    loadingScreen.appendChild(statusText);
+    
+    // Add to the document body
+    document.body.appendChild(loadingScreen);
+    
+    return loadingScreen;
+  }
+  
+  /**
+   * Hide the loading screen
+   */
+  hideLoadingScreen() {
+    const loadingScreen = document.getElementById('multiplayer-loading-screen');
+    if (loadingScreen) {
+      // Optional fade-out effect
+      loadingScreen.style.transition = 'opacity 0.5s ease-out';
+      loadingScreen.style.opacity = '0';
+      
+      // Remove after transition
+      setTimeout(() => {
+        if (loadingScreen.parentNode) {
+          loadingScreen.parentNode.removeChild(loadingScreen);
+        }
+      }, 500);
+    }
+  }
+  
+  /**
+   * Join a multiplayer game with the given host ID
+   * @param {string} hostId - The host ID to join
    */
   async joinGame(hostId) {
     if (!hostId) {
@@ -125,6 +220,10 @@ export class NetworkManager {
     }
     
     console.log("Joining game with host ID:", hostId);
+    
+    // Show loading screen immediately
+    const loadingScreen = this.showLoadingScreen();
+    
     this.gameMode = 'client';
     this.isMultiplayer = true;
     this.isHost = false;
@@ -157,6 +256,9 @@ export class NetworkManager {
           // Starting position updates with a slight delay to ensure connection is ready
           this.startPositionUpdates();
           console.log("Started sending position updates after connection established");
+          
+          // Hide loading screen after everything is ready
+          this.hideLoadingScreen();
         }, 1000); // 1 second delay to ensure connection is fully established
       }, 1000); // Wait 1 second for the game to initialize properly
       
@@ -164,6 +266,9 @@ export class NetworkManager {
     } catch (err) {
       console.error("Failed to join game:", err);
       this.updateConnectionStatus('Failed to connect');
+      
+      // Hide loading screen and show error
+      this.hideLoadingScreen();
       this.showErrorDialog("Failed to join game: " + err.message);
     }
   }
@@ -275,6 +380,11 @@ export class NetworkManager {
       Object.entries(state.playerPositions).forEach(([playerId, position]) => {
         if (playerId !== this.network.clientId) {
           this.updateRemotePlayerPosition(playerId, position);
+          
+          // If this is the host player and they're dead, log it to help with debugging
+          if (playerId === this.network.hostId && position.isDead) {
+            console.log("Host player is dead, but continuing to process game state updates");
+          }
         }
       });
     }
@@ -328,6 +438,11 @@ export class NetworkManager {
               enemy.health = enemyData.health;
               enemy.state = enemyData.state;
               enemy.insideRoom = enemyData.insideRoom || enemy.insideRoom;
+              
+              // Make sure enemy retains its functionality, especially if host is dead
+              if (!enemy.active && enemy.state !== 'dying') {
+                enemy.active = true;
+              }
               
               // Ensure enemies are properly moving/animated based on state
               if (enemyData.state === 'moving' && enemy.state !== 'moving') {
@@ -810,19 +925,84 @@ export class NetworkManager {
     
     // If player is dead, enemies should not target them
     if (isDead) {
-      // Find any enemies targeting this player and redirect them
-      enemies.forEach(enemy => {
-        if (enemy.targetPlayer && enemy.targetPlayer.id === playerId) {
-          console.log(`Player ${playerId} is dead, redirecting enemy ${enemy.id}`);
-          // Reset target player - the enemy AI will pick a new target
-          enemy.targetPlayer = null;
-          
-          // Force the enemy to look for a new target
-          if (typeof enemy.findNewTarget === 'function') {
-            enemy.findNewTarget();
-          }
+      // First, identify any enemies targeting this player
+      const enemiesToReroute = enemies.filter(enemy => 
+        enemy.targetPlayer && enemy.targetPlayer.id === playerId
+      );
+      
+      if (enemiesToReroute.length > 0) {
+        console.log(`Player ${playerId} is dead, redirecting ${enemiesToReroute.length} enemies`);
+        
+        // Find a list of living players to target instead
+        const potentialTargets = [];
+        
+        // Add host if alive
+        if (this.gameEngine.controls && !this.gameEngine.controls.isDead) {
+          potentialTargets.push({
+            id: this.network.hostId,
+            position: {
+              x: this.gameEngine.controls.camera.position.x,
+              y: this.gameEngine.controls.camera.position.y,
+              z: this.gameEngine.controls.camera.position.z
+            }
+          });
         }
-      });
+        
+        // Add any living remote players
+        this.remotePlayers.forEach((player, id) => {
+          if (!player.isDead && player.position) {
+            potentialTargets.push({
+              id: id,
+              position: player.position
+            });
+          }
+        });
+        
+        // Redirect each enemy to a living target or to a window
+        enemiesToReroute.forEach(enemy => {
+          enemy.targetPlayer = null;  // Clear current target
+
+          if (potentialTargets.length > 0) {
+            // Randomly select a living player to target
+            const randomIndex = Math.floor(Math.random() * potentialTargets.length);
+            const newTarget = potentialTargets[randomIndex];
+            
+            console.log(`Redirecting enemy ${enemy.id} to player ${newTarget.id}`);
+            
+            // Assign new target player and position
+            enemy.targetPlayer = { id: newTarget.id };
+            enemy.targetPosition = {
+              x: newTarget.position.x,
+              y: newTarget.position.y,
+              z: newTarget.position.z
+            };
+            
+            // Force enemy to move to the new target
+            if (typeof enemy.startMoving === 'function') {
+              enemy.startMoving();
+            }
+          } else if (this.gameEngine.scene.room.windows && 
+                    this.gameEngine.scene.room.windows.length > 0) {
+            // If no living players, target a window instead
+            const randomWindowIndex = Math.floor(Math.random() * this.gameEngine.scene.room.windows.length);
+            enemy.targetWindow = this.gameEngine.scene.room.windows[randomWindowIndex];
+            
+            // Reset target position to window position
+            if (enemy.targetWindow && enemy.targetWindow.instance) {
+              enemy.targetPosition = {
+                x: enemy.targetWindow.instance.position.x,
+                y: enemy.targetWindow.instance.position.y,
+                z: enemy.targetWindow.instance.position.z
+              };
+            }
+            
+            // Force enemy to move to the window
+            if (typeof enemy.startMoving === 'function') {
+              enemy.startMoving();
+            }
+          }
+        });
+      }
       return;
     }
     
@@ -836,6 +1016,12 @@ export class NetworkManager {
           y: position.y,
           z: position.z
         };
+        
+        // Ensure enemy is in moving state if not already
+        if (enemy.state !== 'moving' && typeof enemy.startMoving === 'function') {
+          enemy.startMoving();
+        }
+        
         updatedCount++;
       }
     });
@@ -1430,6 +1616,10 @@ export class NetworkManager {
       if (serverId) {
         // Close the dialog
         document.body.removeChild(modal);
+        
+        // Show the loading screen immediately when joining
+        this.showLoadingScreen();
+        
         // Join the game with the entered ID
         this.joinGame(serverId);
       } else {
@@ -1542,16 +1732,6 @@ export class NetworkManager {
             serverItem.style.gridTemplateColumns = '1fr 100px 120px';
             serverItem.style.padding = '10px';
             serverItem.style.borderBottom = '1px solid #444';
-            serverItem.style.transition = 'background-color 0.2s';
-            
-            // Change background color on hover
-            serverItem.addEventListener('mouseover', () => {
-              serverItem.style.backgroundColor = '#3E3E3E';
-            });
-            
-            serverItem.addEventListener('mouseout', () => {
-              serverItem.style.backgroundColor = 'transparent';
-            });
             
             // Server name
             const nameElement = document.createElement('div');
@@ -1563,58 +1743,57 @@ export class NetworkManager {
             serverItem.appendChild(nameElement);
             
             // Player count
-            const playerCountElement = document.createElement('div');
-            playerCountElement.textContent = `${server.playerCount || 0}/${server.maxPlayers || MAX_PLAYERS}`;
-            
-            // Highlight if server is full
-            if ((server.playerCount || 0) >= (server.maxPlayers || MAX_PLAYERS)) {
-              playerCountElement.style.color = '#ff4444'; // Red for full
-            } else if ((server.playerCount || 0) === (server.maxPlayers || MAX_PLAYERS) - 1) {
-              playerCountElement.style.color = '#ffaa44'; // Orange for almost full
-            } else {
-              playerCountElement.style.color = '#44ff44'; // Green for available
-            }
-            
-            playerCountElement.style.textAlign = 'center';
-            serverItem.appendChild(playerCountElement);
+            const playersElement = document.createElement('div');
+            playersElement.textContent = `${server.players || 1}/${MAX_PLAYERS}`;
+            playersElement.style.textAlign = 'center';
+            serverItem.appendChild(playersElement);
             
             // Join button
+            const joinButtonContainer = document.createElement('div');
+            joinButtonContainer.style.textAlign = 'center';
+            
+            const canJoin = (server.players || 1) < MAX_PLAYERS;
+            
             const joinButton = document.createElement('button');
-            
-            // Check if server is full
-            const isFull = (server.playerCount || 0) >= (server.maxPlayers || MAX_PLAYERS);
-            
-            joinButton.textContent = isFull ? 'Full' : 'Join';
+            joinButton.textContent = canJoin ? 'Join' : 'Full';
             joinButton.style.padding = '5px 10px';
-            joinButton.style.cursor = isFull ? 'not-allowed' : 'pointer';
-            joinButton.style.backgroundColor = isFull ? '#666' : '#4CAF50';
+            joinButton.style.backgroundColor = canJoin ? '#4CAF50' : '#ccc';
             joinButton.style.color = 'white';
             joinButton.style.border = 'none';
             joinButton.style.borderRadius = '3px';
-            joinButton.style.fontSize = '14px';
-            joinButton.disabled = isFull;
+            joinButton.style.cursor = canJoin ? 'pointer' : 'not-allowed';
             
-            if (!isFull) {
+            if (canJoin) {
               joinButton.onclick = () => {
                 // Close the dialog
                 document.body.removeChild(modal);
+                
+                // Show the loading screen immediately when joining
+                this.showLoadingScreen();
+                
                 // Join the game
                 this.joinGame(server.id);
               };
             }
             
-            serverItem.appendChild(joinButton);
+            joinButtonContainer.appendChild(joinButton);
+            serverItem.appendChild(joinButtonContainer);
             
-            // Add to container
             serverListContainer.appendChild(serverItem);
           });
         }
-        
       } catch (error) {
-        // Show error
+        console.error("Error fetching server list:", error);
+        
+        // Show error message
         loadingText.style.display = 'none';
         serverListContainer.style.display = 'block';
-        serverListContainer.innerHTML = `<div style="color: #ff4444; padding: 15px;">Error loading servers: ${error.message}</div>`;
+        
+        const errorMsg = document.createElement('div');
+        errorMsg.textContent = 'Failed to load servers: ' + error.message;
+        errorMsg.style.padding = '15px';
+        errorMsg.style.color = '#ff6b6b';
+        serverListContainer.appendChild(errorMsg);
       }
     };
     
@@ -1801,7 +1980,8 @@ export class NetworkManager {
     
     // Handle game over state
     if (status.isGameOver !== undefined && status.isGameOver !== this.gameEngine.isGameOver) {
-      if (status.isGameOver) {
+      // Only show game over screen if all players are dead or if the local player is dead
+      if (status.isGameOver && (status.allPlayersDead || this.gameEngine.controls.isDead)) {
         // Show multiplayer game over screen with "waiting for host" message
         this.showMultiplayerGameOverScreen(status.allPlayersDead);
       } else if (this.gameEngine.isGameOver) {
@@ -1813,6 +1993,11 @@ export class NetworkManager {
         
         // Reset game state
         this.gameEngine.isGameOver = false;
+      } else if (status.isGameOver) {
+        // Host died but client is still alive - don't show game over screen
+        console.log("Host died but client is still alive - continuing play");
+        // Don't set the game over flag for the client
+        // this.gameEngine.isGameOver = false;
       }
     }
     
