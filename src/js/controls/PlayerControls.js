@@ -274,6 +274,8 @@ export class PlayerControls {
     if (this.audioElements.playerWalk) {
       this.audioElements.playerWalk.loop = true;
       this.audioElements.playerWalk.volume = 0.5; // Slightly lower volume for walking
+      // Initialize tracking variable for walking sound
+      this.isWalkSoundPlaying = false;
     }
     
     // Configure background music to loop at lower volume (reduced by 60%)
@@ -3274,15 +3276,16 @@ export class PlayerControls {
       return;
     }
     
-    if (this.audioElements.playerWalk && !this.audioElements.playerWalk.paused) {
-      return; // Already playing
-    }
-    
     if (this.audioElements.playerWalk) {
-      this.audioElements.playerWalk.currentTime = 0;
-      this.audioElements.playerWalk.play().catch(error => {
-        console.warn(`Error playing walking sound: ${error}`);
-      });
+      if (this.audioElements.playerWalk.paused) {
+        this.audioElements.playerWalk.currentTime = 0;
+        this.audioElements.playerWalk.play().catch(error => {
+          console.warn(`Error playing walking sound: ${error}`);
+        });
+        // Set tracking variable for playing state
+        this.isWalkSoundPlaying = true;
+      }
+      // No need to restart if already playing
     }
   }
   
@@ -3290,8 +3293,6 @@ export class PlayerControls {
    * Stop walking sound when player stops moving
    */
   stopWalkingSound() {
-    if (!this.isWalkSoundPlaying) return;
-    
     try {
       const audio = this.audioElements.playerWalk;
       if (audio && !audio.paused) {
@@ -3656,6 +3657,8 @@ export class PlayerControls {
     // Play walking sound if moving
     if (hasMovement) {
       this.playWalkingSound();
+    } else {
+      this.stopWalkingSound();
     }
   }
   

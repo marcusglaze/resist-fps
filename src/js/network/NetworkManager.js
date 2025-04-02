@@ -114,188 +114,6 @@ export class NetworkManager {
   }
   
   /**
-   * Show a loading screen while joining a game
-   * @param {string} message - Message to display on the loading screen
-   * @returns {HTMLElement} The loading screen element
-   */
-  showLoadingScreen(message = 'Joining game...') {
-    // Create the loading screen container
-    const loadingScreen = document.createElement('div');
-    loadingScreen.id = 'multiplayer-loading-screen';
-    loadingScreen.style.position = 'fixed';
-    loadingScreen.style.top = '0';
-    loadingScreen.style.left = '0';
-    loadingScreen.style.width = '100%';
-    loadingScreen.style.height = '100%';
-    loadingScreen.style.backgroundColor = 'rgba(0, 0, 0, 0.9)';
-    loadingScreen.style.display = 'flex';
-    loadingScreen.style.flexDirection = 'column';
-    loadingScreen.style.justifyContent = 'center';
-    loadingScreen.style.alignItems = 'center';
-    loadingScreen.style.zIndex = '3000'; // Higher than other UI elements
-    loadingScreen.style.color = '#ffffff';
-    loadingScreen.style.fontFamily = 'Arial, sans-serif';
-    
-    // Add a spinner animation
-    const spinner = document.createElement('div');
-    spinner.style.width = '60px';
-    spinner.style.height = '60px';
-    spinner.style.border = '6px solid rgba(255, 255, 255, 0.1)';
-    spinner.style.borderTopColor = '#4CAF50'; // Green color for the spinner
-    spinner.style.borderRadius = '50%';
-    spinner.style.animation = 'spin 1s linear infinite';
-    
-    // Add animation keyframes
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes spin {
-        to { transform: rotate(360deg); }
-      }
-      @keyframes pulse {
-        0% { opacity: 0.3; }
-        50% { opacity: 1; }
-        100% { opacity: 0.3; }
-      }
-    `;
-    document.head.appendChild(style);
-    
-    // Add loading text
-    const loadingText = document.createElement('h2');
-    loadingText.textContent = message;
-    loadingText.style.marginTop = '30px';
-    loadingText.style.color = '#ffffff';
-    loadingText.style.animation = 'pulse 1.5s infinite ease-in-out';
-    
-    // Add status text that will update
-    const statusText = document.createElement('p');
-    statusText.id = 'loading-status-text';
-    statusText.textContent = 'Establishing connection...';
-    statusText.style.marginTop = '10px';
-    statusText.style.color = '#aaaaaa';
-    
-    // Create a container for the progress indicators
-    const progressContainer = document.createElement('div');
-    progressContainer.style.display = 'flex';
-    progressContainer.style.marginTop = '20px';
-    progressContainer.style.gap = '5px';
-    
-    // Create 3 progress dots
-    const updateProgressDots = () => {
-      const dots = ['⚪', '⚪', '⚪'];
-      let currentDot = 0;
-      
-      // Update status message with connection progress
-      let statusMessages = [
-        'Establishing connection',
-        'Connecting to game server',
-        'Syncing game state',
-        'Initializing player',
-        'Loading game world',
-        'Almost ready'
-      ];
-      let currentMessage = 0;
-      
-      // Update both dots and messages periodically
-      const updateInterval = setInterval(() => {
-        // Update progress dots
-        for (let i = 0; i < 3; i++) {
-          dots[i] = i === currentDot ? '🟢' : '⚪';
-        }
-        progressContainer.innerHTML = dots.join(' ');
-        currentDot = (currentDot + 1) % 3;
-        
-        // Update status message every 3 dot cycles
-        if (currentDot === 0) {
-          statusText.textContent = statusMessages[currentMessage] + '...';
-          currentMessage = (currentMessage + 1) % statusMessages.length;
-        }
-        
-        // Check if loading screen is still in DOM
-        if (!document.getElementById('multiplayer-loading-screen')) {
-          clearInterval(updateInterval);
-        }
-      }, 500);
-      
-      return progressContainer;
-    };
-    
-    const progressDots = updateProgressDots();
-    
-    // Add all elements to the loading screen
-    loadingScreen.appendChild(spinner);
-    loadingScreen.appendChild(loadingText);
-    loadingScreen.appendChild(statusText);
-    loadingScreen.appendChild(progressDots);
-    
-    // Add a "Cancel" button to allow users to abort if it takes too long
-    const cancelButton = document.createElement('button');
-    cancelButton.textContent = 'Cancel';
-    cancelButton.style.marginTop = '40px';
-    cancelButton.style.padding = '10px 20px';
-    cancelButton.style.backgroundColor = '#e74c3c';
-    cancelButton.style.color = 'white';
-    cancelButton.style.border = 'none';
-    cancelButton.style.borderRadius = '5px';
-    cancelButton.style.cursor = 'pointer';
-    cancelButton.style.fontSize = '16px';
-    
-    cancelButton.addEventListener('mouseover', () => {
-      cancelButton.style.backgroundColor = '#c0392b';
-    });
-    
-    cancelButton.addEventListener('mouseout', () => {
-      cancelButton.style.backgroundColor = '#e74c3c';
-    });
-    
-    cancelButton.addEventListener('click', () => {
-      // Hide loading screen
-      this.hideLoadingScreen();
-      
-      // Disconnect from any pending connections
-      if (this.network) {
-        this.network.disconnect();
-      }
-      
-      // Reset network state
-      this.isConnected = false;
-      this.isMultiplayer = false;
-      
-      // Return to main menu
-      if (this.gameEngine && this.gameEngine.startMenu) {
-        this.gameEngine.startMenu.show();
-      } else if (this.gameEngine && typeof this.gameEngine.showMainMenu === 'function') {
-        this.gameEngine.showMainMenu();
-      }
-    });
-    
-    loadingScreen.appendChild(cancelButton);
-    
-    // Add to the document body
-    document.body.appendChild(loadingScreen);
-    
-    return loadingScreen;
-  }
-  
-  /**
-   * Hide the loading screen
-   */
-  hideLoadingScreen() {
-    const loadingScreen = document.getElementById('multiplayer-loading-screen');
-    if (loadingScreen) {
-      // Optional fade-out effect
-      loadingScreen.style.transition = 'opacity 0.5s ease-out';
-      loadingScreen.style.opacity = '0';
-      
-      // Remove after transition
-      setTimeout(() => {
-        if (loadingScreen.parentNode) {
-          loadingScreen.parentNode.removeChild(loadingScreen);
-        }
-      }, 500);
-    }
-  }
-  
-  /**
    * Join a multiplayer game with the given host ID
    * @param {string} hostId - The host ID to join
    */
@@ -308,15 +126,7 @@ export class NetworkManager {
     
     console.log("Joining game with host ID:", hostId);
     
-    // Show loading screen immediately
-    const loadingScreen = this.showLoadingScreen();
-    
-    // Set a safety timeout to ensure the loading screen is removed after a maximum time
-    // This prevents it from getting stuck indefinitely if something goes wrong
-    const safetyTimeout = setTimeout(() => {
-      console.log("Safety timeout: forcing loading screen removal");
-      this.hideLoadingScreen();
-    }, 15000); // 15 seconds maximum wait time
+    // No loading screen - removed to prevent issues where it remains visible
     
     this.gameMode = 'client';
     this.isMultiplayer = true;
@@ -340,75 +150,13 @@ export class NetworkManager {
       console.log("Starting the game as a client");
       this.gameEngine.startGame();
       
-      // Set up a visibility change listener to check if the game scene is visible
-      const checkGameReady = () => {
-        // Check if game has started rendering (scene exists and is visible)
-        if (this.gameEngine && 
-            this.gameEngine.scene && 
-            this.gameEngine.scene.instance && 
-            this.gameEngine.controls &&
-            this.gameEngine.controls.enabled) {
-          
-          console.log("Game scene detected and controls enabled, hiding loading screen");
-          
-          // Clear safety timeout since we're handling it properly
-          clearTimeout(safetyTimeout);
-          
-          // Start position updates
-          this.startPositionUpdates();
-          
-          // Hide loading screen
-          this.hideLoadingScreen();
-          
-          // Remove this listener
-          document.removeEventListener('visibilitychange', visibilityListener);
-          
-          return true;
-        }
-        return false;
-      };
-      
-      // Check immediately if the game is already ready
-      if (!checkGameReady()) {
-        // Set up a visibility listener to detect when the tab becomes visible
-        // This helps with cases where the game loads while the tab is in the background
-        const visibilityListener = () => {
-          if (document.visibilityState === 'visible') {
-            checkGameReady();
-          }
-        };
-        document.addEventListener('visibilitychange', visibilityListener);
-        
-        // Also set up a periodic check in case the visibility event isn't reliable
-        let checkCount = 0;
-        const maxChecks = 20; // Check up to 20 times (10 seconds)
-        
-        const intervalCheck = setInterval(() => {
-          checkCount++;
-          if (checkGameReady() || checkCount >= maxChecks) {
-            clearInterval(intervalCheck);
-            document.removeEventListener('visibilitychange', visibilityListener);
-            
-            // If we've reached max checks but the game isn't ready, force hide the loading screen
-            if (checkCount >= maxChecks && document.getElementById('multiplayer-loading-screen')) {
-              console.log("Max check count reached, forcing loading screen removal");
-              this.hideLoadingScreen();
-              clearTimeout(safetyTimeout);
-            }
-          }
-        }, 500); // Check every 500ms
-      }
+      // Start position updates as soon as connected
+      this.startPositionUpdates();
       
       this.updateConnectionStatus(`Connected to ${this.truncateId(hostId)}`);
     } catch (err) {
       console.error("Failed to join game:", err);
       this.updateConnectionStatus('Failed to connect');
-      
-      // Clear safety timeout
-      clearTimeout(safetyTimeout);
-      
-      // Hide loading screen and show error
-      this.hideLoadingScreen();
       this.showErrorDialog("Failed to join game: " + err.message);
     }
   }
@@ -2669,6 +2417,30 @@ export class NetworkManager {
       }, 2000);
     } catch (err) {
       console.error('Fallback copy failed:', err);
+    }
+  }
+  
+  /**
+   * Show loading screen - DISABLED
+   * This method is kept as a placeholder but doesn't create a loading screen
+   * to prevent the issue where it remains visible after joining.
+   */
+  showLoadingScreen(message = 'Joining game...') {
+    console.log("Loading screen disabled - would have shown: " + message);
+    // Loading screen functionality removed
+    return null;
+  }
+  
+  /**
+   * Hide loading screen - DISABLED
+   * This method is kept as a placeholder but doesn't do anything
+   * since the loading screen has been disabled.
+   */
+  hideLoadingScreen() {
+    // Clean up any potentially remaining loading screens from previous sessions
+    const loadingScreen = document.getElementById('multiplayer-loading-screen');
+    if (loadingScreen && loadingScreen.parentNode) {
+      loadingScreen.parentNode.removeChild(loadingScreen);
     }
   }
 }
