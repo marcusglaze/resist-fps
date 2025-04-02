@@ -6,90 +6,53 @@ import { Engine } from './core/Engine';
  */
 document.addEventListener('DOMContentLoaded', () => {
   try {
-    // Create the game engine with debug options
-    const urlParams = new URLSearchParams(window.location.search);
-    const debugMode = urlParams.has('debug');
-    const doomMode = !urlParams.has('nodoom');
-    const hostMode = urlParams.has('host');
-    const joinMode = urlParams.has('join');
-    const joinId = urlParams.get('join');
+    // Configuration
+    const debugMode = false; // Disable debug mode for cleaner visuals
     
-    console.log("Starting game...");
-    console.log(`Debug mode: ${debugMode}`);
-    console.log(`Doom mode (classic shader): ${doomMode}`);
+    // Check if Doom mode is disabled via URL parameter
+    const url = new URL(window.location.href);
+    const doomParam = url.searchParams.get('doomMode');
+    const doomMode = doomParam !== '0'; // Enable Doom mode by default, disable if parameter is '0'
     
-    const loadingBar = document.createElement('div');
-    loadingBar.style.position = 'fixed';
-    loadingBar.style.top = '50%';
-    loadingBar.style.left = '50%';
-    loadingBar.style.transform = 'translate(-50%, -50%)';
-    loadingBar.style.width = '300px';
-    loadingBar.style.height = '20px';
-    loadingBar.style.backgroundColor = '#333';
-    loadingBar.style.borderRadius = '10px';
-    loadingBar.style.overflow = 'hidden';
-    loadingBar.style.zIndex = '1000';
+    // Check for multiplayer mode via URL parameters
+    const hostParam = url.searchParams.get('host');
+    const joinParam = url.searchParams.get('join');
     
-    const loadingProgress = document.createElement('div');
-    loadingProgress.style.height = '100%';
-    loadingProgress.style.width = '0%';
-    loadingProgress.style.backgroundColor = '#0f0';
-    loadingProgress.style.transition = 'width 0.3s ease-out';
+    console.log("Initializing game with doomMode:", doomMode);
+    if (hostParam === '1') {
+      console.log("Initializing as multiplayer host");
+    } else if (joinParam) {
+      console.log("Joining multiplayer game:", joinParam);
+    }
     
-    loadingBar.appendChild(loadingProgress);
-    document.body.appendChild(loadingBar);
+    // Create a loading screen
+    showLoadingScreen();
     
-    // Create and configure the game engine
-    import('./core/Engine.js').then(module => {
-      const Engine = module.Engine;
-      const engine = new Engine(debugMode, doomMode);
-      
-      // Store global reference for easy access from anywhere
-      window.gameEngine = engine;
-      
-      // Set loading progress updates
-      engine.onLoadingProgress = (progress) => {
-        loadingProgress.style.width = `${progress * 100}%`;
-        if (progress >= 1) {
-          setTimeout(() => {
-            loadingBar.style.opacity = '0';
-            setTimeout(() => {
-              document.body.removeChild(loadingBar);
-            }, 300);
-          }, 500);
-        }
-      };
-      
-      // Check if we should auto-join or host
-      if (hostMode) {
-        console.log('Auto-hosting enabled via URL parameter');
-        engine.initialMode = 'host';
-      } else if (joinMode && joinId) {
-        console.log(`Auto-joining enabled via URL parameter, joining host: ${joinId}`);
-        engine.initialMode = 'join';
-        engine.joinHostId = joinId;
-      }
-    }).catch(error => {
-      console.error("Error loading game engine:", error);
-      loadingBar.style.backgroundColor = '#600';
-      loadingProgress.style.backgroundColor = '#f00';
-      loadingProgress.style.width = '100%';
-    });
+    // Create and initialize the engine with debug and doom modes
+    const engine = new Engine(debugMode, doomMode);
     
-    // Log controls for debugging
-    console.log('--- Controls ---');
-    console.log('W, A, S, D or Arrow keys to move');
-    console.log('Mouse to look around');
-    console.log('Left click to shoot');
-    console.log('R to reload');
-    console.log('Space to jump');
-    console.log('Shift to run');
-    console.log('F to toggle flashlight');
-    console.log('E to interact with objects');
-    console.log('1, 2, 3 to switch weapons');
-    console.log('Q to toggle weapon');
-    console.log('Tab to show score');
-    console.log('Escape to pause');
+    // Initialize the engine - this will show the start menu
+    engine.init();
+    
+    // Check if we should automatically host or join a game via URL parameters
+    if (hostParam === '1' && engine.networkManager) {
+      setTimeout(() => {
+        engine.startMenu.hide();
+        engine.networkManager.startHosting();
+      }, 1000);
+    } else if (joinParam && engine.networkManager) {
+      setTimeout(() => {
+        engine.startMenu.hide();
+        engine.networkManager.joinGame(joinParam);
+      }, 1000);
+    }
+    
+    // Hide loading screen once engine is initialized
+    hideLoadingScreen();
+
+    // Print instructions to console
+    console.log('3D Room Explorer: Zombie Defense' + (doomMode ? ' - DOOM EDITION' : ''));
+    console.log('Use WASD to move and mouse to look around');
     console.log('Press F to board up windows when close to them');
     console.log('Zombies will break through the windows if you don\'t board them up!');
     console.log('Left-click to shoot zombies');

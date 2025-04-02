@@ -934,8 +934,6 @@ export class Engine {
    * Disable spectator mode
    */
   disableSpectatorMode() {
-    console.log("Disabling spectator mode");
-    
     // Clear the spectator interval
     if (this.spectatorInterval) {
       clearInterval(this.spectatorInterval);
@@ -950,29 +948,8 @@ export class Engine {
       this.controls.modelContainer.visible = true;
     }
     
-    // Reset player position if needed
-    if (this.controls && this.controls.camera && this.scene && this.scene.spawnPoint) {
-      // Reset to spawn point
-      this.controls.camera.position.copy(this.scene.spawnPoint);
-      
-      // Reset rotation to look forward
-      this.controls.camera.rotation.set(0, 0, 0);
-    }
-    
     // Show UI elements that were hidden
     this.showPlayerUI();
-    
-    // Ensure controls are enabled
-    if (this.controls) {
-      this.controls.enabled = true;
-      
-      // If we're still in an active game, try to lock pointer again
-      if (this.isGameStarted && !this.isGameOver && !this.isPaused) {
-        setTimeout(() => {
-          document.body.requestPointerLock();
-        }, 100);
-      }
-    }
     
     // Remove the spectator overlay if it exists
     const spectateOverlay = document.getElementById('spectate-overlay');
@@ -1756,6 +1733,36 @@ export class Engine {
       this.scene.room.enemyManager.setPaused(true);
     }
     
+    // Pause all audio
+    if (this.controls) {
+      // Pause background music
+      if (typeof this.controls.pauseBackgroundMusic === 'function') {
+        this.controls.pauseBackgroundMusic();
+      }
+      
+      // Pause all active sounds
+      if (this.controls.activeAudio && Array.isArray(this.controls.activeAudio)) {
+        this.controls.activeAudio.forEach(audio => {
+          if (audio && !audio.paused) {
+            audio.pause();
+          }
+        });
+      }
+      
+      // Pause any audio in audio pools if they exist
+      if (this.controls.audioPool) {
+        Object.values(this.controls.audioPool).forEach(pool => {
+          if (Array.isArray(pool)) {
+            pool.forEach(item => {
+              if (item && item.element && !item.element.paused) {
+                item.element.pause();
+              }
+            });
+          }
+        });
+      }
+    }
+    
     // Unlock pointer last (after menu is already shown)
     this.unlockPointer();
   }
@@ -1782,6 +1789,14 @@ export class Engine {
     if (pauseMenu) {
       console.log("Removing pause menu");
       document.body.removeChild(pauseMenu);
+    }
+    
+    // Resume audio
+    if (this.controls) {
+      // Resume background music
+      if (typeof this.controls.resumeBackgroundMusic === 'function') {
+        this.controls.resumeBackgroundMusic();
+      }
     }
     
     // Log multiplayer status for debugging

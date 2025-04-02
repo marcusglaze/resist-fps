@@ -480,31 +480,6 @@ export class P2PNetwork {
         }
         break;
         
-      case 'gameStatus':
-        console.log("Received game status update:", data.status);
-        
-        // Special handling for respawnAll flag which forces respawn at round end
-        if (data.status.respawnAll && this.gameEngine.controls.isDead) {
-          console.log("Received respawnAll command, forcing respawn");
-          this.handleRespawn();
-          
-          // Also force-disable spectator mode if active
-          if (this.gameEngine.isSpectatorMode) {
-            this.gameEngine.disableSpectatorMode();
-          }
-        }
-        
-        // Notify the game engine if onGameStateUpdate is set
-        if (this.onGameStateUpdate) {
-          this.onGameStateUpdate(data.status);
-        }
-        break;
-        
-      case 'windowUpdate':
-        console.log("Received window update for window index:", data.windowIndex);
-        this.updateWindow(data.windowIndex, data.boardsCount, data.isOpen, data.boardHealths);
-        break;
-        
       default:
         console.warn('Unknown data type received:', data.type);
     }
@@ -653,19 +628,22 @@ export class P2PNetwork {
   
   /**
    * Get the current game state
-   * @returns {Object} Current game state
+   * @returns {Object} The game state object
    */
   getGameState() {
-    // Only get full state if we're the host
-    if (!this.isHost) return {};
+    // This would be implemented to extract the relevant game state
+    // from the game engine for synchronization
     
-    const gameState = {
+    if (!this.gameEngine) return {};
+    
+    return {
       playerPositions: this.getPlayerPositions(),
+      enemies: this.getEnemiesState(),
+      round: this.getRoundInfo(),
+      windows: this.getWindowsState(),
       gameStatus: this.getGameStatus(),
-      windowState: this.getWindowsState()
+      // Add other relevant game state data
     };
-    
-    return gameState;
   }
   
   /**
@@ -756,9 +734,8 @@ export class P2PNetwork {
       return [];
     }
     
-    // Create window states with all necessary information
-    return this.gameEngine.scene.room.windows.map((window, index) => ({
-      index: index,
+    // Example implementation
+    return this.gameEngine.scene.room.windows.map(window => ({
       position: {
         x: window.instance.position.x,
         y: window.instance.position.y,
@@ -766,7 +743,7 @@ export class P2PNetwork {
       },
       boardsCount: window.boardsCount,
       isOpen: window.isOpen,
-      boardHealths: window.boardHealths.slice() // Clone the array
+      health: window.boardHealths // Array of health values for each board
     }));
   }
   
@@ -974,25 +951,32 @@ export class P2PNetwork {
   }
   
   /**
-   * Start regular game state updates if hosting
+   * Start sending game state updates to clients
    */
-  startStateUpdates() {
+  startGameStateUpdates() {
     if (!this.isHost) return;
     
-    // Send state updates at regular intervals
-    this.stateUpdateInterval = setInterval(() => {
-      const now = Date.now();
-      
-      // Limit update frequency
-      if (now - this.lastStateSent > this.stateUpdateInterval) {
-        this.broadcastToAll({
-          type: 'gameState',
-          state: this.getGameState()
-        });
-        
-        this.lastStateSent = now;
+    // Clear any existing update interval
+    if (this._stateUpdateInterval) {
+      clearInterval(this._stateUpdateInterval);
+    }
+    
+    console.log("Starting game state update broadcasts");
+    
+    // Start periodic game state updates
+    this._stateUpdateInterval = setInterval(() => {
+      try {
+        // Use our improved broadcastGameState method
+        this.broadcastGameState();
+      } catch (error) {
+        console.error("Error in game state update:", error);
       }
     }, this.stateUpdateInterval);
+    
+    // Send an immediate update to initialize clients
+    setTimeout(() => {
+      this.broadcastGameState(true);
+    }, 200);
   }
   
   /**
@@ -1160,7 +1144,10 @@ export class P2PNetwork {
    * @param {string} playerId - The ID of the player to respawn
    */
   hostRespawnPlayer(playerId) {
-    if (!this.isHost || !this.isConnected) return;
+    if (!this.isHost || !this.isConnected) {
+      console.warn("Cannot respawn player: not host or not connected");
+      return;
+    }
     
     console.log(`Host sending respawn command to player: ${playerId}`);
     
@@ -1168,83 +1155,78 @@ export class P2PNetwork {
     const playerConn = this.connections.find(conn => conn.peer === playerId);
     
     if (playerConn && playerConn.open) {
-      // Send respawn command to the specific player
-      playerConn.send({
-        type: 'respawnPlayer',
-        playerId: playerId
-      });
-      
-      console.log(`Respawn command sent to player: ${playerId}`);
+      try {
+        // Send respawn command to the specific player
+        playerConn.send({
+          type: 'respawnPlayer',
+          playerId: playerId
+        });
+        
+        console.log(`Respawn command sent to player: ${playerId}`);
+        
+        // Force a game state update to all clients to ensure synchronization
+        this.broadcastGameState(true);
+        
+        return true;
+      } catch (error) {
+        console.error(`Error sending respawn command to player ${playerId}:`, error);
+        return false;
+      }
     } else {
       console.warn(`Failed to send respawn command: Connection to player ${playerId} not found or not open`);
+      return false;
     }
   }
   
   /**
-   * Send a window update to all peers
-   * @param {number} windowIndex - Index of the window that changed
-   * @param {number} boardsCount - New board count
-   * @param {boolean} isOpen - Whether the window is open
-   * @param {Array} boardHealths - Health values for each board
+   * Broadcast the current game state to all connected clients
+   * @param {boolean} force - Whether to force sending regardless of time since last update
+   * @returns {boolean} True if broadcast was sent, false otherwise
    */
-  sendWindowUpdate(windowIndex, boardsCount, isOpen, boardHealths) {
-    if (!this.isConnected) return;
+  broadcastGameState(force = false) {
+    if (!this.isHost || !this.isConnected) return false;
     
-    this.broadcastToAll({
-      type: 'windowUpdate',
-      windowIndex: windowIndex,
-      boardsCount: boardsCount,
-      isOpen: isOpen,
-      boardHealths: boardHealths
+    const now = Date.now();
+    
+    // Rate limit state updates unless forced
+    if (!force && now - this.lastStateSent < this.stateUpdateInterval) {
+      return false;
+    }
+    
+    // Get current game state
+    const gameState = this.getGameState();
+    
+    // Log state updates if forced or significant changes
+    if (force) {
+      console.log("Forced game state broadcast:", {
+        playerCount: Object.keys(gameState.playerPositions || {}).length,
+        enemyCount: (gameState.enemies || []).length,
+        round: gameState.round?.round,
+        windowCount: (gameState.windows || []).length
+      });
+    }
+    
+    // Send to all connected peers
+    let broadcastSuccess = false;
+    this.connections.forEach((conn) => {
+      if (conn.open) {
+        try {
+          conn.send({
+            type: 'gameState',
+            state: gameState
+          });
+          broadcastSuccess = true;
+        } catch (error) {
+          console.error(`Error broadcasting game state to ${conn.peer}:`, error);
+        }
+      }
     });
-  }
-  
-  /**
-   * Update a window based on received data
-   * @param {number} windowIndex - Index of the window to update
-   * @param {number} boardsCount - New board count
-   * @param {boolean} isOpen - Whether the window is open
-   * @param {Array} boardHealths - Health values for each board
-   */
-  updateWindow(windowIndex, boardsCount, isOpen, boardHealths) {
-    if (!this.gameEngine.scene || !this.gameEngine.scene.room) {
-      console.warn("Cannot update window: scene or room not available");
-      return;
+    
+    // Update last sent time
+    if (broadcastSuccess) {
+      this.lastStateSent = now;
     }
     
-    const windows = this.gameEngine.scene.room.windows;
-    if (!windows || !windows[windowIndex]) {
-      console.warn(`Cannot update window: window at index ${windowIndex} not found`);
-      return;
-    }
-    
-    const window = windows[windowIndex];
-    console.log(`Updating window ${windowIndex}. Current boards: ${window.boardsCount}, Target boards: ${boardsCount}`);
-    
-    // Update window open/closed state if needed
-    if (window.isOpen !== isOpen) {
-      window.isOpen = isOpen;
-      window.init(); // Reinitialize to reflect open/closed state
-    }
-    
-    // Update boards: remove or add as needed
-    if (window.boardsCount > boardsCount) {
-      // Remove boards to match target
-      while (window.boardsCount > boardsCount) {
-        window.removeBoard();
-      }
-    } else if (window.boardsCount < boardsCount) {
-      // Add boards to match target
-      while (window.boardsCount < boardsCount) {
-        window.addBoard();
-      }
-    }
-    
-    // Update board health values
-    if (boardHealths && boardHealths.length > 0) {
-      for (let i = 0; i < window.boardHealths.length && i < boardHealths.length; i++) {
-        window.boardHealths[i] = boardHealths[i];
-      }
-    }
+    return broadcastSuccess;
   }
 } 

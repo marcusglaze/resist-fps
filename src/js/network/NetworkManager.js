@@ -95,7 +95,7 @@ export class NetworkManager {
       this.gameEngine.startGame();
       
       // Start game state updates
-      this.network.startStateUpdates();
+      this.network.startGameStateUpdates();
       
       // Important: Only start sending position updates AFTER the connection is established
       // This fixes the "Connection is not open" error
@@ -413,18 +413,46 @@ export class NetworkManager {
     
     // Update window states if necessary
     if (state.windows && this.gameEngine.scene && this.gameEngine.scene.room) {
-      // This would be implemented to update window states
       const room = this.gameEngine.scene.room;
       if (Array.isArray(room.windows) && Array.isArray(state.windows)) {
+        console.log("Updating window states from host data");
+        
         state.windows.forEach((windowData, index) => {
           if (room.windows[index]) {
-            // Update window state
-            room.windows[index].isOpen = windowData.isOpen;
-            room.windows[index].boardsCount = windowData.boardsCount;
+            const window = room.windows[index];
             
-            // Update visuals to match
-            if (windowData.isOpen && !room.windows[index].instance.visible) {
-              room.windows[index].breakWindow();
+            // If the window is open but our local state has it closed, break it
+            if (windowData.isOpen && !window.isOpen) {
+              console.log(`Window ${index} is now open (broken)`);
+              window.breakWindow();
+            }
+            
+            // Update board count - Add or remove boards to match host state
+            if (window.boardsCount !== windowData.boardsCount) {
+              console.log(`Syncing window ${index} boards: local=${window.boardsCount}, host=${windowData.boardsCount}`);
+              
+              // If we have fewer boards than the host, add boards
+              while (window.boardsCount < windowData.boardsCount) {
+                window.addBoard();
+              }
+              
+              // If we have more boards than the host, remove boards
+              while (window.boardsCount > windowData.boardsCount) {
+                window.removeBoard();
+              }
+            }
+            
+            // Update board health values if provided
+            if (Array.isArray(windowData.health) && window.boardHealths) {
+              // Make sure arrays have same length
+              window.boardHealths = windowData.health.slice(0, window.boardsCount);
+              
+              // Update board appearance based on health
+              window.boardHealths.forEach((health, boardIndex) => {
+                if (window.updateBoardAppearance) {
+                  window.updateBoardAppearance(boardIndex);
+                }
+              });
             }
           }
         });
@@ -2111,63 +2139,81 @@ export class NetworkManager {
    * Host respawn logic: Check if any dead players should respawn at round end
    */
   checkPlayersForRespawn() {
-    if (!this.isHost || !this.network) return;
+    if (!this.isHost || !this.network) {
+      console.log("Not host or network not initialized, skipping respawn check");
+      return;
+    }
     
-    console.log("Host checking if players need respawning at round end");
+    console.log("Host checking for players to respawn at round end");
     
-    // If there are dead players, respawn them regardless of round state
+    // Check if we're at the end of a round and there are no active zombies
+    const enemyManager = this.gameEngine?.scene?.room?.enemyManager;
+    if (!enemyManager) {
+      console.warn("Enemy manager not found, cannot check for round end");
+      return;
+    }
+    
+    // Only respawn players at round end when zombies are cleared
+    if (enemyManager.roundActive || enemyManager.zombiesRemaining > 0) {
+      console.log("Round still active or zombies remaining, not respawning players yet");
+      return;
+    }
+    
+    // If no round active and there are dead players but at least one player alive,
+    // respawn the dead players
     const deadPlayers = [];
     let anyAlive = !this.gameEngine.controls.isDead; // Check if host is alive
+    
+    // Log host state
+    console.log(`Host player alive status: ${!this.gameEngine.controls.isDead}`);
     
     // Check all remote players
     this.remotePlayers.forEach((player, playerId) => {
       if (player.isDead) {
         deadPlayers.push(playerId);
+        console.log(`Found dead player: ${playerId}`);
       } else {
         anyAlive = true;
+        console.log(`Found alive player: ${playerId}`);
       }
     });
     
-    // Always respawn dead players at round end, even if no one is alive
-    // This ensures everyone respawns for the next round
-    if (deadPlayers.length > 0) {
-      console.log(`Host respawning ${deadPlayers.length} players at round end`);
+    // If at least one player is alive, respawn all dead players
+    if (anyAlive && deadPlayers.length > 0) {
+      console.log(`Host respawning ${deadPlayers.length} players at round end because at least one player is alive`);
       
       // Respawn each dead player
       deadPlayers.forEach(playerId => {
-        this.network.hostRespawnPlayer(playerId);
-        
-        // Also update the local player data to ensure visual state is corrected
-        const playerData = this.remotePlayers.get(playerId);
-        if (playerData) {
-          playerData.isDead = false;
-          playerData.health = 100;
-          playerData.wasDeadLastUpdate = false;
-          this.updatePlayerDeathState(playerId, false);
+        console.log(`Sending respawn command to player: ${playerId}`);
+        if (this.network.hostRespawnPlayer) {
+          this.network.hostRespawnPlayer(playerId);
+        } else {
+          console.error("hostRespawnPlayer method not found on network object");
         }
       });
       
       // If host is dead, respawn locally
       if (this.gameEngine.controls.isDead) {
+        console.log("Respawning local host player");
         this.respawnLocalPlayer();
-      }
-      
-      // If spectator mode is active on host, disable it
-      if (this.gameEngine.isSpectatorMode) {
-        this.gameEngine.disableSpectatorMode();
-      }
-      
-      // Notify all clients that players have been respawned for a new round
-      this.network.broadcastToAll({
-        type: 'gameStatus',
-        status: {
-          isGameOver: false,
-          isPaused: false,
-          allPlayersDead: false,
-          roundOver: true,
-          respawnAll: true
+        
+        // Force a game state update after respawning
+        if (this.network.broadcastGameState) {
+          this.network.broadcastGameState(true); // Force immediate update
         }
-      });
+      }
+      
+      // Update all clients that players have been respawned
+      setTimeout(() => {
+        if (this.network.broadcastGameState) {
+          console.log("Sending follow-up game state update after respawns");
+          this.network.broadcastGameState(true);
+        }
+      }, 500);
+    } else if (!anyAlive) {
+      console.log("All players are dead, not respawning anyone");
+    } else {
+      console.log("No dead players to respawn");
     }
   }
   
