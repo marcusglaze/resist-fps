@@ -126,70 +126,107 @@ export class P2PNetwork {
    * Create the host connection
    */
   createHost() {
-    this.peer = new Peer(null, {
-      host: this.peerServer.host,
-      port: this.peerServer.port,
-      path: this.peerServer.path,
-      secure: this.peerServer.secure,
-      debug: 1, // Changed from 3 to reduce console spam but keep important logs
-      config: {
-        'iceServers': this.iceServers
+    return new Promise((resolve, reject) => {
+      try {
+        // Get the server's host
+        const host = window.location.hostname;
+        const port = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
+        const secure = window.location.protocol === 'https:';
+        
+        console.log("Creating peer with host:", host, "port:", port, "secure:", secure);
+        
+        // Create a new Peer with a randomized ID (don't let the browser assign it)
+        const randomId = 'host_' + Math.random().toString(36).substring(2, 15);
+        
+        // Create a new Peer using our custom server with better configuration
+        this.peer = new Peer(randomId, {
+          host: host,
+          port: port,
+          path: '/peerjs',
+          secure: secure,
+          debug: 1, // Reduced from 3 to reduce console spam
+          config: {
+            // Add STUN and TURN servers for connection in restrictive networks
+            'iceServers': [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' }
+            ],
+            'sdpSemantics': 'unified-plan'
+          },
+          // Use JSON serialization instead of binary to avoid data corruption
+          serialization: 'json', 
+          reliable: true
+        });
+        
+        this.peer.on('open', (id) => {
+          console.log('Host ID:', id);
+          this.hostId = id;
+          this.clientId = id; // Also set clientId for consistent reference
+          this.isHost = true;
+          this.isConnected = true;
+          
+          // Keep connection alive with ping
+          this.startHeartbeat();
+          
+          // Start sending game state updates to clients
+          this.startGameStateUpdates();
+          
+          // Create the game
+          this.connectedToServer = true;
+          
+          // Accept incoming connections
+          this.peer.on('connection', (conn) => {
+            console.log('New connection from:', conn.peer);
+            
+            // Configure connection with JSON serialization to avoid binary data issues
+            conn.serialization = 'json';
+            
+            conn.on('open', () => {
+              this.handleNewConnection(conn);
+            });
+          });
+          
+          resolve(id);
+        });
+        
+        this.peer.on('error', (err) => {
+          console.error('Host peer error:', err);
+          
+          // Handle specific errors
+          if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
+            console.log('Attempting to reconnect...');
+            // Try to destroy and recreate peer after delay
+            setTimeout(() => {
+              if (this.peer) {
+                this.peer.destroy();
+                this.peer = null;
+                this.createHost().then(resolve).catch(reject);
+              }
+            }, 2000);
+          } else {
+            if (this.onError) this.onError(err);
+            reject(err);
+          }
+        });
+        
+        this.peer.on('disconnected', () => {
+          console.log('Peer disconnected. Attempting to reconnect...');
+          
+          // Try to reconnect
+          this.peer.reconnect();
+        });
+        
+        this.peer.on('close', () => {
+          console.log('Peer connection closed.');
+          this.stopHeartbeat();
+          this.isConnected = false;
+        });
+      } catch (err) {
+        console.error('Failed to create host:', err);
+        reject(err);
       }
     });
-    
-    console.log("Peer created with config:", {
-      host: this.peerServer.host,
-      port: this.peerServer.port,
-      path: this.peerServer.path,
-      secure: this.peerServer.secure
-    });
-    
-    this.peer.on('open', (id) => {
-      console.log('Host ID:', id);
-      this.hostId = id;
-      this.clientId = id; // Also set clientId for consistent reference
-      this.isHost = true;
-      
-      // Keep connection alive with ping
-      this.startHeartbeat();
-      
-      // Start sending game state updates to clients
-      this.startGameStateUpdates();
-      
-      // Create the game
-      this.connectedToServer = true;
-      
-      // Accept incoming connections
-      this.peer.on('connection', (conn) => {
-        console.log('New connection from:', conn.peer);
-        
-        // Configure connection with JSON serialization to avoid binary data issues
-        conn.serialization = 'json';
-        
-        conn.on('open', () => {
-          this.handleNewConnection(conn);
-        });
-      });
-    });
-    
-    this.peer.on('error', (err) => {
-      console.error('Host peer error:', err);
-      if (this.onError) this.onError(err);
-    });
-    
-    this.peer.on('disconnected', () => {
-      console.log('Peer disconnected. Attempting to reconnect...');
-      this.peer.reconnect();
-    });
-    
-    this.peer.on('close', () => {
-      console.log('Peer connection closed.');
-      this.stopHeartbeat();
-      this.isConnected = false;
-    });
-    
-    // Handle window close event to clean up connections
-    this._handleWindowClose();
   }
   
   /**
@@ -290,11 +327,36 @@ export class P2PNetwork {
       try {
         console.log('Connecting to host:', hostId);
         
-        if (!this.peer) {
-          console.error('Peer not initialized');
-          reject(new Error('Peer not initialized'));
-          return;
-        }
+        // Get the server's host
+        const host = window.location.hostname;
+        const port = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
+        const secure = window.location.protocol === 'https:';
+        
+        console.log("Creating client peer with host:", host, "port:", port, "secure:", secure);
+        
+        // Create a random ID for the client
+        const randomId = 'client_' + Math.random().toString(36).substring(2, 15);
+        
+        // Create a new Peer using our custom server with better configuration
+        this.peer = new Peer(randomId, {
+          host: host,
+          port: port,
+          path: '/peerjs',
+          secure: secure,
+          debug: 1, // Reduced from 3 to reduce console spam
+          config: {
+            // Add STUN and TURN servers for connection in restrictive networks
+            'iceServers': [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' }
+            ],
+            'sdpSemantics': 'unified-plan'
+          },
+          // Use JSON serialization instead of binary to avoid data corruption
+          serialization: 'json',
+          reliable: true
+        });
         
         this.peer.on('open', (id) => {
           console.log('Client ID:', id);
