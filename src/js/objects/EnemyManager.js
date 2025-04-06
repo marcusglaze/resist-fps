@@ -205,22 +205,14 @@ export class EnemyManager {
       }
       
       if (hasLivingRemotePlayers) {
-        console.log("HOST PLAYER DEAD BUT REMOTE PLAYERS ALIVE: CONTINUING ENEMY UPDATES");
+        // Log occasionally to reduce spam
+        if (Math.random() < 0.01) { // 1% chance per frame
+          console.log("HOST PLAYER DEAD BUT REMOTE PLAYERS ALIVE: CONTINUING ENEMY UPDATES");
+        }
         
-        // If we're in spectator mode, ensure enemies are active
-        if (this.gameEngine && this.gameEngine.isSpectatorMode) {
-          console.log("HOST IS IN SPECTATOR MODE: Forcing all enemies to active state");
-          this.enemies.forEach(enemy => {
-            if (enemy.state === 'idle' || !enemy.state) {
-              enemy.state = 'moving';
-              if (typeof enemy.startMoving === 'function') {
-                enemy.startMoving();
-              }
-            }
-            
-            // Make sure enemies are forced to update regardless of player state
-            enemy._forceContinueUpdating = true;
-          });
+        // Make sure isSpectatorMode is set if we have living remote players
+        if (this.gameEngine && !this.gameEngine.isSpectatorMode) {
+          this.gameEngine.isSpectatorMode = true;
         }
       }
     }
@@ -233,7 +225,7 @@ export class EnemyManager {
     this.enemies.forEach(enemy => {
       try {
         // Update if:
-        // 1. Enemy is flagged to force continue updating
+        // 1. Enemy is flagged to force continue
         // 2. Host player is alive
         // 3. Host player is dead but there are living remote players
         // 4. We're in spectator mode
@@ -244,6 +236,14 @@ export class EnemyManager {
           // Flag the enemy to continue updating regardless of local player state
           if (shouldForceUpdate) {
             enemy._forceContinueUpdating = true;
+            
+            // If enemy is stuck in idle state, force it to move
+            if (enemy.state === 'idle' || !enemy.state) {
+              enemy.state = 'moving';
+              if (typeof enemy.startMoving === 'function') {
+                enemy.startMoving();
+              }
+            }
           }
           
           // Ensure enemy has correct player reference
@@ -1346,57 +1346,45 @@ export class EnemyManager {
   /**
    * Pause/unpause all enemy movement
    * @param {boolean} isPaused - Whether to pause enemies
-   * @param {boolean} isSpectatorMode - Whether this is happening because of spectator mode
    */
-  setPaused(isPaused, isSpectatorMode = false) {
+  setPaused(isPaused) {
     // Log state change
-    console.log(`EnemyManager: Setting paused state to ${isPaused}, spectatorMode=${isSpectatorMode}`);
+    console.log(`EnemyManager: Setting paused state to ${isPaused}`);
     
-    // Store if we're in spectator mode
-    this.isInSpectatorMode = isSpectatorMode;
-    
-    // Check if we're in multiplayer with living remote players
-    let hasLivingRemotePlayers = false;
-    if (this.gameEngine && this.gameEngine.networkManager) {
-      const networkManager = this.gameEngine.networkManager;
+    // If we're trying to pause but we're the host with living remote players,
+    // we should skip pausing to ensure the game continues for remote players
+    if (isPaused && this.player && this.player.isDead && 
+        this.gameEngine && this.gameEngine.networkManager) {
       
-      if (networkManager.remotePlayers && networkManager.remotePlayers.size > 0) {
-        networkManager.remotePlayers.forEach(player => {
+      // Check if any remote players are alive
+      let hasLivingRemotePlayers = false;
+      const remotePlayers = this.gameEngine.networkManager.remotePlayers;
+      
+      if (remotePlayers && remotePlayers.size > 0) {
+        remotePlayers.forEach(player => {
           if (!player.isDead) {
             hasLivingRemotePlayers = true;
           }
         });
       }
-    }
-    
-    // Special case: If trying to pause in spectator mode with living players, don't actually pause
-    if (isPaused && isSpectatorMode && hasLivingRemotePlayers) {
-      console.log("EnemyManager: Ignoring pause request because we're in spectator mode with living remote players");
-      this.isPaused = false; // Force to unpause for spectator mode
       
-      // Ensure game state continues to broadcast
-      if (this.gameEngine && this.gameEngine.networkManager && 
-          this.gameEngine.networkManager.network && 
-          this.gameEngine.networkManager.network.broadcastGameState) {
-        console.log("EnemyManager: Forcing a game state broadcast to keep remote clients updated");
-        this.gameEngine.networkManager.network.broadcastGameState(true);
-      }
-      return; // Exit early without setting isPaused to true
-    }
-    
-    // In multiplayer, if we're pausing but there are living remote players (and NOT in spectator mode)
-    if (isPaused && hasLivingRemotePlayers && this.gameEngine && this.gameEngine.networkManager && !isSpectatorMode) {
-      console.log("EnemyManager: Not fully pausing because there are living remote players (but setting isPaused flag)");
-      
-      // Ensure game state continues to broadcast
-      if (this.gameEngine.networkManager.network && 
-          this.gameEngine.networkManager.network.broadcastGameState) {
-        console.log("EnemyManager: Forcing a game state broadcast to keep remote clients updated");
-        this.gameEngine.networkManager.network.broadcastGameState(true);
+      // If remote players are alive, don't actually pause enemies
+      if (hasLivingRemotePlayers) {
+        console.log("EnemyManager: Not pausing enemies because there are living remote players");
+        
+        // Force a game state broadcast to ensure clients stay updated
+        if (this.gameEngine.networkManager.network && 
+            this.gameEngine.networkManager.network.broadcastGameState) {
+          this.gameEngine.networkManager.network.broadcastGameState(true);
+        }
+        
+        // Set isPaused but make sure enemies keep updating
+        this.isPaused = false;
+        return;
       }
     }
     
-    // Set the pause state (unless we exited early for spectator mode)
+    // Set the pause state
     this.isPaused = isPaused;
   }
 

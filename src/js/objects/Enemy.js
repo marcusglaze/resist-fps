@@ -361,10 +361,9 @@ export class Enemy {
       if (this.player) {
         // If local player is dead, check for remote players to target
         if (this.player.isDead) {
-          // Try to find alive remote players
+          // Try to find alive remote players (if we're the host)
           let foundLivingTarget = false;
-          let closestPlayerPosition = null;
-          let closestPlayerDistance = Infinity;
+          let targetPosition = null;
           
           // Look for network manager to find remote players
           if (this.manager && this.manager.gameEngine && 
@@ -373,61 +372,61 @@ export class Enemy {
             
             const remotePlayers = this.manager.gameEngine.networkManager.remotePlayers;
             
-            // Only log if we have remote players to reduce spam
-            if (remotePlayers.size > 0 && Math.random() < 0.01) { // 1% chance to log
-              console.log(`Zombie ${this.id}: Local player dead, checking ${remotePlayers.size} remote players for targets`);
-            }
-            
-            // Find the closest living remote player
+            // Find any living remote player to target
             remotePlayers.forEach(player => {
               if (!player.isDead && player.position) {
                 foundLivingTarget = true;
-                
-                // Calculate distance to this player
-                const distSquared = 
-                  Math.pow(this.instance.position.x - player.position.x, 2) + 
-                  Math.pow(this.instance.position.z - player.position.z, 2);
-                
-                // If this player is closer than our current closest
-                if (distSquared < closestPlayerDistance) {
-                  closestPlayerDistance = distSquared;
-                  closestPlayerPosition = player.position;
-                  
-                  // Log only occasionally to reduce spam
-                  if (Math.random() < 0.005) { // 0.5% chance
-                    console.log(`Zombie ${this.id}: Found living remote player to target`);
-                  }
-                }
+                targetPosition = player.position;
               }
             });
           }
           
           // Either chase remote players or move randomly if none alive
-          if (foundLivingTarget && closestPlayerPosition) {
-            // Only log intermittently to reduce spam
-            if (Math.random() < 0.01) { // 1% chance each frame
-              console.log(`Zombie ${this.id}: Chasing closest remote player`);
+          if (foundLivingTarget && targetPosition) {
+            // Only log occasionally to reduce spam
+            if (Math.random() < 0.005) { // 0.5% chance per frame
+              console.log(`Zombie: Targeting remote player`);
             }
             
-            // Chase the closest remote player
-            this.chaseRemotePlayer(closestPlayerPosition, deltaTime);
+            // Calculate direction to player (only on x and z axes)
+            const direction = new THREE.Vector3(
+              targetPosition.x - this.instance.position.x,
+              0, // Keep y movement flat
+              targetPosition.z - this.instance.position.z
+            ).normalize();
             
-            // Try attack if we're close enough (using a reasonable attack range)
-            const distanceToPlayer = Math.sqrt(closestPlayerDistance);
-            if (distanceToPlayer < this.attackRange) {
-              // Attempt to attack - this will be broadcast to clients
-              this.attackRemotePlayer();
+            // Move towards player
+            const step = this.speed * deltaTime;
+            this.instance.position.x += direction.x * step;
+            this.instance.position.z += direction.z * step;
+            
+            // Ensure y position is at floor level
+            this.instance.position.y = this.floorLevel;
+            
+            // Look at target
+            this.instance.lookAt(new THREE.Vector3(
+              targetPosition.x,
+              this.floorLevel,
+              targetPosition.z
+            ));
+            
+            // Enforce room boundaries
+            this.enforceRoomBoundaries();
+            
+            // Try to attack if close enough
+            const distSquared = Math.pow(this.instance.position.x - targetPosition.x, 2) + 
+                               Math.pow(this.instance.position.z - targetPosition.z, 2);
+            
+            if (distSquared < Math.pow(this.attackRange, 2)) {
+              // Attack the remote player - this updates animation and sends network event
+              const currentTime = performance.now() / 1000;
+              if (currentTime - this.lastAttackTime >= 1 / this.attackRate) {
+                this.lastAttackTime = currentTime;
+                this.playAttackAnimation();
+              }
             }
-          } else if (this._forceContinueUpdating) {
-            // If forced to continue but no living players, move randomly
-            if (Math.random() < 0.01) { // 1% chance to log
-              console.log(`Zombie ${this.id}: No living targets, but forced to continue - moving randomly`);
-            }
-            this.moveRandomly(deltaTime);
           } else {
-            if (Math.random() < 0.01) { // 1% chance to log
-              console.log(`Zombie ${this.id}: No living targets, moving randomly`);
-            }
+            // No players to target, move randomly
             this.moveRandomly(deltaTime);
           }
         } else {
@@ -1142,77 +1141,5 @@ export class Enemy {
     
     // Return local health for immediate feedback
     return this.health;
-  }
-
-  /**
-   * Chase a remote player
-   * @param {Object} playerPosition - The player position to chase
-   * @param {number} deltaTime - Time elapsed since last update
-   */
-  chaseRemotePlayer(playerPosition, deltaTime) {
-    // Calculate direction to player (only on x and z axes)
-    const direction = new THREE.Vector3(
-      playerPosition.x - this.instance.position.x,
-      0, // Keep y movement flat
-      playerPosition.z - this.instance.position.z
-    ).normalize();
-    
-    // Move towards player
-    const step = this.speed * deltaTime;
-    this.instance.position.x += direction.x * step;
-    this.instance.position.z += direction.z * step;
-    
-    // Ensure y position is at floor level
-    this.instance.position.y = this.floorLevel;
-    
-    // Look at target
-    this.instance.lookAt(new THREE.Vector3(
-      playerPosition.x,
-      this.floorLevel, // Look at player's height
-      playerPosition.z
-    ));
-    
-    // Enforce room boundaries
-    this.enforceRoomBoundaries();
-  }
-
-  /**
-   * Attack a remote player
-   */
-  attackRemotePlayer() {
-    // Only attack at a certain rate
-    const currentTime = performance.now() / 1000;
-    if (currentTime - this.lastAttackTime < 1 / this.attackRate) {
-      return;
-    }
-    
-    // Update last attack time
-    this.lastAttackTime = currentTime;
-    
-    // Play attack animation
-    this.playAttackAnimation();
-    
-    // If we have a network manager, send the attack event
-    if (this.manager && this.manager.gameEngine && 
-        this.manager.gameEngine.networkManager && 
-        this.manager.gameEngine.networkManager.network) {
-      
-      // Prepare attack data
-      const attackData = {
-        enemyId: this.id,
-        position: {
-          x: this.instance.position.x,
-          y: this.instance.position.y,
-          z: this.instance.position.z
-        },
-        timestamp: Date.now()
-      };
-      
-      // Send zombie attack event to all clients
-      this.manager.gameEngine.networkManager.network.broadcastToAll({
-        type: 'zombieAttack',
-        attackData: attackData
-      });
-    }
   }
 } 

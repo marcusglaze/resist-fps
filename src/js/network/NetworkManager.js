@@ -764,7 +764,7 @@ export class NetworkManager {
     // Check if we have a player object for this ID already
     if (!this.remotePlayers.has(playerId)) {
       console.log(`Creating new remote player for ${playerId}`);
-      this.createRemotePlayer(playerId);
+      this.addRemotePlayer(playerId);
     }
     
     const player = this.remotePlayers.get(playerId);

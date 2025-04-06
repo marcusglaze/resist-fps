@@ -548,10 +548,8 @@ export class Engine {
         
         // Make sure enemies are definitely UNPAUSED if there are remote players still alive
         if (this.scene && this.scene.room && this.scene.room.enemyManager) {
-          if (this.scene.room.enemyManager.isPaused) {
-            console.log("Explicitly unpausing enemies because there are still living remote players");
-            this.scene.room.enemyManager.setPaused(false, hasLivingRemotePlayers);
-          }
+          console.log("Explicitly unpausing enemies because there are still living remote players");
+          this.scene.room.enemyManager.setPaused(false);
         }
       }
     }
@@ -559,7 +557,7 @@ export class Engine {
     // Pause all enemies if needed
     if (shouldPauseEnemies && this.scene && this.scene.room && this.scene.room.enemyManager) {
       console.log("Pausing all enemies - no living players remaining");
-      this.scene.room.enemyManager.setPaused(true, false); // Regular pause, not spectator mode
+      this.scene.room.enemyManager.setPaused(true);
     }
     
     // Check if we're in multiplayer mode
@@ -996,8 +994,7 @@ export class Engine {
     // IMPORTANT: Make sure enemies are not paused when in spectator mode
     if (this.scene && this.scene.room && this.scene.room.enemyManager) {
       console.log("Explicitly unpausing enemies for spectator mode");
-      // Pass true as second parameter to indicate spectator mode
-      this.scene.room.enemyManager.setPaused(false, true);
+      this.scene.room.enemyManager.setPaused(false);
     }
     
     // Enable spectator camera to follow surviving players

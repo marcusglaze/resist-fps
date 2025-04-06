@@ -1849,9 +1849,6 @@ export class P2PNetwork {
     // Explicitly check the allPlayersDead status
     const allPlayersDead = gameState.gameStatus?.allPlayersDead || false;
     
-    // Check if we're in spectator mode
-    const isSpectatorMode = this.gameEngine.isSpectatorMode || false;
-    
     // If host is dead, explicitly check for living remote players
     if (isHostDead && this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
       this.gameEngine.networkManager.remotePlayers.forEach(player => {
@@ -1861,10 +1858,10 @@ export class P2PNetwork {
       });
       
       // When host is dead but remote players are alive, force updates to continue
-      if (hasLivingRemotePlayers || isSpectatorMode) {
-        // Log only occasionally to avoid spam
-        if (Math.random() < 0.1) { // 10% chance to log
-          console.log(`HOST DEAD STATE UPDATE: host dead=${isHostDead}, spectator mode=${isSpectatorMode}, living remotes=${hasLivingRemotePlayers}`);
+      if (hasLivingRemotePlayers) {
+        // Only log occasionally to reduce spam
+        if (Math.random() < 0.01) { // 1% chance per frame
+          console.log("HOST IS DEAD BUT REMOTE PLAYERS ALIVE: FORCING GAME STATE UPDATES");
         }
         
         // If we don't already have a more frequent update interval for dead host state,
@@ -1884,7 +1881,6 @@ export class P2PNetwork {
             try {
               // Check if we should still be in this state
               const stillHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
-              const stillInSpectatorMode = this.gameEngine.isSpectatorMode;
               let stillLivingRemotes = false;
               
               if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
@@ -1895,7 +1891,7 @@ export class P2PNetwork {
                 });
               }
               
-              if ((stillHostDead && stillLivingRemotes) || stillInSpectatorMode) {
+              if (stillHostDead && stillLivingRemotes) {
                 // Still valid state, continue with forced updates
                 this.broadcastGameState(true);
               } else {
@@ -1915,23 +1911,20 @@ export class P2PNetwork {
             if (enemy.state === 'idle') {
               enemy.state = 'moving';
             }
-            
-            // Mark enemies to continue updating
-            enemy._forceContinueUpdating = true;
           });
         }
       } else if (this._deadHostUpdateInterval) {
         // No more living remote players, clean up the special interval
         this.resetUpdateIntervals();
       }
-    } else if (this._deadHostUpdateInterval && !isSpectatorMode) {
-      // Host is no longer dead or in spectator mode, clean up the special interval
+    } else if (this._deadHostUpdateInterval) {
+      // Host is no longer dead, clean up the special interval
       this.resetUpdateIntervals();
     }
     
     // Log state updates if forced or significant changes
-    if (force || isHostDead || isSpectatorMode || (now - this.lastStateSentLog > 5000)) {
-      console.log(`Game state broadcast [Force:${force}, HostDead:${isHostDead}, SpectatorMode:${isSpectatorMode}, HasLivingRemotes:${hasLivingRemotePlayers}, AllPlayersDead:${allPlayersDead}]:`, {
+    if (force || isHostDead || (now - this.lastStateSentLog > 5000)) {
+      console.log(`Game state broadcast [Force:${force}, HostDead:${isHostDead}, HasLivingRemotes:${hasLivingRemotePlayers}, AllPlayersDead:${allPlayersDead}]:`, {
         playerCount: Object.keys(gameState.playerPositions || {}).length,
         enemyCount: (gameState.enemies || []).length,
         round: gameState.round?.round,
