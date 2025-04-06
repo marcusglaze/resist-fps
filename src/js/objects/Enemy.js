@@ -26,14 +26,6 @@ export class Enemy {
     this.isMoving = false;
     this.isAttacking = false;
     
-    // Position caching to prevent rubber-banding
-    this.lastBroadcastPosition = {
-      x: 0,
-      y: 0,
-      z: 0
-    };
-    this.lastPositionUpdateTime = 0;
-    
     // Sound properties
     this.soundFrequency = 0.1; // Sound frequency in Hz (once every 10 seconds)
     this.nextSoundTime = Math.random() * (1 / this.soundFrequency); // Randomize initial sound time
@@ -346,12 +338,6 @@ export class Enemy {
       return;
     }
     
-    // If forced to continue updating (for remote players when host is dead)
-    // then make sure we don't skip this update
-    if (this._forceContinueUpdating) {
-      // Continue with the update
-    } 
-    
     // If enemy is dead, just update death animation
     if (this.isDead) {
       this.updateDeathAnimation(deltaTime);
@@ -391,22 +377,17 @@ export class Enemy {
               if (!player.isDead && player.position) {
                 foundLivingTarget = true;
                 targetPosition = player.position;
-                
-                // Cache this target position to ensure consistent movement
-                this.currentRemoteTargetPosition = {...player.position};
               }
             });
-            
-            // If we didn't find a living target but have a previous position, use that
-            // This helps prevent rubber-banding when network updates are inconsistent
-            if (!foundLivingTarget && this.currentRemoteTargetPosition) {
-              foundLivingTarget = true;
-              targetPosition = this.currentRemoteTargetPosition;
-            }
           }
           
           // Either chase remote players or move randomly if none alive
           if (foundLivingTarget && targetPosition) {
+            // Only log occasionally to reduce spam
+            if (Math.random() < 0.005) { // 0.5% chance per frame
+              console.log(`Zombie: Targeting remote player`);
+            }
+            
             // Calculate direction to player (only on x and z axes)
             const direction = new THREE.Vector3(
               targetPosition.x - this.instance.position.x,
@@ -516,6 +497,18 @@ export class Enemy {
    * @param {number} deltaTime - Time elapsed since last update
    */
   moveTowardsWindow(deltaTime) {
+    // Log movement occasionally to diagnose rubber banding
+    const shouldLog = Math.random() < 0.05; // 5% chance per frame
+    let originalPosition = null;
+    
+    if (shouldLog) {
+      originalPosition = {
+        x: this.instance.position.x,
+        y: this.instance.position.y,
+        z: this.instance.position.z
+      };
+    }
+    
     // Calculate direction to window (only on x and z axes)
     const targetPointOnGround = new THREE.Vector3(
       this.targetPosition.x,
@@ -538,6 +531,16 @@ export class Enemy {
     
     // Look at target (on ground level)
     this.instance.lookAt(targetPointOnGround);
+    
+    // Log position change if enabled
+    if (shouldLog && originalPosition) {
+      console.log(`Enemy ${this.id} movement (moveTowardsWindow):
+        From: [${originalPosition.x.toFixed(2)}, ${originalPosition.y.toFixed(2)}, ${originalPosition.z.toFixed(2)}]
+        To: [${this.instance.position.x.toFixed(2)}, ${this.instance.position.y.toFixed(2)}, ${this.instance.position.z.toFixed(2)}]
+        Delta: [${(this.instance.position.x - originalPosition.x).toFixed(5)}, ${(this.instance.position.y - originalPosition.y).toFixed(5)}, ${(this.instance.position.z - originalPosition.z).toFixed(5)}]
+        Step size: ${step.toFixed(5)}, Direction: [${direction.x.toFixed(3)}, ${direction.y.toFixed(3)}, ${direction.z.toFixed(3)}]
+      `);
+    }
   }
 
   /**
@@ -847,24 +850,60 @@ export class Enemy {
    * @param {number} deltaTime - Time elapsed since last update
    */
   moveRandomly(deltaTime) {
-    // Simple random movement inside room
-    const step = this.speed * 0.5 * deltaTime;
+    // Log movement occasionally to diagnose rubber banding
+    const shouldLog = Math.random() < 0.02; // 2% chance per frame
+    let originalPosition = null;
     
-    // Random changes in direction
-    if (Math.random() < 0.05) {
-      this.instance.rotation.y += (Math.random() - 0.5) * Math.PI / 2;
+    if (shouldLog) {
+      originalPosition = {
+        x: this.instance.position.x,
+        y: this.instance.position.y,
+        z: this.instance.position.z
+      };
+    }
+    
+    // Simple random movement inside room
+    const currentTime = performance.now() / 1000;
+    
+    // Change direction every few seconds
+    if (!this.lastDirectionChange || currentTime - this.lastDirectionChange > 3) {
+      this.movementDirection = new THREE.Vector3(
+        Math.random() * 2 - 1, // -1 to 1
+        0,
+        Math.random() * 2 - 1  // -1 to 1
+      ).normalize();
+      
+      this.lastDirectionChange = currentTime;
     }
     
     // Move forward in facing direction
-    const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(this.instance.quaternion);
-    this.instance.position.x += direction.x * step;
-    this.instance.position.z += direction.z * step;
+    const step = this.speed * deltaTime * 0.5; // Slower random movement
+    this.instance.position.x += this.movementDirection.x * step;
+    this.instance.position.z += this.movementDirection.z * step;
     
     // Ensure y position is at floor level
     this.instance.position.y = this.floorLevel;
     
-    // Keep inside room boundaries
+    // Look in the movement direction
+    const lookAtPoint = new THREE.Vector3(
+      this.instance.position.x + this.movementDirection.x,
+      this.floorLevel,
+      this.instance.position.z + this.movementDirection.z
+    );
+    this.instance.lookAt(lookAtPoint);
+    
+    // Enforce room boundaries
     this.enforceRoomBoundaries();
+    
+    // Log position change if enabled
+    if (shouldLog && originalPosition) {
+      console.log(`Enemy ${this.id} movement (moveRandomly):
+        From: [${originalPosition.x.toFixed(2)}, ${originalPosition.y.toFixed(2)}, ${originalPosition.z.toFixed(2)}]
+        To: [${this.instance.position.x.toFixed(2)}, ${this.instance.position.y.toFixed(2)}, ${this.instance.position.z.toFixed(2)}]
+        Delta: [${(this.instance.position.x - originalPosition.x).toFixed(5)}, ${(this.instance.position.y - originalPosition.y).toFixed(5)}, ${(this.instance.position.z - originalPosition.z).toFixed(5)}]
+        Step size: ${step.toFixed(5)}, Direction: [${this.movementDirection.x.toFixed(3)}, ${this.movementDirection.y.toFixed(3)}, ${this.movementDirection.z.toFixed(3)}]
+      `);
+    }
   }
 
   /**

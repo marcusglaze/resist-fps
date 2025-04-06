@@ -174,112 +174,112 @@ export class EnemyManager {
    * @param {number} deltaTime - Time elapsed since last update
    */
   update(deltaTime) {
-    // Skip updates if paused
+    // Skip update if paused
     if (this.isPaused) {
       return;
     }
     
-    // Check for network game with dead host player but living remote players
-    if (this.player && this.player.isDead && 
-        this.gameEngine && this.gameEngine.networkManager) {
+    // Add periodic position logging to diagnose rubber banding
+    const shouldLogPositions = Math.random() < 0.02; // 2% chance per frame
+    
+    if (shouldLogPositions) {
+      console.log(`========== HOST ENEMY POSITION SNAPSHOT ==========`);
+      console.log(`Total enemies: ${this.enemies.length}, Host player dead: ${this.player?.isDead}`);
       
-      // Check if any remote players are alive
-      let hasLivingRemotePlayers = false;
+      // Log a sample of enemy positions (up to 3)
+      const sampleSize = Math.min(3, this.enemies.length);
+      for (let i = 0; i < sampleSize; i++) {
+        const enemy = this.enemies[i];
+        if (enemy && enemy.instance) {
+          console.log(`Enemy ${enemy.id}: [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}], State: ${enemy.state}, Active: ${enemy._forceContinueUpdating ? 'forced' : (this.player && !this.player.isDead ? 'normal' : 'inactive')}`);
+        }
+      }
+      
+      console.log(`========== END ENEMY SNAPSHOT ==========`);
+    }
+    
+    // Check for enemy spawn
+    this.checkEnemySpawn(deltaTime);
+    
+    // Update round state
+    this.updateRoundState(deltaTime);
+    
+    // Update round timer
+    this.updateRoundTimer(deltaTime);
+    
+    // Check consistency of round state
+    this.checkRoundStateConsistency();
+    
+    // Check if there are living remote players when the host player is dead
+    let hasLivingRemotePlayers = false;
+    
+    if (this.player && this.player.isDead && this.gameEngine && this.gameEngine.networkManager) {
       const remotePlayers = this.gameEngine.networkManager.remotePlayers;
-      
       if (remotePlayers && remotePlayers.size > 0) {
         remotePlayers.forEach(player => {
           if (!player.isDead) {
             hasLivingRemotePlayers = true;
           }
         });
+      }
+      
+      if (hasLivingRemotePlayers) {
+        // Log occasionally to reduce spam
+        if (Math.random() < 0.01) { // 1% chance per frame
+          console.log("HOST PLAYER DEAD BUT REMOTE PLAYERS ALIVE: CONTINUING ENEMY UPDATES");
+        }
         
-        // If we're in spectator mode with living remote players,
-        // make sure enemies continue to update properly
-        if (hasLivingRemotePlayers) {
-          // Update enemies with a stable update rate
-          const spectatorDeltaTime = Math.min(deltaTime, 0.1); // Limit max delta time to prevent jumps
-          
-          // Update all enemies
-          this.enemies.forEach(enemy => {
-            // Mark enemies to force continue updating regardless of other conditions
-            enemy._forceContinueUpdating = true;
-            
-            // Cache the current position before update
-            const currentPosition = {
-              x: enemy.instance.position.x,
-              y: enemy.instance.position.y,
-              z: enemy.instance.position.z
-            };
-            
-            // Ensure each enemy updates
-            if (typeof enemy.update === 'function') {
-              try {
-                enemy.update(spectatorDeltaTime);
-                
-                // After updating, save the new position for broadcasting consistency
-                enemy.lastBroadcastPosition = {
-                  x: enemy.instance.position.x,
-                  y: enemy.instance.position.y,
-                  z: enemy.instance.position.z
-                };
-                enemy.lastPositionUpdateTime = Date.now();
-              } catch (error) {
-                console.error(`Error updating enemy in spectator mode:`, error);
-                
-                // Restore previous position on error
-                enemy.instance.position.set(
-                  currentPosition.x,
-                  currentPosition.y,
-                  currentPosition.z
-                );
-              }
-            }
-          });
-          
-          // Force broadcast of updated state to clients
-          if (this.gameEngine.networkManager.network && 
-              this.gameEngine.networkManager.network.broadcastGameState) {
-            this.gameEngine.networkManager.network.broadcastGameState(true); // Force immediate update
-          }
+        // Make sure isSpectatorMode is set if we have living remote players
+        if (this.gameEngine && !this.gameEngine.isSpectatorMode) {
+          this.gameEngine.isSpectatorMode = true;
         }
       }
     }
     
-    // Update round state
-    this.updateRoundState(deltaTime);
+    // Flag to force enemies to continue updating
+    const shouldForceUpdate = hasLivingRemotePlayers || 
+                             (this.gameEngine && this.gameEngine.isSpectatorMode);
     
-    // Remove any dead enemies
-    this.removeDeadEnemies();
-    
-    // Spawn new enemies if needed
-    this.trySpawnEnemy(deltaTime);
-    
-    // Update existing enemies
+    // Update all existing enemies
     this.enemies.forEach(enemy => {
-      if (typeof enemy.update === 'function') {
-        try {
-          // Cache the current position before update
-          const currentPosition = {
-            x: enemy.instance.position.x,
-            y: enemy.instance.position.y,
-            z: enemy.instance.position.z
-          };
+      try {
+        // Update if:
+        // 1. Enemy is flagged to force continue
+        // 2. Host player is alive
+        // 3. Host player is dead but there are living remote players
+        // 4. We're in spectator mode
+        if (enemy._forceContinueUpdating || 
+            (enemy.player === this.player && !this.player.isDead) ||
+            shouldForceUpdate) {
           
+          // Flag the enemy to continue updating regardless of local player state
+          if (shouldForceUpdate) {
+            enemy._forceContinueUpdating = true;
+            
+            // If enemy is stuck in idle state, force it to move
+            if (enemy.state === 'idle' || !enemy.state) {
+              enemy.state = 'moving';
+              if (typeof enemy.startMoving === 'function') {
+                enemy.startMoving();
+              }
+            }
+          }
+          
+          // Ensure enemy has correct player reference
+          if (!enemy.player && this.player) {
+            enemy.setPlayer(this.player);
+          }
+          
+          // Update the enemy
           enemy.update(deltaTime);
-          
-          // After updating, save the new position for broadcasting consistency
-          enemy.lastBroadcastPosition = {
-            x: enemy.instance.position.x,
-            y: enemy.instance.position.y,
-            z: enemy.instance.position.z
-          };
-          enemy.lastPositionUpdateTime = Date.now();
-        } catch (error) {
-          console.error(`Error updating enemy:`, error);
         }
+      } catch (error) {
+        console.error(`Error updating enemy: ${error.message}`, enemy);
       }
     });
+    
+    // Remove dead enemies that have completed their death animation
+    this.removeDeadEnemies();
   }
   
   /**
@@ -911,7 +911,7 @@ export class EnemyManager {
   /**
    * Try to spawn a new enemy based on spawn rate
    */
-  trySpawnEnemy(deltaTime) {
+  trySpawnEnemy() {
     if (!this.spawnEnabled) {
       return;
     }

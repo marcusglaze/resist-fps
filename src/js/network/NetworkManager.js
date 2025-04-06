@@ -323,6 +323,7 @@ export class NetworkManager {
       
       // Enhanced enemy synchronization
       if (Array.isArray(state.enemies)) {
+        console.log(`========== CLIENT RECEIVING ENEMY UPDATES ==========`);
         console.log(`Syncing ${state.enemies.length} enemies from host`);
         
         // If host has no enemies, clear client enemies
@@ -345,9 +346,30 @@ export class NetworkManager {
           });
         } else {
           // Update positions and states of existing enemies
+          // Log a sample of received enemy positions
+          const sampleSize = Math.min(3, state.enemies.length);
+          const sampleEnemies = state.enemies.slice(0, sampleSize);
+          console.log(`Sample of received enemy positions (${sampleSize}/${state.enemies.length}):`);
+          sampleEnemies.forEach(enemyData => {
+            console.log(`Enemy ${enemyData.id}: [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}], State: ${enemyData.state}`);
+          });
+          
+          // Track how many enemies were actually updated
+          let updatedCount = 0;
+          let missingCount = 0;
+          
           state.enemies.forEach(enemyData => {
             const enemy = enemyManager.enemies.find(e => e.id === enemyData.id);
             if (enemy && enemy.instance) {
+              // Log previous position for a sample of enemies
+              if (Math.random() < 0.05) {
+                console.log(`Updating enemy ${enemyData.id} position: 
+                  From: [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}] 
+                  To: [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}]
+                  Delta: [${(enemyData.position.x - enemy.instance.position.x).toFixed(2)}, ${(enemyData.position.y - enemy.instance.position.y).toFixed(2)}, ${(enemyData.position.z - enemy.instance.position.z).toFixed(2)}]
+                  State: ${enemy.state} -> ${enemyData.state}`);
+              }
+              
               // Update position
               enemy.instance.position.set(
                 enemyData.position.x,
@@ -373,12 +395,17 @@ export class NetworkManager {
               } else if (enemyData.state === 'dying' && enemy.state !== 'dying') {
                 if (typeof enemy.die === 'function') enemy.die();
               }
+              
+              updatedCount++;
             } else {
               // Enemy doesn't exist on client, create it
               console.log(`Creating missing enemy ${enemyData.id} from host data`);
               this.spawnEnemyFromData(enemyData, enemyManager);
+              missingCount++;
             }
           });
+          
+          console.log(`Updated ${updatedCount} existing enemies, created ${missingCount} missing enemies`);
           
           // Remove enemies that don't exist on host anymore
           const enemiesToRemove = enemyManager.enemies.filter(enemy => 
@@ -411,6 +438,8 @@ export class NetworkManager {
             );
           }
         }
+        
+        console.log(`========== CLIENT FINISHED ENEMY UPDATES ==========`);
       }
     }
     
