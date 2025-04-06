@@ -412,8 +412,9 @@ export class Window {
   }
 
   /**
-   * Client-side variant that also notifies host
-   * @param {NetworkManager} networkManager - Reference to the network manager
+   * Client-side method to add a board with network sync
+   * @param {NetworkManager} networkManager - The network manager
+   * @returns {boolean} - True if board was added, false otherwise
    */
   clientAddBoard(networkManager) {
     console.log("WINDOW: clientAddBoard called");
@@ -423,51 +424,45 @@ export class Window {
       return false;
     }
     
-    // Check if windowIndex is set
-    if (this.windowIndex === undefined) {
-      console.error("Window missing windowIndex! Cannot sync with host.");
-      console.error("Window details:", {
-        boardsCount: this.boardsCount,
-        isOpen: this.isOpen,
-        position: this.instance ? [
-          this.instance.position.x,
-          this.instance.position.y,
-          this.instance.position.z
-        ] : 'No instance'
-      });
+    if (this.windowIndex === undefined || this.windowIndex === null) {
+      console.warn("Cannot add board as client: window has no index");
       return false;
     }
     
-    // First add the board locally
-    const success = this.addBoard();
+    console.log("WINDOW: Client adding board with window index:", this.windowIndex);
     
-    if (success) {
-      // Then send the action to the host
-      console.log(`NETWORK: Client adding board to window ${this.windowIndex}, current count: ${this.boardsCount}`);
+    // First attempt to add the board locally
+    const boardAdded = this.addBoard();
+    
+    if (boardAdded) {
+      console.log("WINDOW: Local board added successfully, sending to network");
       
-      // Create the action data
+      // Create action data
       const actionData = {
         windowIndex: this.windowIndex,
         boardsCount: this.boardsCount,
-        boardHealths: [...this.boardHealths], // Send a copy to avoid reference issues
+        boardHealths: [...this.boardHealths], // Make a copy of the board healths
         timestamp: Date.now()
       };
       
-      // Send with reliable delivery
-      const actionId = networkManager.network.sendPlayerAction('addWindowBoard', actionData);
-      
-      // Log the action ID
-      if (actionId) {
-        console.log(`NETWORK: Sent window board action ${actionId} for window ${this.windowIndex}`);
-      } else {
-        console.warn(`NETWORK: Failed to send window board action for window ${this.windowIndex}`);
+      // Send to the host
+      try {
+        console.log("WINDOW: Sending addWindowBoard action to host", actionData);
+        const actionId = networkManager.network.sendPlayerAction('addWindowBoard', actionData);
+        
+        if (actionId) {
+          console.log("WINDOW: Successfully sent window board action with ID:", actionId);
+        } else {
+          console.warn("WINDOW: Failed to send window board action");
+        }
+      } catch (error) {
+        console.error("Error sending window board action:", error);
       }
-      
-      return true;
     } else {
-      console.log(`Failed to add board to window ${this.windowIndex} (already at max: ${this.maxBoards})`);
-      return false;
+      console.log("WINDOW: Could not add board locally");
     }
+    
+    return boardAdded;
   }
   
   /**

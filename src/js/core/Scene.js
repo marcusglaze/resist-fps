@@ -273,4 +273,37 @@ export class Scene {
       this.room.setDoomMode(this.doomMode);
     }
   }
+
+  /**
+   * Load or create the room and set references
+   */
+  loadRoom() {
+    console.log("Loading room in Scene");
+    
+    const debugMode = this.debugMode;
+    
+    // Create the room
+    this.room = new Room(debugMode);
+    this.room.init();
+    
+    // If game engine is set on this scene, make sure to pass it to the room
+    if (this.gameEngine) {
+      console.log("Scene passing game engine to Room");
+      if (this.gameEngine.networkManager) {
+        console.log("Scene: Game engine has network manager with settings:", {
+          gameMode: this.gameEngine.networkManager.gameMode,
+          isMultiplayer: this.gameEngine.networkManager.isMultiplayer,
+          isHost: this.gameEngine.networkManager.isHost
+        });
+      }
+      this.room.setGameEngine(this.gameEngine);
+    } else {
+      console.log("Scene: No game engine to pass to Room");
+    }
+    
+    // Add room to scene and store reference
+    this.instance.add(this.room.instance);
+    
+    console.log("Room loaded and added to scene");
+  }
 } 

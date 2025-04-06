@@ -1470,10 +1470,10 @@ export class P2PNetwork {
   }
   
   /**
-   * Send player action to host with reliable delivery
-   * @param {string} actionType - Type of action (e.g., 'damageEnemy')
-   * @param {Object} actionData - Data for the action
-   * @returns {string} The action ID for tracking purposes
+   * Send a player action to the host (client -> host)
+   * @param {string} actionType - The type of action
+   * @param {Object} actionData - The action data
+   * @returns {string|null} The action ID if sent, null if error
    */
   sendPlayerAction(actionType, actionData) {
     console.log("NETWORK: *** SENDING PLAYER ACTION ***", actionType, actionData);
@@ -1487,56 +1487,38 @@ export class P2PNetwork {
       return null;
     }
     
-    // Generate a unique ID for this action
-    const actionId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    
-    // Create the action object
-    const action = {
-      id: actionId,
-      type: actionType,
-      data: actionData,
-      timestamp: Date.now()
-    };
-    
-    console.log(`NETWORK: Sending player action ${actionType} with ID ${actionId}`, actionData);
-    
-    // If we're the host, process locally
-    if (this.isHost) {
-      this.handlePlayerAction(action, this.hostId);
-      return actionId;
-    }
-    
-    // Store as pending action waiting for confirmation
-    this._pendingActions[actionId] = {
-      action: action,
-      retries: 0,
-      sentTime: Date.now()
-    };
-    
-    // Send to host
-    if (this.connections.length > 0) {
-      try {
-        // Send only to the host (first connection for clients)
-        const hostConn = this.connections[0];
-        hostConn.send({
-          type: 'playerAction',
-          action: action,
-          requiresAck: true,
-          playerId: this.clientId
-        });
-        
-        // Set up retry mechanism
-        setTimeout(() => this._checkActionConfirmation(actionId), this._actionRetryInterval);
-        
+    try {
+      // Generate a unique action ID for tracking
+      const actionId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      
+      // Create the message with a timestamp for debouncing
+      const message = {
+        type: 'playerAction',
+        actionType: actionType,
+        actionData: actionData,
+        timestamp: Date.now(),
+        actionId: actionId,
+        clientId: this.clientId
+      };
+      
+      // If we're the host, process locally
+      if (this.isHost) {
+        console.log("NETWORK: Host processing own action locally:", actionType);
+        this.handlePlayerAction(this.clientId, message);
         return actionId;
-      } catch (error) {
-        console.error("Error sending player action:", error);
-        delete this._pendingActions[actionId];
+      }
+      
+      // Send to host
+      if (this.peerConnection && this.hostConnection) {
+        console.log(`NETWORK: Client sending action '${actionType}' to host`);
+        this.hostConnection.send(message);
+        return actionId;
+      } else {
+        console.error("No connection to host to send action");
         return null;
       }
-    } else {
-      console.error("Cannot send player action: no active connections");
-      delete this._pendingActions[actionId];
+    } catch (error) {
+      console.error("Error sending player action:", error);
       return null;
     }
   }

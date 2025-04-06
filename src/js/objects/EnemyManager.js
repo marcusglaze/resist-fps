@@ -52,14 +52,26 @@ export class EnemyManager {
 
   /**
    * Set game engine reference
-   * @param {Engine} engine - Reference to the game engine
+   * @param {Engine} gameEngine - Reference to the game engine
    */
-  setGameEngine(engine) {
-    this.gameEngine = engine;
+  setGameEngine(gameEngine) {
+    console.log("Setting game engine reference in EnemyManager");
+    this.gameEngine = gameEngine;
+    
+    // Log network manager status if available
+    if (gameEngine.networkManager) {
+      console.log("EnemyManager received network manager with settings:", {
+        gameMode: gameEngine.networkManager.gameMode,
+        isMultiplayer: gameEngine.networkManager.isMultiplayer,
+        isHost: gameEngine.networkManager.isHost
+      });
+    } else {
+      console.log("EnemyManager: No network manager in game engine");
+    }
     
     // Update reference for existing enemies
     this.enemies.forEach(enemy => {
-      enemy.gameEngine = engine;
+      enemy.gameEngine = gameEngine;
     });
   }
 

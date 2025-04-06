@@ -36,8 +36,12 @@ export class NetworkManager {
    * Initialize the network manager
    */
   init() {
-    console.log("Initializing NetworkManager");
+    console.log("*** Initializing NetworkManager ***");
+    console.log("Current state: gameMode:", this.gameMode, "isHost:", this.isHost, "isMultiplayer:", this.isMultiplayer);
     this.createStatusElement();
+    
+    // Log a clear message to confirm this is being called
+    console.log("NetworkManager initialization complete - you should see this message in the console");
   }
   
   /**
@@ -124,7 +128,13 @@ export class NetworkManager {
       return;
     }
     
+    console.log("*** JOINING GAME ***");
     console.log("Joining game with host ID:", hostId);
+    console.log("Network settings before joining:", {
+      gameMode: this.gameMode,
+      isMultiplayer: this.isMultiplayer,
+      isHost: this.isHost
+    });
     
     // No loading screen - removed to prevent issues where it remains visible
     
@@ -134,10 +144,17 @@ export class NetworkManager {
     this.hostId = hostId;
     this.hostDeclaredGameOver = false; // Track if host considered game over
     
+    console.log("Network settings after update:", {
+      gameMode: this.gameMode,
+      isMultiplayer: this.isMultiplayer,
+      isHost: this.isHost
+    });
+    
     this.updateConnectionStatus('Connecting...');
     
     // Create new network if needed
     if (!this.network) {
+      console.log("Creating new P2PNetwork instance for client");
       this.network = new P2PNetwork(this.gameEngine);
       this.setupNetworkCallbacks();
     }
@@ -146,6 +163,14 @@ export class NetworkManager {
     try {
       await this.network.joinGame(hostId);
       this.isConnected = true;
+      
+      console.log("Successfully connected to host, client mode activated");
+      console.log("Final network settings:", {
+        gameMode: this.gameMode,
+        isMultiplayer: this.isMultiplayer,
+        isHost: this.isHost,
+        isConnected: this.isConnected
+      });
       
       // Pre-initialize sound effects before starting game
       // This fixes the sound effect bug on client join

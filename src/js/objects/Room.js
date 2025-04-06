@@ -993,6 +993,18 @@ export class Room {
       if (this.player.isInteracting && !this.isHoldingF) {
         console.log("WINDOW: Player is interacting with window", nearestWindow.windowIndex);
         
+        // Add detailed debug logs for the network manager chain
+        console.log("DEBUG: this.gameEngine exists?", !!this.gameEngine);
+        if (this.gameEngine) {
+          console.log("DEBUG: this.gameEngine.networkManager exists?", !!this.gameEngine.networkManager);
+          
+          if (this.gameEngine.networkManager) {
+            console.log("DEBUG: isHost property:", this.gameEngine.networkManager.isHost);
+            console.log("DEBUG: isMultiplayer property:", this.gameEngine.networkManager.isMultiplayer);
+            console.log("DEBUG: network property exists?", !!this.gameEngine.networkManager.network);
+          }
+        }
+        
         // Check if we're in a multiplayer game as a client
         const isClient = this.gameEngine && 
                          this.gameEngine.networkManager && 
@@ -1170,6 +1182,37 @@ export class Room {
     this.nearbyMysteryBox = false;
     
     console.log("Room reset completed");
+  }
+
+  /**
+   * Set game engine reference
+   * @param {Engine} gameEngine - Reference to the game engine
+   */
+  setGameEngine(gameEngine) {
+    if (!gameEngine) {
+      console.warn("Cannot set null game engine reference");
+      return;
+    }
+    
+    console.log("Setting game engine reference in Room");
+    this.gameEngine = gameEngine;
+    
+    // Log network manager details if available
+    if (gameEngine.networkManager) {
+      console.log("Room received network manager with settings:", {
+        gameMode: gameEngine.networkManager.gameMode,
+        isMultiplayer: gameEngine.networkManager.isMultiplayer,
+        isHost: gameEngine.networkManager.isHost,
+        isConnected: gameEngine.networkManager.isConnected
+      });
+    } else {
+      console.log("Room: No network manager in game engine");
+    }
+    
+    // Set game engine reference for enemy manager
+    if (this.enemyManager) {
+      this.enemyManager.setGameEngine(gameEngine);
+    }
   }
 } 
  

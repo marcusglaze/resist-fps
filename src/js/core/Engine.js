@@ -352,6 +352,18 @@ export class Engine {
     // Apply settings
     this.settings = settings;
     
+    // Log network settings for debugging
+    if (this.networkManager) {
+      console.log("Network settings when starting game:", {
+        gameMode: this.networkManager.gameMode,
+        isMultiplayer: this.networkManager.isMultiplayer,
+        isHost: this.networkManager.isHost,
+        isConnected: this.networkManager.isConnected
+      });
+    } else {
+      console.log("No network manager available when starting game");
+    }
+    
     // Initialize scene if not already done
     if (!this.scene) {
       this.init();
@@ -410,7 +422,9 @@ export class Engine {
     const isNetworkHosting = this.networkManager && 
                              this.networkManager.isHost && 
                              this.networkManager.isMultiplayer;
-                             
+    
+    console.log("Game started. Network hosting mode:", isNetworkHosting);
+    
     // Set up enemies only if we're not in network hosting mode or explicitly told to start
     if (this.scene.room && this.scene.room.enemyManager) {
       // Initialize the enemy manager if not already initialized
