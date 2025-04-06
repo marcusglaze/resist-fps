@@ -263,6 +263,52 @@ export class EnemyManager {
                 enemy.startMoving();
               }
             }
+
+            // IMPORTANT: When host is dead but remote players are alive, we need to
+            // ensure enemy positions are still updating even if their AI might be stuck
+            if (this.player && this.player.isDead && hasLivingRemotePlayers) {
+              // Find a target - either a random position or a remote player position
+              let targetPosition = null;
+              const remotePlayers = this.gameEngine.networkManager.remotePlayers;
+              
+              // Try to find a living remote player to target
+              if (remotePlayers && remotePlayers.size > 0) {
+                remotePlayers.forEach(player => {
+                  if (!player.isDead && player.position) {
+                    targetPosition = player.position;
+                  }
+                });
+              }
+              
+              // If we found a target, move toward it slightly
+              if (targetPosition) {
+                // Apply a small movement in the direction of the player
+                const direction = new THREE.Vector3(
+                  targetPosition.x - enemy.instance.position.x,
+                  0,
+                  targetPosition.z - enemy.instance.position.z
+                ).normalize();
+                
+                // Make a small movement - enough to change position but not teleport
+                const moveSpeed = enemy.speed || 2.0;
+                enemy.instance.position.x += direction.x * moveSpeed * deltaTime * 0.5;
+                enemy.instance.position.z += direction.z * moveSpeed * deltaTime * 0.5;
+                
+                // Sync the position property
+                if (enemy.position) {
+                  enemy.position.copy(enemy.instance.position);
+                }
+                
+                // Force the enemy to look at the target
+                enemy.instance.lookAt(
+                  new THREE.Vector3(targetPosition.x, enemy.instance.position.y, targetPosition.z)
+                );
+                
+                if (Math.random() < 0.01) { // 1% chance per frame
+                  console.log(`Forcing enemy ${enemy.id} movement toward remote player: [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}]`);
+                }
+              }
+            }
           }
           
           // Ensure enemy has correct player reference

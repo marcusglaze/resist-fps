@@ -381,12 +381,113 @@ export class NetworkManager {
                   State: ${enemy.state} -> ${enemyData.state}`);
               }
               
-              // Update position
-              enemy.instance.position.set(
-                enemyData.position.x,
-                enemyData.position.y,
-                enemyData.position.z
-              );
+              // CRITICAL FIX: Check for suspicious position resets to near-origin
+              const isPositionReset = 
+                Math.abs(enemyData.position.x) < 0.1 && 
+                Math.abs(enemyData.position.y) < 0.1 && 
+                Math.abs(enemyData.position.z - 0.01) < 0.1;
+                
+              if (isPositionReset && 
+                  (Math.abs(enemy.instance.position.x) > 0.5 || 
+                   Math.abs(enemy.instance.position.z) > 0.5)) {
+                console.warn(`⚠️ PREVENTED POSITION RESET for ${enemyData.id}: Ignoring suspicious reset to [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}]`);
+                
+                // DO NOT update position to prevent rubberbanding
+                // Instead, maintain current position and only update other properties
+                
+                // Make sure we synchronize the enemy.position property with the instance position
+                if (enemy.position) {
+                  enemy.position.copy(enemy.instance.position);
+                }
+              } else {
+                // Apply a normal position update with a smoothing factor
+                // Instead of directly setting the position, move it part of the way there
+                const smoothingFactor = 0.5; // Adjust between 0-1 (1 = instant, 0.5 = halfway)
+                
+                const targetX = enemyData.position.x;
+                const targetY = enemyData.position.y;
+                const targetZ = enemyData.position.z;
+                
+                // Calculate smoothed position
+                enemy.instance.position.x += (targetX - enemy.instance.position.x) * smoothingFactor;
+                enemy.instance.position.y += (targetY - enemy.instance.position.y) * smoothingFactor;
+                enemy.instance.position.z += (targetZ - enemy.instance.position.z) * smoothingFactor;
+                
+                // Also update the enemy.position property to match instance position
+                if (enemy.position) {
+                  enemy.position.copy(enemy.instance.position);
+                }
+              }
+              
+              // Check if enemy is stuck at the same position for too long
+              // Track the position of each enemy over time to detect stuck enemies
+              const enemyKey = `enemy_${enemy.id}_pos`;
+              if (!this._enemyPositionHistory) {
+                this._enemyPositionHistory = new Map();
+              }
+              
+              // Get position history for this enemy
+              let posHistory = this._enemyPositionHistory.get(enemyKey);
+              if (!posHistory) {
+                posHistory = {
+                  positions: [],
+                  lastMoved: Date.now(),
+                  stuckCount: 0
+                };
+                this._enemyPositionHistory.set(enemyKey, posHistory);
+              }
+              
+              // Record current position
+              const currentPos = {
+                x: enemy.instance.position.x,
+                y: enemy.instance.position.y,
+                z: enemy.instance.position.z,
+                time: Date.now()
+              };
+              
+              // Keep only last few positions
+              posHistory.positions.push(currentPos);
+              if (posHistory.positions.length > 5) {
+                posHistory.positions.shift(); // Remove oldest position
+              }
+              
+              // Check if enemy has moved significantly in last 3 seconds
+              if (posHistory.positions.length >= 2) {
+                const oldestPos = posHistory.positions[0];
+                const distanceX = Math.abs(currentPos.x - oldestPos.x);
+                const distanceZ = Math.abs(currentPos.z - oldestPos.z);
+                const totalDistance = Math.sqrt(distanceX * distanceX + distanceZ * distanceZ);
+                const timeElapsed = (currentPos.time - oldestPos.time) / 1000; // in seconds
+                
+                if (totalDistance < 0.1 && timeElapsed > 3) {
+                  // Enemy hasn't moved in 3 seconds - might be stuck
+                  posHistory.stuckCount++;
+                  
+                  if (posHistory.stuckCount >= 3) { // If stuck for 3 consecutive checks
+                    console.log(`Client detected stuck enemy ${enemy.id} - forcing movement`);
+                    
+                    // Apply a small random movement to the enemy
+                    const angle = Math.random() * Math.PI * 2;
+                    const distance = 0.1 + Math.random() * 0.2;
+                    
+                    enemy.instance.position.x += Math.cos(angle) * distance;
+                    enemy.instance.position.z += Math.sin(angle) * distance;
+                    
+                    // Reset stuck counter
+                    posHistory.stuckCount = 0;
+                    posHistory.lastMoved = Date.now();
+                    
+                    // Update position property
+                    if (enemy.position) {
+                      enemy.position.copy(enemy.instance.position);
+                    }
+                  }
+                } else {
+                  // Enemy is moving - reset stuck counter
+                  posHistory.stuckCount = 0;
+                  posHistory.lastMoved = Date.now();
+                }
+              }
               
               // Update health and state
               enemy.health = enemyData.health;
@@ -624,11 +725,52 @@ export class NetworkManager {
       
       // Set position
       if (enemyData.position && enemy.instance) {
-        enemy.instance.position.set(
-          enemyData.position.x,
-          enemyData.position.y,
-          enemyData.position.z
-        );
+        // CRITICAL FIX: Check for suspicious near-origin positions for spawning enemies
+        const isPositionReset = 
+          Math.abs(enemyData.position.x) < 0.1 && 
+          Math.abs(enemyData.position.y) < 0.1 && 
+          Math.abs(enemyData.position.z - 0.01) < 0.1;
+          
+        if (isPositionReset) {
+          console.warn(`⚠️ DETECTED SUSPICIOUS SPAWN POSITION for ${enemy.id}: [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}]`);
+          console.warn("Using fallback position instead");
+          
+          // Use window position plus random offset as fallback
+          if (targetWindow && targetWindow.instance) {
+            const windowPos = new THREE.Vector3();
+            targetWindow.instance.getWorldPosition(windowPos);
+            
+            // Add random offset (3-5 units away from window)
+            const distance = 3 + Math.random() * 2;
+            const angle = Math.random() * Math.PI * 2;
+            
+            const x = windowPos.x + Math.cos(angle) * distance;
+            const z = windowPos.z + Math.sin(angle) * distance;
+            
+            enemy.instance.position.set(x, 0, z);
+            
+            console.log(`Using fallback position: [${x.toFixed(2)}, 0.00, ${z.toFixed(2)}]`);
+          } else {
+            // Still use the original position if we can't calculate a better one
+            enemy.instance.position.set(
+              enemyData.position.x,
+              enemyData.position.y,
+              enemyData.position.z
+            );
+          }
+        } else {
+          // Normal case - use the position from the network data
+          enemy.instance.position.set(
+            enemyData.position.x,
+            enemyData.position.y,
+            enemyData.position.z
+          );
+        }
+        
+        // CRITICAL FIX: Always sync the enemy.position with instance.position
+        if (enemy.position) {
+          enemy.position.copy(enemy.instance.position);
+        }
       }
       
       // Set state properties
