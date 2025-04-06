@@ -19,6 +19,9 @@ export class P2PNetwork {
     this.stateUpdateInterval = 50; // ms between state updates
     this.peerJSLoaded = false;
     
+    // Direct reference to the host connection (for clients)
+    this.hostConnection = null;
+    
     // Add debounce mechanism for client actions
     this.lastClientActionTime = 0;
     this.clientActionDebounceTime = 150; // ms to wait after client actions before override
@@ -362,6 +365,10 @@ export class P2PNetwork {
           conn.on('open', () => {
             console.log('Connected to host:', hostId);
             this.connections.push(conn);
+            
+            // Store a direct reference to the host connection for easier access
+            this.hostConnection = conn;
+            
             this.isConnected = true;
             
             // Set up event handlers
@@ -371,6 +378,7 @@ export class P2PNetwork {
               console.log('Disconnected from host');
               this.isConnected = false;
               this.connections = [];
+              this.hostConnection = null; // Clear the host connection reference
               
               if (this.onPlayerLeft) {
                 this.onPlayerLeft(hostId);
@@ -1483,7 +1491,7 @@ export class P2PNetwork {
     console.log("********************************************************************************");
     
     if (!this.isConnected) {
-      console.error("Cannot send player action: not connected");
+      console.error("Cannot send player action: not connected (isConnected is false)");
       return null;
     }
     
@@ -1508,13 +1516,23 @@ export class P2PNetwork {
         return actionId;
       }
       
+      // Detailed connection debugging
+      console.log("NETWORK: Connection details:", {
+        peerConnectionExists: !!this.peerConnection,
+        hostConnectionExists: !!this.hostConnection,
+        clientId: this.clientId, 
+        hostId: this.hostId,
+        connectionState: this.peerConnection ? this.peerConnection.connectionState : 'no peer connection',
+        hostConnectionState: this.hostConnection ? 'exists' : 'missing'
+      });
+      
       // Send to host
       if (this.peerConnection && this.hostConnection) {
         console.log(`NETWORK: Client sending action '${actionType}' to host`);
         this.hostConnection.send(message);
         return actionId;
       } else {
-        console.error("No connection to host to send action");
+        console.error("No connection to host to send action - check if hostConnection is properly established");
         return null;
       }
     } catch (error) {
@@ -1655,6 +1673,16 @@ export class P2PNetwork {
       }
     }
     
+    // Close the host connection specifically
+    if (this.hostConnection) {
+      try {
+        this.hostConnection.close();
+      } catch (err) {
+        console.error("Error closing host connection:", err);
+      }
+      this.hostConnection = null;
+    }
+    
     // Close the peer connection
     if (this.peer) {
       try {
@@ -1682,9 +1710,9 @@ export class P2PNetwork {
     // Reset state
     this.connections = [];
     this.isHost = false;
-    this.hostId = null;
-    this.clientId = null;
     this.isConnected = false;
+    this.clientId = null;
+    this.hostId = null;
     
     console.log("P2P network disconnected");
     
