@@ -1105,182 +1105,180 @@ export class MysteryBox {
   }
   
   /**
-   * Clean up resources when removing mystery box
+   * Client-side method to attempt opening the mystery box
+   * This is called on the client and sends the action to the host
+   * @param {Player} player - The player attempting to open the box
+   * @returns {boolean} Whether the box was successfully opened
    */
-  dispose() {
-    // Remove info panel from document
-    if (this.infoPanel && document.body.contains(this.infoPanel)) {
-      document.body.removeChild(this.infoPanel);
+  clientAttemptOpen(player) {
+    // If the box is already open, don't allow another open
+    if (this.isOpen) {
+      console.log('Mystery box is already open');
+      return false;
     }
     
-    // Clear any active timeouts
-    if (this.weaponTimeoutId) {
-      clearTimeout(this.weaponTimeoutId);
-      this.weaponTimeoutId = null;
+    // Check if the box is already being opened or open
+    if (this.boxState !== 'closed') {
+      console.log('Mystery box is already being opened or open');
+      return false;
     }
+    
+    // Check if player has enough points
+    if (player.score < this.cost) {
+      console.log(`Player doesn't have enough points (${player.score}/${this.cost})`);
+      return false;
+    }
+    
+    // Deduct points locally
+    player.removePoints(this.cost);
+    console.log(`Deducted ${this.cost} points from player. Remaining: ${player.score}`);
+    
+    // Apply local effects - start opening animation
+    this.boxState = 'opening';
+    this.boxOpeningTime = 0;
+    this.weaponDisplayTime = 0;
+    this.weaponReady = false;
+    this.isOpen = true;
+    
+    // Store player reference for weapon delivery
+    this.playerToReceiveWeapon = player;
+    
+    // Send the action to the host if in multiplayer
+    if (player.gameEngine && 
+        player.gameEngine.networkManager && 
+        player.gameEngine.networkManager.isMultiplayer && 
+        !player.gameEngine.networkManager.isHost) {
+      
+      console.log('Client sending mystery box open request to host');
+      
+      // Get the network manager
+      const networkManager = player.gameEngine.networkManager;
+      
+      // Find the index of this mystery box in the room
+      const room = player.gameEngine.scene.room;
+      const mysteryBoxIndex = room.mysteryBoxes ? room.mysteryBoxes.indexOf(this) : 0;
+      
+      // Send the action to the host
+      if (networkManager.network && typeof networkManager.network.sendPlayerAction === 'function') {
+        networkManager.network.sendPlayerAction('openMysteryBox', {
+          mysteryBoxIndex: mysteryBoxIndex,
+          boxState: this.boxState,
+          playerScore: player.score
+        });
+      }
+    }
+    
+    return true;
   }
   
   /**
-   * Create a visual representation of a weapon
-   * @param {WeaponType} weaponType - The type of weapon to create
-   * @returns {THREE.Group} The weapon mesh
+   * Client-side method to take a weapon from the mystery box
+   * This is called on the client and sends the action to the host
+   * @param {Player} player - The player taking the weapon
+   * @returns {boolean} Whether the weapon was successfully taken
    */
-  createWeaponMesh(weaponType) {
-    const weaponGroup = new THREE.Group();
-    
-    // Create a more detailed weapon model
-    const gunBody = new THREE.Group();
-    
-    // Gun body color based on weapon quality (stored in currentWeaponQuality)
-    const quality = this.currentWeaponQuality;
-    const bodyColor = new THREE.Color(
-      0.2 + quality * 0.8, 
-      0.4 + quality * 0.6,
-      0.6 + quality * 0.4
-    );
-    
-    const bodyMaterial = new THREE.MeshStandardMaterial({
-      color: bodyColor,
-      emissive: bodyColor.clone().multiplyScalar(0.5),
-      emissiveIntensity: 0.8,
-      metalness: 0.8,
-      roughness: 0.2
-    });
-    
-    // Main body
-    const bodyGeometry = new THREE.BoxGeometry(0.08, 0.15, 0.5);
-    const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
-    gunBody.add(bodyMesh);
-    
-    // Barrel
-    const barrelGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8);
-    const barrelMesh = new THREE.Mesh(barrelGeometry, bodyMaterial);
-    barrelMesh.position.set(0, 0.05, 0.3);
-    barrelMesh.rotation.x = Math.PI / 2;
-    gunBody.add(barrelMesh);
-    
-    // Handle
-    const handleGeometry = new THREE.BoxGeometry(0.06, 0.2, 0.08);
-    const handleMesh = new THREE.Mesh(handleGeometry, bodyMaterial);
-    handleMesh.position.set(0, -0.15, 0);
-    gunBody.add(handleMesh);
-    
-    // Add scope for high quality weapons
-    if (quality > 0.7) {
-      const scopeGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.15, 8);
-      const scopeMesh = new THREE.Mesh(scopeGeometry, bodyMaterial);
-      scopeMesh.position.set(0, 0.13, 0.1);
-      scopeMesh.rotation.x = Math.PI / 2;
-      gunBody.add(scopeMesh);
-      
-      // Scope lens
-      const lensGeometry = new THREE.CircleGeometry(0.02, 8);
-      const lensMaterial = new THREE.MeshStandardMaterial({
-        color: 0x00ffff,
-        emissive: 0x00ffff,
-        emissiveIntensity: 1
-      });
-      const lensMesh = new THREE.Mesh(lensGeometry, lensMaterial);
-      lensMesh.position.set(0, 0.13, 0.18);
-      lensMesh.rotation.y = Math.PI / 2;
-      gunBody.add(lensMesh);
+  clientTakeWeapon(player) {
+    // Check if box has a weapon available to take
+    if (!this.isOpen || !this.hasWeaponAvailable || !this.weaponReady) {
+      console.log('No weapon available to take from mystery box');
+      return false;
     }
     
-    // Add muzzle
-    const muzzleGeometry = new THREE.CylinderGeometry(0.03, 0.02, 0.05, 8);
-    const muzzleMesh = new THREE.Mesh(muzzleGeometry, bodyMaterial);
-    muzzleMesh.position.set(0, 0.05, 0.6);
-    muzzleMesh.rotation.x = Math.PI / 2;
-    gunBody.add(muzzleMesh);
+    // Take the weapon locally
+    const weaponType = this.weaponToGive;
+    const success = this.giveWeaponToPlayer(player);
     
-    // Add to weapon group
-    weaponGroup.add(gunBody);
+    if (success) {
+      // Update local state
+      this.hasWeaponAvailable = false;
+      this.isOpen = false;
+      
+      // Play pickup sound locally
+      this.playPickupSound();
+      
+      // Start closing the box
+      this.boxState = 'closing';
+      
+      // Send the action to the host if in multiplayer
+      if (player.gameEngine && 
+          player.gameEngine.networkManager && 
+          player.gameEngine.networkManager.isMultiplayer && 
+          !player.gameEngine.networkManager.isHost) {
+        
+        console.log('Client sending mystery box weapon pickup to host');
+        
+        // Get the network manager
+        const networkManager = player.gameEngine.networkManager;
+        
+        // Find the index of this mystery box in the room
+        const room = player.gameEngine.scene.room;
+        const mysteryBoxIndex = room.mysteryBoxes ? room.mysteryBoxes.indexOf(this) : 0;
+        
+        // Send the action to the host
+        if (networkManager.network && typeof networkManager.network.sendPlayerAction === 'function') {
+          networkManager.network.sendPlayerAction('takeMysteryBoxWeapon', {
+            mysteryBoxIndex: mysteryBoxIndex,
+            weaponName: weaponType.name,
+            playerScore: player.score
+          });
+        }
+      }
+    }
     
-    return weaponGroup;
+    return success;
   }
   
   /**
-   * Generate a random AI weapon with properties based on quality
-   * @param {number} quality - Quality value from 0 to 1
-   * @returns {Object} The generated weapon type
+   * Sync the mystery box state from the host
+   * @param {Object} state - The mystery box state from the host
    */
-  generateAIWeapon(quality) {
-    // Scale quality for better distribution (emphasize middle range)
-    const scaledQuality = Math.pow(quality, 0.7);
+  syncFromHost(state) {
+    if (!state) return;
     
-    // Generate weapon name
-    const prefixes = ["Quantum", "Hyper", "Omni", "Void", "Flux", "Nano", "Plasma", "Astral", "Cosmic", "Vortex"];
-    const types = ["Blaster", "Cannon", "Pulser", "Decimator", "Annihilator", "Disruptor", "Rifle", "Launcher", "Beamer", "Shredder"];
-    const suffixes = ["of Doom", "X9000", "Prime", "Elite", "Mk IV", "Ultra", "Omega", "Infinity", "Matrix", "Nexus"];
+    console.log('Syncing mystery box state from host:', state);
     
-    // Use quality to determine complexity of name
-    let name = "";
-    if (scaledQuality < 0.3) {
-      // Simple name for low quality
-      name = `${types[Math.floor(Math.random() * types.length)]}`;
-    } else if (scaledQuality < 0.7) {
-      // Two-part name for medium quality
-      name = `${prefixes[Math.floor(Math.random() * prefixes.length)]} ${types[Math.floor(Math.random() * types.length)]}`;
-    } else {
-      // Three-part name for high quality
-      name = `${prefixes[Math.floor(Math.random() * prefixes.length)]} ${types[Math.floor(Math.random() * types.length)]} ${suffixes[Math.floor(Math.random() * suffixes.length)]}`;
+    // Update box state
+    this.boxState = state.boxState;
+    this.isOpen = state.isOpen;
+    this.hasWeaponAvailable = state.hasWeaponAvailable;
+    this.weaponReady = state.weaponReady;
+    
+    // Update animation times
+    this.boxOpeningTime = state.boxOpeningTime || 0;
+    this.weaponDisplayTime = state.weaponDisplayTime || 0;
+    
+    // Handle state transitions
+    if (state.boxState === 'opening' && !this.boxSoundPlaying) {
+      this.playBoxSound();
     }
     
-    // Generate weapon stats based on quality
-    const bodyDamage = Math.floor(20 + (scaledQuality * 80)); // 20-100 damage
-    const headDamage = Math.floor(bodyDamage * (1.5 + scaledQuality)); // 1.5x to 2.5x multiplier
+    // If host has a weapon ready but we don't, create it
+    if (state.hasWeaponAvailable && state.weaponReady && !this.weaponFloating && state.weaponType) {
+      console.log('Creating floating weapon from host state');
+      this.weaponToGive = state.weaponType;
+      this.createFloatingWeapon();
+    }
     
-    // Higher quality = faster fire rate (lower cooldown)
-    const cooldown = Math.max(0.05, 0.5 - (scaledQuality * 0.45)); // 0.5 to 0.05 seconds
-    
-    // Higher quality = larger magazine
-    const magazineSize = Math.floor(8 + (scaledQuality * 92)); // 8 to 100 rounds
-    
-    // Higher quality = more ammo
-    const totalAmmo = Math.floor(magazineSize * (2 + (scaledQuality * 8))); // 2x to 10x magazine size
-    
-    // Calculate color values for the weapon based on quality
-    const colorR = 0.2 + scaledQuality * 0.8;
-    const colorG = 0.4 + scaledQuality * 0.6;
-    const colorB = 0.6 + scaledQuality * 0.4;
-    
-    // Configure weapon type based on random features and quality
-    const weaponType = {
-      name: name,
-      description: `Mystery Box special weapon`,
-      cost: 0, // Mystery box weapons are free once obtained
-      bodyDamage: bodyDamage,
-      headDamage: headDamage,
-      cooldown: cooldown,
-      magazineSize: magazineSize,
-      totalAmmo: totalAmmo,
-      currentAmmo: magazineSize, // Start with a full magazine
-      automatic: scaledQuality > 0.4, // Higher quality = automatic firing
-      
-      // Essential weapon properties for gameplay
-      spread: 0.02, // Reasonable spread for most weapons
-      projectilesPerShot: Math.max(1, Math.floor(scaledQuality * 3)), // 1-3 projectiles based on quality
-      shotsPerBurst: 1, // Standard single shot
-      reloadTime: Math.max(0.5, 2.0 - scaledQuality), // 0.5-2.0 seconds based on quality
-      hasInfiniteAmmo: scaledQuality > 0.9, // Only the best quality weapons get infinite ammo
-      
-      // Visual properties for maintaining appearance
-      customColor: {
-        r: colorR,
-        g: colorG,
-        b: colorB
-      },
-      quality: scaledQuality, // Store the weapon quality for visual effects
-      
-      // Metadata
-      isMysteryWeapon: true,
-      soundPath: '/audio/gun-shot.wav', // Default sound path
-      muzzleFlash: true, // Enable muzzle flash for all weapons
+    // If host closed the box but we still have it open, reset
+    if (state.boxState === 'closed' && (this.boxState !== 'closed' || this.isOpen)) {
+      this.resetBoxState();
+    }
+  }
+
+  /**
+   * Get current state of the mystery box for network synchronization
+   * @returns {Object} The mystery box state
+   */
+  getState() {
+    return {
+      boxState: this.boxState,
+      isOpen: this.isOpen,
+      hasWeaponAvailable: this.hasWeaponAvailable,
+      weaponReady: this.weaponReady,
+      boxOpeningTime: this.boxOpeningTime,
+      weaponDisplayTime: this.weaponDisplayTime,
+      weaponType: this.weaponToGive
     };
-    
-    console.log("MYSTERY BOX - Created weapon:", name, "with quality:", scaledQuality.toFixed(2), "and properties:", weaponType);
-    
-    return weaponType;
   }
   
   /**

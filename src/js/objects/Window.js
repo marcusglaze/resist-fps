@@ -421,22 +421,29 @@ export class Window {
       return false;
     }
     
+    // Check if windowIndex is set
+    if (this.windowIndex === undefined) {
+      console.error("Window missing windowIndex! Cannot sync with host.");
+      return false;
+    }
+    
     // First add the board locally
     const success = this.addBoard();
     
     if (success) {
       // Then send the action to the host
-      console.log("Client adding board to window, notifying host");
+      console.log(`Client adding board to window ${this.windowIndex}, current count: ${this.boardsCount}`);
       networkManager.network.sendPlayerAction('addWindowBoard', {
-        windowIndex: this.windowIndex, // Make sure windowIndex is set when creating window
+        windowIndex: this.windowIndex,
         boardsCount: this.boardsCount,
         boardHealths: this.boardHealths
       });
       
       return true;
+    } else {
+      console.log(`Failed to add board to window ${this.windowIndex} (already at max: ${this.maxBoards})`);
+      return false;
     }
-    
-    return false;
   }
   
   /**

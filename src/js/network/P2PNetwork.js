@@ -521,6 +521,12 @@ export class P2PNetwork {
     } else if (action.type === 'damageWindowBoard' && this.isHost) {
       // Handle window board damage from client
       this.applyWindowBoardDamage(action.data, playerId);
+    } else if (action.type === 'openMysteryBox' && this.isHost) {
+      // Handle mystery box opening from client
+      this.applyOpenMysteryBox(action.data, playerId);
+    } else if (action.type === 'takeMysteryBoxWeapon' && this.isHost) {
+      // Handle taking weapon from mystery box
+      this.applyTakeMysteryBoxWeapon(action.data, playerId);
     }
     
     // If we're the host, broadcast this to all other clients
@@ -547,10 +553,21 @@ export class P2PNetwork {
     
     try {
       const { enemyId, damage, isHeadshot } = damageData;
+      
+      if (!enemyId) {
+        console.error("Invalid enemy damage data: missing enemyId", damageData);
+        return;
+      }
+      
       console.log(`Host applying damage from client ${playerId}: ${damage} to enemy ${enemyId} (headshot: ${isHeadshot})`);
       
       // Find the enemy by ID
       const enemyManager = this.gameEngine.scene.room.enemyManager;
+      
+      // Log info about all available enemies to help with debugging
+      console.log(`Current enemies: ${enemyManager.enemies.length}`, 
+                  enemyManager.enemies.map(e => e.id).join(', '));
+      
       const enemy = enemyManager.enemies.find(e => e.id === enemyId);
       
       if (enemy) {
@@ -586,7 +603,7 @@ export class P2PNetwork {
           }, 50);
         }
       } else {
-        console.warn(`Enemy with ID ${enemyId} not found`);
+        console.warn(`Enemy with ID ${enemyId} not found. Available IDs: ${enemyManager.enemies.map(e => e.id).join(', ')}`);
         // Send error back to client
         this.sendToPlayer(playerId, {
           type: 'enemyDamageError',
@@ -617,20 +634,31 @@ export class P2PNetwork {
       
       // Get the window by index
       const room = this.gameEngine.scene.room;
+      
+      if (!room.windows || !Array.isArray(room.windows)) {
+        console.error("No windows array found in room:", room);
+        return;
+      }
+      
+      console.log(`Room has ${room.windows.length} windows, requested window at index ${windowIndex}`);
+      
       const window = room.windows[windowIndex];
       
       if (window) {
+        console.log(`Found window at index ${windowIndex}, current boards: ${window.boardsCount}, adding board...`);
         // Update the window state by adding a board
-        window.addBoard();
+        const result = window.addBoard();
+        console.log(`Board add result: ${result ? 'success' : 'failed'}, new count: ${window.boardsCount}`);
         
         // Force a game state update to all clients
         setTimeout(() => {
           if (this.broadcastGameState) {
+            console.log("Broadcasting updated game state to all clients");
             this.broadcastGameState(true); // Force immediate update
           }
         }, 50);
       } else {
-        console.warn(`Window with index ${windowIndex} not found`);
+        console.warn(`Window with index ${windowIndex} not found in array of length ${room.windows.length}`);
       }
     } catch (error) {
       console.error("Error applying window boarding:", error);
@@ -728,11 +756,154 @@ export class P2PNetwork {
   }
   
   /**
+   * Apply mystery box opening action from client (host only)
+   * @param {Object} boxData - The mystery box data
+   * @param {string} playerId - The ID of the player who opened the box
+   */
+  applyOpenMysteryBox(boxData, playerId) {
+    if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
+        !this.gameEngine.scene.room) {
+      console.warn("Cannot apply mystery box opening: not host or game scene not fully initialized");
+      return;
+    }
+    
+    try {
+      const { mysteryBoxIndex, boxState, playerScore } = boxData;
+      console.log(`Host applying mystery box opening from client ${playerId}: box ${mysteryBoxIndex}`);
+      
+      // Get the room reference
+      const room = this.gameEngine.scene.room;
+      
+      // Access mystery box from the room
+      let mysteryBox = null;
+      if (room.mysteryBoxes && Array.isArray(room.mysteryBoxes) && mysteryBoxIndex < room.mysteryBoxes.length) {
+        mysteryBox = room.mysteryBoxes[mysteryBoxIndex];
+      } else if (room.mysteryBox) {
+        // Fallback to single mystery box
+        mysteryBox = room.mysteryBox;
+      }
+      
+      if (mysteryBox) {
+        console.log("Found mystery box, opening on host");
+        
+        // Find the player instance in the network manager
+        const networkManager = this.gameEngine.networkManager;
+        const playerInstance = networkManager ? networkManager.getPlayerControls() : null;
+        
+        if (playerInstance) {
+          // Apply the action on the host
+          mysteryBox.attemptOpen(playerInstance);
+          
+          // Force a game state update to all clients
+          setTimeout(() => {
+            if (this.broadcastGameState) {
+              console.log("Broadcasting updated game state for mystery box");
+              this.broadcastGameState(true); // Force immediate update
+            }
+          }, 50);
+        } else {
+          console.error("Could not find player instance for mystery box action");
+        }
+      } else {
+        console.warn(`Mystery box with index ${mysteryBoxIndex} not found`);
+      }
+    } catch (error) {
+      console.error("Error applying mystery box opening:", error);
+    }
+  }
+  
+  /**
+   * Apply taking weapon from mystery box action from client (host only)
+   * @param {Object} boxData - The mystery box data
+   * @param {string} playerId - The ID of the player who took the weapon
+   */
+  applyTakeMysteryBoxWeapon(boxData, playerId) {
+    if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
+        !this.gameEngine.scene.room) {
+      console.warn("Cannot apply mystery box weapon taking: not host or game scene not fully initialized");
+      return;
+    }
+    
+    try {
+      const { mysteryBoxIndex, weaponName, playerScore } = boxData;
+      console.log(`Host applying mystery box weapon taking from client ${playerId}: box ${mysteryBoxIndex}, weapon ${weaponName}`);
+      
+      // Get the room reference
+      const room = this.gameEngine.scene.room;
+      
+      // Access mystery box from the room
+      let mysteryBox = null;
+      if (room.mysteryBoxes && Array.isArray(room.mysteryBoxes) && mysteryBoxIndex < room.mysteryBoxes.length) {
+        mysteryBox = room.mysteryBoxes[mysteryBoxIndex];
+      } else if (room.mysteryBox) {
+        // Fallback to single mystery box
+        mysteryBox = room.mysteryBox;
+      }
+      
+      if (mysteryBox) {
+        console.log("Found mystery box, taking weapon on host");
+        
+        // Find the player instance in the network manager
+        const networkManager = this.gameEngine.networkManager;
+        const playerInstance = networkManager ? networkManager.getPlayerControls() : null;
+        
+        if (playerInstance) {
+          // Apply the action on the host - this updates all clients via the state broadcast
+          mysteryBox.takeWeapon(playerInstance);
+          
+          // Force a game state update to all clients
+          setTimeout(() => {
+            if (this.broadcastGameState) {
+              console.log("Broadcasting updated game state for mystery box weapon taken");
+              this.broadcastGameState(true); // Force immediate update
+            }
+          }, 50);
+        } else {
+          console.error("Could not find player instance for mystery box action");
+        }
+      } else {
+        console.warn(`Mystery box with index ${mysteryBoxIndex} not found`);
+      }
+    } catch (error) {
+      console.error("Error applying mystery box weapon taking:", error);
+    }
+  }
+  
+  /**
    * Update a remote player's position
    * @param {Object} position - The position data (x, y, z coordinates and rotation)
    * @param {string} playerId - The ID of the player to update
    */
   updatePlayerPosition(position, playerId) {
+    // Track death state changes for critical game state decisions
+    if (position.isDead !== undefined) {
+      // Get the player's previous death state if we have it
+      const previousPlayerState = this.gameEngine?.networkManager?.remotePlayers?.get(playerId);
+      const wasPreviouslyDead = previousPlayerState?.isDead || false;
+      
+      if (position.isDead !== wasPreviouslyDead) {
+        console.log(`IMPORTANT: Player ${playerId} death state changed: isDead=${position.isDead}, health=${position.health || 'unknown'}`);
+        
+        // If a client died while the host is already dead, check if all players are now dead
+        if (position.isDead && this.gameEngine?.controls?.isDead && this.isHost) {
+          console.log(`Client died while host was already dead. Checking if all players are now dead...`);
+          
+          // Force a check of all player states to see if everyone is dead now
+          const allPlayersDead = this.areAllPlayersDead();
+          
+          // If all players are now dead and the game isn't already marked as over,
+          // update the game state and force a broadcast
+          if (allPlayersDead && !this.gameEngine.isGameOver) {
+            console.log(`All players are now dead. Setting game over state and broadcasting to all clients.`);
+            this.gameEngine.isGameOver = true;
+            
+            // Force an immediate broadcast of the updated game state
+            this.broadcastGameState(true);
+          }
+        }
+      }
+    }
+    
     // Ensure NetworkManager actually updates the positions of remote players
     if (this.gameEngine && this.gameEngine.networkManager) {
       // Update the player's position in the NetworkManager
@@ -850,6 +1021,40 @@ export class P2PNetwork {
   }
   
   /**
+   * Send data to a specific player
+   * @param {string} playerId - The ID of the player to send data to
+   * @param {Object} data - The data to send
+   * @returns {boolean} True if sent successfully, false otherwise
+   */
+  sendToPlayer(playerId, data) {
+    if (!this.isConnected) {
+      console.debug("Cannot send to player: Not connected");
+      return false;
+    }
+    
+    // Find the connection for this player
+    const conn = this.connections.find(c => c.peer === playerId);
+    
+    if (!conn) {
+      console.warn(`No connection found for player ${playerId}`);
+      return false;
+    }
+    
+    if (!conn.open) {
+      console.warn(`Connection to player ${playerId} is not open`);
+      return false;
+    }
+    
+    try {
+      conn.send(data);
+      return true;
+    } catch (err) {
+      console.error(`Error sending data to player ${playerId}:`, err);
+      return false;
+    }
+  }
+  
+  /**
    * Get the current game state
    * @returns {Object} The game state object
    */
@@ -864,6 +1069,7 @@ export class P2PNetwork {
       enemies: this.getEnemiesState(),
       round: this.getRoundInfo(),
       windows: this.getWindowsState(),
+      mysteryBoxes: this.getMysteryBoxesState(),
       gameStatus: this.getGameStatus(),
       // Add other relevant game state data
     };
@@ -914,22 +1120,62 @@ export class P2PNetwork {
       return [];
     }
     
-    // Example implementation
-    return this.gameEngine.scene.room.enemyManager.enemies.map(enemy => ({
-      id: enemy.id || (enemy.id = Math.random().toString(36).substring(2, 15)), // Ensure each enemy has a unique ID
-      position: {
-        x: enemy.instance.position.x,
-        y: enemy.instance.position.y,
-        z: enemy.instance.position.z
-      },
-      health: enemy.health,
-      type: enemy.type || 'standard', // Include zombie type for proper spawning
-      state: enemy.state || 'idle', // idle, attacking, dying, etc.
-      targetWindow: enemy.targetWindow ? {
-        index: this.gameEngine.scene.room.windows.indexOf(enemy.targetWindow)
-      } : null, // Include target window information
-      insideRoom: enemy.insideRoom || false
-    }));
+    const enemies = this.gameEngine.scene.room.enemyManager.enemies;
+    const isLocalPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
+    let hasLivingRemotePlayers = false;
+    
+    // Check if any remote players are alive - this is important for enemy targeting
+    if (isLocalPlayerDead && this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
+      this.gameEngine.networkManager.remotePlayers.forEach(player => {
+        if (!player.isDead) {
+          hasLivingRemotePlayers = true;
+        }
+      });
+      
+      // Log this information when host is dead but remote players are alive
+      if (hasLivingRemotePlayers) {
+        console.log(`Host player is dead but there are living remote players. Sending enemy states to clients.`);
+      }
+    }
+    
+    // If there are any enemies to report
+    if (enemies && enemies.length > 0) {
+      // Generate enemy states for all enemies
+      return enemies.map(enemy => {
+        // Ensure each enemy has a consistent unique ID without modifying the original
+        if (!enemy.id) {
+          console.warn("Enemy without ID found, this should not happen", enemy);
+          // Give it a permanent ID rather than re-generating each time
+          enemy.id = `enemy_${Math.random().toString(36).substring(2, 15)}_${Date.now().toString(36)}`;
+        }
+        
+        // If the local player is dead but there are living remote players,
+        // make sure enemies are still in a valid state for targeting
+        if (isLocalPlayerDead && hasLivingRemotePlayers && enemy.state === 'idle') {
+          // Force enemies to be in moving state so they'll target remote players
+          enemy.state = 'moving';
+        }
+        
+        return {
+          id: enemy.id,
+          position: {
+            x: enemy.instance.position.x,
+            y: enemy.instance.position.y,
+            z: enemy.instance.position.z
+          },
+          health: enemy.health,
+          type: enemy.type || 'standard', // Include zombie type for proper spawning
+          state: enemy.state || 'moving', // idle, attacking, dying, etc.
+          targetWindow: enemy.targetWindow ? {
+            index: this.gameEngine.scene.room.windows.indexOf(enemy.targetWindow)
+          } : null, // Include target window information
+          insideRoom: enemy.insideRoom || false
+        };
+      });
+    }
+    
+    // Return empty array if no enemies
+    return [];
   }
   
   /**
@@ -954,20 +1200,44 @@ export class P2PNetwork {
    */
   getWindowsState() {
     if (!this.gameEngine.scene || !this.gameEngine.scene.room) {
+      console.warn("Cannot get window states: scene or room not available");
       return [];
     }
     
-    // Example implementation
-    return this.gameEngine.scene.room.windows.map(window => ({
-      position: {
-        x: window.instance.position.x,
-        y: window.instance.position.y,
-        z: window.instance.position.z
-      },
-      boardsCount: window.boardsCount,
-      isOpen: window.isOpen,
-      health: window.boardHealths // Array of health values for each board
-    }));
+    const windows = this.gameEngine.scene.room.windows;
+    if (!windows || !Array.isArray(windows) || windows.length === 0) {
+      console.warn("No windows array found in room");
+      return [];
+    }
+    
+    console.log(`Getting state of ${windows.length} windows`);
+    
+    // Prepare window states
+    const windowStates = windows.map((window, index) => {
+      // Check if windowIndex is set, if not set it now
+      if (window.windowIndex === undefined) {
+        console.log(`Setting missing windowIndex ${index} on window before sending state`);
+        window.windowIndex = index;
+      }
+      
+      const state = {
+        windowIndex: window.windowIndex,
+        position: {
+          x: window.instance.position.x,
+          y: window.instance.position.y,
+          z: window.instance.position.z
+        },
+        boardsCount: window.boardsCount,
+        isOpen: window.isOpen,
+        health: window.boardHealths // Array of health values for each board
+      };
+      
+      console.log(`Window ${index} state: ${window.boardsCount} boards, isOpen=${window.isOpen}`);
+      
+      return state;
+    });
+    
+    return windowStates;
   }
   
   /**
@@ -985,29 +1255,44 @@ export class P2PNetwork {
   }
   
   /**
-   * Check if all players are dead
-   * @returns {boolean} True if all players are dead
+   * Check if all players (host and clients) are dead
+   * @returns {boolean} True if all players are dead, false otherwise
    */
   areAllPlayersDead() {
-    // Check local player
-    const localPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
-    
-    // If the local player (host) is alive, then not all players are dead
-    if (!localPlayerDead) return false;
-    
-    // Check remote players
-    let allRemotePlayersDead = true;
-    
-    if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers.size > 0) {
-      this.gameEngine.networkManager.remotePlayers.forEach(player => {
+    try {
+      // First check if we (the local player) are dead
+      const localPlayerIsDead = this.gameEngine?.controls?.isDead || false;
+      
+      // If the local player is still alive, we can immediately return false
+      if (!localPlayerIsDead) {
+        console.log(`Local player is still alive, not all players are dead.`);
+        return false;
+      }
+      
+      // Get all remote player states to check
+      const remotePlayers = this.gameEngine?.networkManager?.remotePlayers || new Map();
+      let totalRemotePlayers = 0;
+      let remotePlayersAlive = 0;
+      
+      // Check each remote player
+      remotePlayers.forEach((player, playerId) => {
+        totalRemotePlayers++;
         if (!player.isDead) {
-          allRemotePlayersDead = false;
+          remotePlayersAlive++;
         }
       });
+      
+      // Comprehensive logging for debugging death check issues
+      console.log(`Death check: Local(host=${this.isHost})=${localPlayerIsDead ? 'DEAD' : 'ALIVE'}, ` +
+                 `Remote Players: ${totalRemotePlayers} total, ${remotePlayersAlive} alive`);
+      
+      // Only return true if host is dead AND all remote players are dead
+      return localPlayerIsDead && remotePlayersAlive === 0;
+    } catch (error) {
+      console.error('Error checking if all players are dead:', error);
+      // Default to false to be safe
+      return false;
     }
-    
-    // If host is dead but at least one remote player is alive, return false
-    return allRemotePlayersDead;
   }
   
   /**
@@ -1402,55 +1687,44 @@ export class P2PNetwork {
   }
   
   /**
-   * Broadcast the current game state to all connected clients
-   * @param {boolean} force - Whether to force sending regardless of time since last update
-   * @returns {boolean} True if broadcast was sent, false otherwise
+   * Broadcast the current game state to all connected peers
+   * @param {boolean} force - Whether to force broadcast even if not ready
    */
   broadcastGameState(force = false) {
-    if (!this.isHost || !this.isConnected) return false;
+    if (!this.isHost && !force) return;
     
-    const now = Date.now();
+    // Don't broadcast if not ready unless forced
+    if (!this.isReady && !force) return;
     
-    // Rate limit state updates unless forced
-    if (!force && now - this.lastStateSent < this.stateUpdateInterval) {
-      return false;
-    }
-    
-    // Get current game state
-    const gameState = this.getGameState();
-    
-    // Log state updates if forced or significant changes
-    if (force) {
-      console.log("Forced game state broadcast:", {
-        playerCount: Object.keys(gameState.playerPositions || {}).length,
-        enemyCount: (gameState.enemies || []).length,
-        round: gameState.round?.round,
-        windowCount: (gameState.windows || []).length
-      });
-    }
-    
-    // Send to all connected peers
-    let broadcastSuccess = false;
-    this.connections.forEach((conn) => {
-      if (conn.open) {
-        try {
-          conn.send({
-            type: 'gameState',
-            state: gameState
-          });
-          broadcastSuccess = true;
-        } catch (error) {
-          console.error(`Error broadcasting game state to ${conn.peer}:`, error);
-        }
+    try {
+      const gameState = this.getGameState();
+      
+      // Add important game status information
+      gameState.gameStatus = {
+        ...(gameState.gameStatus || {}),
+        isGameOver: this.gameEngine?.isGameOver || false,
+        allPlayersDead: this.areAllPlayersDead(),
+        hostIsDead: this.gameEngine?.controls?.isDead || false,
+        round: this.gameEngine?.round?.currentRound || 0,
+        timestamp: Date.now()
+      };
+      
+      // Log the broadcast if it includes critical information
+      if (gameState.gameStatus.isGameOver || gameState.gameStatus.allPlayersDead) {
+        console.log(`Broadcasting critical game state update:`, JSON.stringify(gameState.gameStatus));
       }
-    });
-    
-    // Update last sent time
-    if (broadcastSuccess) {
-      this.lastStateSent = now;
+      
+      // Broadcast to all peers
+      this.broadcast({
+        type: 'gameState',
+        state: gameState
+      });
+      
+      return gameState;
+    } catch (error) {
+      console.error('Error broadcasting game state:', error);
+      return null;
     }
-    
-    return broadcastSuccess;
   }
   
   /**
@@ -1469,22 +1743,69 @@ export class P2PNetwork {
       
       // Find the enemy in the client's game
       const enemyManager = this.gameEngine.scene.room.enemyManager;
+      
+      // Log info about available enemies to help with debugging
+      console.log(`Client has ${enemyManager.enemies.length} enemies with IDs: ${enemyManager.enemies.map(e => e.id).join(', ')}`);
+      
       const enemy = enemyManager.enemies.find(e => e.id === enemyId);
       
       if (enemy) {
         // Update the enemy's health locally to match the host's value
+        const oldHealth = enemy.health;
         enemy.health = health;
+        console.log(`Updated enemy ${enemyId} health from ${oldHealth} to ${health}`);
+        
+        // Update health bar if it exists
+        if (typeof enemy.updateHealthBar === 'function') {
+          enemy.updateHealthBar();
+        }
         
         // If the enemy is dead according to the host, kill it locally
         if (isDead && enemy.health > 0) {
+          console.log(`Enemy ${enemyId} was killed by host, forcing death locally`);
           enemy.health = 0;
           if (typeof enemy.die === 'function') {
             enemy.die();
           }
         }
+      } else {
+        console.warn(`Client could not find enemy with ID ${enemyId} to apply damage confirmation`);
       }
     } catch (error) {
       console.error("Error handling enemy damage confirmation:", error);
     }
+  }
+  
+  /**
+   * Get the current state of all mystery boxes
+   * @returns {Array} Array of mystery box state objects
+   */
+  getMysteryBoxesState() {
+    if (!this.gameEngine.scene || !this.gameEngine.scene.room) {
+      console.warn("Cannot get mystery box states: scene or room not available");
+      return [];
+    }
+    
+    const room = this.gameEngine.scene.room;
+    
+    // Handle multiple mystery boxes if defined
+    if (room.mysteryBoxes && Array.isArray(room.mysteryBoxes)) {
+      return room.mysteryBoxes.map((box, index) => {
+        return {
+          boxIndex: index,
+          ...box.getState()
+        };
+      });
+    } 
+    // Handle single mystery box
+    else if (room.mysteryBox) {
+      return [{
+        boxIndex: 0,
+        ...room.mysteryBox.getState()
+      }];
+    }
+    
+    // No mystery boxes found
+    return [];
   }
 } 

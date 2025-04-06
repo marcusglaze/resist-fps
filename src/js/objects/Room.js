@@ -454,6 +454,9 @@ export class Room {
       const window = new Window(this.windowWidth, this.windowHeight); // Width and height of window
       window.init();
       
+      // Set window index for network synchronization
+      window.windowIndex = index;
+      
       // Position and rotate window
       window.instance.position.set(pos.x, pos.y, pos.z);
       window.instance.rotation.y = pos.rotation;
@@ -728,32 +731,70 @@ export class Room {
           
           // Check if hold is complete
           if (holdProgress >= 1.0) {
-            // Check if player has enough points and box is not already open
-            if (player.score >= this.mysteryBox.cost && !this.mysteryBox.isOpen) {
-              // Attempt to open the mystery box
-              const result = this.mysteryBox.attemptOpen(player);
+            console.log("Hold complete for Mystery Box");
+            
+            // Check if player has enough points
+            if (player.score >= this.mysteryBox.cost) {
+              // Determine if we should use the client or normal method
+              const isMultiplayer = player.gameEngine && 
+                                    player.gameEngine.networkManager && 
+                                    player.gameEngine.networkManager.isMultiplayer;
+              const isHost = player.gameEngine && 
+                             player.gameEngine.networkManager && 
+                             player.gameEngine.networkManager.isHost;
               
-              if (result) {
-                // Set a 10-second timer for the weapon to be available
-                this.mysteryBox.weaponTimeoutId = setTimeout(() => {
-                  if (this.mysteryBox.hasWeaponAvailable) {
-                    this.mysteryBox.hideWeapon();
-                    this.mysteryBox.hasWeaponAvailable = false;
-                    this.mysteryBox.isOpen = false;
-                    
-                    // Update interaction text if player is still nearby
-                    if (this.nearbyMysteryBox && this.uiElements && this.uiElements.interactionText) {
-                      const hasEnoughPoints = player.score >= this.mysteryBox.cost;
-                      this.uiElements.interactionText.textContent = `HOLD F to open Mystery Box (${this.mysteryBox.cost.toLocaleString()} points)`;
+              if (isMultiplayer && !isHost) {
+                // Use client-side method to open box
+                const result = this.mysteryBox.clientAttemptOpen(player);
+                
+                if (result) {
+                  // Set a 10-second timer for the weapon to be available
+                  this.mysteryBox.weaponTimeoutId = setTimeout(() => {
+                    if (this.mysteryBox.hasWeaponAvailable) {
+                      this.mysteryBox.hideWeapon();
+                      this.mysteryBox.hasWeaponAvailable = false;
+                      this.mysteryBox.isOpen = false;
                       
-                      if (hasEnoughPoints) {
-                        this.uiElements.interactionText.style.color = '#4FC3F7';
-                      } else {
-                        this.uiElements.interactionText.style.color = '#FF5252';
+                      // Update interaction text if player is still nearby
+                      if (this.nearbyMysteryBox && this.uiElements && this.uiElements.interactionText) {
+                        const hasEnoughPoints = player.score >= this.mysteryBox.cost;
+                        this.uiElements.interactionText.textContent = `HOLD F to open Mystery Box (${this.mysteryBox.cost.toLocaleString()} points)`;
+                        
+                        if (hasEnoughPoints) {
+                          this.uiElements.interactionText.style.color = '#4FC3F7';
+                        } else {
+                          this.uiElements.interactionText.style.color = '#FF5252';
+                        }
                       }
                     }
-                  }
-                }, 10000); // 10 seconds
+                  }, 10000); // 10 seconds
+                }
+              } else {
+                // Use normal method for host or single player
+                const result = this.mysteryBox.attemptOpen(player);
+                
+                if (result) {
+                  // Set a 10-second timer for the weapon to be available
+                  this.mysteryBox.weaponTimeoutId = setTimeout(() => {
+                    if (this.mysteryBox.hasWeaponAvailable) {
+                      this.mysteryBox.hideWeapon();
+                      this.mysteryBox.hasWeaponAvailable = false;
+                      this.mysteryBox.isOpen = false;
+                      
+                      // Update interaction text if player is still nearby
+                      if (this.nearbyMysteryBox && this.uiElements && this.uiElements.interactionText) {
+                        const hasEnoughPoints = player.score >= this.mysteryBox.cost;
+                        this.uiElements.interactionText.textContent = `HOLD F to open Mystery Box (${this.mysteryBox.cost.toLocaleString()} points)`;
+                        
+                        if (hasEnoughPoints) {
+                          this.uiElements.interactionText.style.color = '#4FC3F7';
+                        } else {
+                          this.uiElements.interactionText.style.color = '#FF5252';
+                        }
+                      }
+                    }
+                  }, 10000); // 10 seconds
+                }
               }
             }
             
@@ -775,8 +816,23 @@ export class Room {
         if (isPickingUp) {
           console.log("MYSTERY BOX - Detected F press, attempting to take weapon");
           
-          // Take the weapon with a simple press
-          const weaponTaken = this.mysteryBox.takeWeapon(player);
+          // Determine if we should use the client or normal method
+          const isMultiplayer = player.gameEngine && 
+                                player.gameEngine.networkManager && 
+                                player.gameEngine.networkManager.isMultiplayer;
+          const isHost = player.gameEngine && 
+                        player.gameEngine.networkManager && 
+                        player.gameEngine.networkManager.isHost;
+          
+          let weaponTaken = false;
+          
+          if (isMultiplayer && !isHost) {
+            // Take the weapon with client method
+            weaponTaken = this.mysteryBox.clientTakeWeapon(player);
+          } else {
+            // Take the weapon with normal method
+            weaponTaken = this.mysteryBox.takeWeapon(player);
+          }
           
           if (weaponTaken) {
             console.log("MYSTERY BOX - Weapon successfully taken by player");
@@ -808,9 +864,6 @@ export class Room {
           
           // Reset interaction state
           player.isInteracting = false;
-          if (player.keys) {
-            player.keys.f = false;
-          }
         }
       }
     }
@@ -988,8 +1041,22 @@ export class Room {
       
       // For window boarding, we'll keep the quick press interaction
       if (this.player.isInteracting && !this.isHoldingF) {
-        // Add a board to the window
-        const boardAdded = nearestWindow.addBoard();
+        // Check if we're in a multiplayer game as a client
+        const isClient = this.gameEngine && 
+                         this.gameEngine.networkManager && 
+                         !this.gameEngine.networkManager.isHost &&
+                         this.gameEngine.networkManager.isMultiplayer;
+        
+        let boardAdded = false;
+        
+        // Use client-side version if we're a client in multiplayer
+        if (isClient) {
+          console.log("Client is boarding window, using client-side method");
+          boardAdded = nearestWindow.clientAddBoard(this.gameEngine.networkManager);
+        } else {
+          // Otherwise use regular version for host or singleplayer
+          boardAdded = nearestWindow.addBoard();
+        }
         
         // If board was successfully added, award points to the player
         if (boardAdded && this.player && typeof this.player.addPoints === 'function') {

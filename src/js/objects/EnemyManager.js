@@ -192,6 +192,7 @@ export class EnemyManager {
     
     // Check if host player is dead but there are remote players
     let hasLivingRemotePlayers = false;
+    let isLocalPlayerDead = this.player && this.player.isDead;
     
     // Only check for remote players if we have access to the network manager
     if (this.gameEngine && this.gameEngine.networkManager) {
@@ -205,16 +206,33 @@ export class EnemyManager {
           }
         });
         
-        if (hasLivingRemotePlayers) {
-          console.log("Host player may be dead, but there are living remote players. Enemies will continue functioning.");
+        if (hasLivingRemotePlayers && isLocalPlayerDead) {
+          console.log("Host player is dead, but there are living remote players. Enemies will continue functioning.");
         }
       }
     }
     
     // Update all existing enemies
     this.enemies.forEach(enemy => {
-      // Even if local player is dead, update enemies if there are living remote players
-      enemy.update(deltaTime);
+      // Always update enemies if there are living remote players, even if local player is dead
+      if (hasLivingRemotePlayers || !isLocalPlayerDead) {
+        // Ensure enemy has correct player reference
+        if (isLocalPlayerDead && enemy.player === this.player) {
+          // For zombies that were tracking the now-dead host player,
+          // explicitly set them to search for remote players
+          enemy.state = 'moving';
+          if (typeof enemy.startMoving === 'function') {
+            enemy.startMoving();
+          }
+        }
+        
+        // Make sure enemy still updates even if player is dead
+        enemy.update(deltaTime);
+      } else if (this.gameEngine && this.gameEngine.networkManager && this.gameEngine.networkManager.isHost) {
+        // For host with no living players, still update positions to sync with clients
+        // This prevents zombies from appearing frozen on clients
+        enemy.update(deltaTime);
+      }
       
       // Safety check: ensure enemies with 0 or negative health are marked for removal
       if (enemy.health <= 0 && !enemy.markedForRemoval && !enemy.isDead) {

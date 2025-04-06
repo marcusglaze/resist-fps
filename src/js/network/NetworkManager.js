@@ -423,11 +423,23 @@ export class NetworkManager {
     if (state.windows && this.gameEngine.scene && this.gameEngine.scene.room) {
       const room = this.gameEngine.scene.room;
       if (Array.isArray(room.windows) && Array.isArray(state.windows)) {
-        console.log("Updating window states from host data");
+        console.log(`Updating window states from host data: Host sent ${state.windows.length} windows, local has ${room.windows.length}`);
         
         state.windows.forEach((windowData, index) => {
+          // Ensure window exists at this index
+          if (index >= room.windows.length) {
+            console.error(`Window index ${index} out of bounds (local has ${room.windows.length} windows)`);
+            return;
+          }
+          
           if (room.windows[index]) {
             const window = room.windows[index];
+            
+            // Set windowIndex if not already set
+            if (window.windowIndex === undefined) {
+              console.log(`Setting missing windowIndex ${index} on window`);
+              window.windowIndex = index;
+            }
             
             // If the window is open but our local state has it closed, break it
             if (windowData.isOpen && !window.isOpen) {
@@ -441,11 +453,13 @@ export class NetworkManager {
               
               // If we have fewer boards than the host, add boards
               while (window.boardsCount < windowData.boardsCount) {
+                console.log(`Adding board ${window.boardsCount + 1} to window ${index}`);
                 window.addBoard();
               }
               
               // If we have more boards than the host, remove boards
               while (window.boardsCount > windowData.boardsCount) {
+                console.log(`Removing board ${window.boardsCount} from window ${index}`);
                 window.removeBoard();
               }
             }
@@ -453,7 +467,10 @@ export class NetworkManager {
             // Update board health values if provided
             if (Array.isArray(windowData.health) && window.boardHealths) {
               // Make sure arrays have same length
+              const oldHealths = [...window.boardHealths];
               window.boardHealths = windowData.health.slice(0, window.boardsCount);
+              
+              console.log(`Updated window ${index} board health: ${JSON.stringify(oldHealths)} -> ${JSON.stringify(window.boardHealths)}`);
               
               // Update board appearance based on health
               window.boardHealths.forEach((health, boardIndex) => {
@@ -462,6 +479,41 @@ export class NetworkManager {
                 }
               });
             }
+          } else {
+            console.error(`Window at index ${index} is null or undefined`);
+          }
+        });
+      } else {
+        console.error("Cannot update windows: arrays not available", {
+          roomWindows: Array.isArray(room.windows),
+          stateWindows: Array.isArray(state.windows)
+        });
+      }
+    } else {
+      console.warn("Missing data for window updates:", {
+        stateWindows: !!state.windows,
+        scene: !!this.gameEngine.scene,
+        room: !!(this.gameEngine.scene && this.gameEngine.scene.room)
+      });
+    }
+    
+    // Update mystery box states if necessary
+    if (state.mysteryBoxes && this.gameEngine.scene && this.gameEngine.scene.room) {
+      const room = this.gameEngine.scene.room;
+      
+      // Handle single mystery box
+      if (room.mysteryBox && state.mysteryBoxes.length > 0) {
+        console.log('Syncing mystery box state from host');
+        room.mysteryBox.syncFromHost(state.mysteryBoxes[0]);
+      }
+      
+      // Handle multiple mystery boxes if implemented
+      if (Array.isArray(room.mysteryBoxes) && Array.isArray(state.mysteryBoxes)) {
+        console.log(`Syncing ${state.mysteryBoxes.length} mystery boxes from host`);
+        
+        state.mysteryBoxes.forEach((boxData, index) => {
+          if (room.mysteryBoxes[index]) {
+            room.mysteryBoxes[index].syncFromHost(boxData);
           }
         });
       }

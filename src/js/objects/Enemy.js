@@ -594,12 +594,12 @@ export class Enemy {
       const remotePlayers = this.manager.gameEngine.networkManager.remotePlayers;
       
       // Only log if we actually have remote players to check
-      if (remotePlayers.size > 0) {
+      if (remotePlayers.size > 0 && localPlayerIsDead) {
         console.log(`Checking ${remotePlayers.size} remote players for closest target. Local player dead: ${localPlayerIsDead}`);
       }
       
       // Loop through remote players to find the closest one that's alive
-      remotePlayers.forEach((remotePlayer) => {
+      remotePlayers.forEach((remotePlayer, playerId) => {
         // Skip dead remote players
         if (remotePlayer.isDead) {
           return;
@@ -620,7 +620,10 @@ export class Enemy {
             closestPlayerPos = remotePlayerPos;
             closestDistance = distance;
             targetingRemotePlayer = true;
-            console.log(`Targeting remote player at distance ${distance.toFixed(2)}. Player dead: ${remotePlayer.isDead}`);
+            
+            if (localPlayerIsDead) {
+              console.log(`Targeting living remote player ${playerId} at distance ${distance.toFixed(2)}`);
+            }
           }
         }
       });
@@ -977,5 +980,29 @@ export class Enemy {
     this.isAttacking = true;
     this.state = 'attacking';
     this.playAttackAnimation();
+  }
+
+  /**
+   * Apply damage to the enemy (client version that also notifies the host)
+   * This can be used when the client shoots a zombie, allowing for local feedback
+   * while still keeping the host in control of the authoritative state
+   * 
+   * @param {number} damage - Amount of damage to apply
+   * @param {boolean} isHeadshot - Whether this was a headshot
+   * @param {NetworkManager} networkManager - Reference to network manager
+   */
+  clientTakeDamage(damage, isHeadshot, networkManager) {
+    // First apply damage locally for immediate feedback
+    this.takeDamage(damage);
+    
+    // Then notify the host
+    if (networkManager && networkManager.network && !networkManager.isHost) {
+      console.log(`Client applying ${damage} damage to enemy ${this.id}, notifying host`);
+      networkManager.network.sendPlayerAction('damageEnemy', {
+        enemyId: this.id,
+        damage: damage,
+        isHeadshot: isHeadshot
+      });
+    }
   }
 } 
