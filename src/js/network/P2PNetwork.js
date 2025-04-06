@@ -42,7 +42,42 @@ export class P2PNetwork {
       this.peerJSLoaded = true;
     }
     
+    // Network state update configuration
+    this.gameStateUpdateInterval = 100; // 100ms = 10 updates per second - smoother experience
+    this.lastGameStateUpdate = 0;
+    
+    // Set up events
+    this.onPlayerJoined = null;
+    this.onPlayerLeft = null;
+    this.onGameStateUpdate = null;
+    this.onError = null;
+    
+    // Setup game state broadcast interval
+    this.setupGameStateBroadcast();
+    
     console.log("NETWORK: P2PNetwork constructor initialized");
+  }
+  
+  /**
+   * Set up the game state broadcast interval
+   */
+  setupGameStateBroadcast() {
+    // Clear any existing interval
+    if (this._gameStateBroadcastInterval) {
+      clearInterval(this._gameStateBroadcastInterval);
+    }
+    
+    // Set up interval to broadcast game state regularly
+    this._gameStateBroadcastInterval = setInterval(() => {
+      // Only broadcast if we're the host and connected
+      if (this.isHost && this.isConnected) {
+        try {
+          this.broadcastGameState();
+        } catch (error) {
+          console.error("Error broadcasting game state:", error);
+        }
+      }
+    }, this.gameStateUpdateInterval);
   }
   
   /**
@@ -1162,7 +1197,7 @@ export class P2PNetwork {
       });
       
       // Log this information when host is dead but remote players are alive
-      if (hasLivingRemotePlayers) {
+      if (hasLivingRemotePlayers && Math.random() < 0.01) { // Only log occasionally (1% chance per frame)
         console.log(`Host player is dead but there are living remote players. Sending enemy states to clients.`);
       }
     }
@@ -1185,13 +1220,31 @@ export class P2PNetwork {
           enemy.state = 'moving';
         }
         
-        return {
-          id: enemy.id,
-          position: {
+        // Use the cached position if available (helps prevent rubber-banding)
+        // only if host is dead and there are living remote players
+        let position;
+        if (isLocalPlayerDead && 
+            hasLivingRemotePlayers && 
+            enemy.lastBroadcastPosition && 
+            enemy.lastPositionUpdateTime && 
+            Date.now() - enemy.lastPositionUpdateTime < 2000) { // Use cached if less than 2 seconds old
+          position = enemy.lastBroadcastPosition;
+        } else {
+          // Otherwise use current position
+          position = {
             x: enemy.instance.position.x,
             y: enemy.instance.position.y,
             z: enemy.instance.position.z
-          },
+          };
+          
+          // Update the cached position
+          enemy.lastBroadcastPosition = {...position};
+          enemy.lastPositionUpdateTime = Date.now();
+        }
+        
+        return {
+          id: enemy.id,
+          position: position,
           health: enemy.health,
           type: enemy.type || 'standard', // Include zombie type for proper spawning
           state: enemy.state || 'moving', // idle, attacking, dying, etc.
@@ -1819,170 +1872,67 @@ export class P2PNetwork {
   }
   
   /**
-   * Broadcast the current game state to all connected clients
-   * @param {boolean} force - Whether to force a broadcast regardless of timing
-   * @returns {boolean} True if broadcast was sent, false otherwise
+   * Broadcast the current game state to all connected peers
+   * @param {boolean} [forceUpdate=false] - Force an immediate update regardless of throttle
    */
-  broadcastGameState(force = false) {
-    if (!this.isHost || !this.isConnected) return false;
+  broadcastGameState(forceUpdate = false) {
+    // Skip if no connections
+    if (!this.connections || this.connections.length === 0) return;
     
+    // Get the current time for throttling
     const now = Date.now();
     
-    // Don't send updates if we recently received a client action (unless forced)
-    if (!force && now - this.lastClientActionTime < this.clientActionDebounceTime) {
-      console.log(`Skipping state broadcast during client action debounce period (${this.clientActionDebounceTime - (now - this.lastClientActionTime)}ms remaining)`);
-      return false;
+    // Check if we need to throttle updates - unless it's a forced update
+    if (!forceUpdate && now - this.lastGameStateUpdate < this.gameStateUpdateInterval) {
+      return;
     }
     
-    // Rate limit state updates unless forced
-    if (!force && now - this.lastStateSent < this.stateUpdateInterval) {
-      return false;
-    }
-    
-    // Get current game state
-    const gameState = this.getGameState();
-    
-    // Check if host player is dead but there are living remote players
-    const isHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
+    // Check if we should use faster update interval (when host is dead but remote players are alive)
+    const isLocalPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
     let hasLivingRemotePlayers = false;
     
-    // Explicitly check the allPlayersDead status
-    const allPlayersDead = gameState.gameStatus?.allPlayersDead || false;
-    
-    // If host is dead, explicitly check for living remote players
-    if (isHostDead && this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
+    // Check for living remote players when host is dead
+    if (isLocalPlayerDead && this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
       this.gameEngine.networkManager.remotePlayers.forEach(player => {
         if (!player.isDead) {
           hasLivingRemotePlayers = true;
         }
       });
+    }
+    
+    // If host is dead but remote players are alive, use a faster update interval
+    // This helps ensure smooth enemy movement for remote players
+    const currentUpdateInterval = hasLivingRemotePlayers && isLocalPlayerDead 
+      ? Math.min(this.gameStateUpdateInterval, 50) // Use faster updates (50ms = 20 updates/sec)
+      : this.gameStateUpdateInterval;
       
-      // When host is dead but remote players are alive, force updates to continue
-      if (hasLivingRemotePlayers) {
-        // Only log occasionally to reduce spam
-        if (Math.random() < 0.01) { // 1% chance per frame
-          console.log("HOST IS DEAD BUT REMOTE PLAYERS ALIVE: FORCING GAME STATE UPDATES");
-        }
-        
-        // If we don't already have a more frequent update interval for dead host state,
-        // set one up to improve remote player experience
-        if (!this._deadHostUpdateInterval) {
-          // First clear any existing interval to avoid duplicates
-          if (this._stateUpdateInterval) {
-            clearInterval(this._stateUpdateInterval);
-            this._stateUpdateInterval = null;
-          }
-          
-          // Setup new faster update interval for dead host case
-          const fasterInterval = this.stateUpdateInterval / 2; // Twice as frequent
-          console.log(`Setting up faster state update interval: ${fasterInterval}ms for dead host case`);
-          
-          this._deadHostUpdateInterval = setInterval(() => {
-            try {
-              // Check if we should still be in this state
-              const stillHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
-              let stillLivingRemotes = false;
-              
-              if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
-                this.gameEngine.networkManager.remotePlayers.forEach(player => {
-                  if (!player.isDead) {
-                    stillLivingRemotes = true;
-                  }
-                });
-              }
-              
-              if (stillHostDead && stillLivingRemotes) {
-                // Still valid state, continue with forced updates
-                this.broadcastGameState(true);
-              } else {
-                // State has changed, revert to normal interval
-                console.log("Host state or remote player state changed, reverting to normal interval");
-                this.resetUpdateIntervals();
-              }
-            } catch (error) {
-              console.error("Error in dead host game state update:", error);
-            }
-          }, fasterInterval);
-        }
-        
-        // Force all enemies to be in moving state to ensure they keep functioning
-        if (gameState.enemies && gameState.enemies.length > 0) {
-          gameState.enemies.forEach(enemy => {
-            if (enemy.state === 'idle') {
-              enemy.state = 'moving';
-            }
-          });
-        }
-      } else if (this._deadHostUpdateInterval) {
-        // No more living remote players, clean up the special interval
-        this.resetUpdateIntervals();
-      }
-    } else if (this._deadHostUpdateInterval) {
-      // Host is no longer dead, clean up the special interval
-      this.resetUpdateIntervals();
+    // Still throttle even with faster updates (unless forced)
+    if (!forceUpdate && now - this.lastGameStateUpdate < currentUpdateInterval) {
+      return;
     }
     
-    // Log state updates if forced or significant changes
-    if (force || isHostDead || (now - this.lastStateSentLog > 5000)) {
-      console.log(`Game state broadcast [Force:${force}, HostDead:${isHostDead}, HasLivingRemotes:${hasLivingRemotePlayers}, AllPlayersDead:${allPlayersDead}]:`, {
-        playerCount: Object.keys(gameState.playerPositions || {}).length,
-        enemyCount: (gameState.enemies || []).length,
-        round: gameState.round?.round,
-        windowCount: (gameState.windows || []).length
+    // Get game state
+    const gameState = this.getGameState();
+    
+    // Ensure consistent enemy movement when the host player is dead but remote players are alive
+    if (isLocalPlayerDead && hasLivingRemotePlayers && gameState.enemies) {
+      // Force enemies to stay in a moving state so they properly update for clients
+      gameState.enemies.forEach(enemy => {
+        // Make sure enemies keep moving even when host is dead
+        if (enemy.state === 'idle') {
+          enemy.state = 'moving';
+        }
       });
-      this.lastStateSentLog = now;
     }
     
-    // Send to all connected peers
-    let broadcastSuccess = false;
-    this.connections.forEach((conn) => {
-      if (conn.open) {
-        try {
-          conn.send({
-            type: 'gameState',
-            state: gameState
-          });
-          broadcastSuccess = true;
-        } catch (error) {
-          console.error(`Error broadcasting game state to ${conn.peer}:`, error);
-        }
-      }
+    // Broadcast the state to all connections
+    this.broadcastToAll({
+      type: 'gameState',
+      state: gameState
     });
     
-    // Update last sent time
-    if (broadcastSuccess) {
-      this.lastStateSent = now;
-    }
-    
-    return broadcastSuccess;
-  }
-  
-  /**
-   * Reset update intervals to their default state
-   */
-  resetUpdateIntervals() {
-    // Clear any dead host special interval
-    if (this._deadHostUpdateInterval) {
-      clearInterval(this._deadHostUpdateInterval);
-      this._deadHostUpdateInterval = null;
-    }
-    
-    // Clear any regular interval
-    if (this._stateUpdateInterval) {
-      clearInterval(this._stateUpdateInterval);
-      this._stateUpdateInterval = null;
-    }
-    
-    // Setup regular interval if needed
-    if (this.isHost && this.isConnected) {
-      this._stateUpdateInterval = setInterval(() => {
-        try {
-          this.broadcastGameState();
-        } catch (error) {
-          console.error("Error in regular game state update:", error);
-        }
-      }, this.stateUpdateInterval);
-    }
+    // Update the last update timestamp
+    this.lastGameStateUpdate = now;
   }
   
   /**

@@ -26,6 +26,14 @@ export class Enemy {
     this.isMoving = false;
     this.isAttacking = false;
     
+    // Position caching to prevent rubber-banding
+    this.lastBroadcastPosition = {
+      x: 0,
+      y: 0,
+      z: 0
+    };
+    this.lastPositionUpdateTime = 0;
+    
     // Sound properties
     this.soundFrequency = 0.1; // Sound frequency in Hz (once every 10 seconds)
     this.nextSoundTime = Math.random() * (1 / this.soundFrequency); // Randomize initial sound time
@@ -338,6 +346,12 @@ export class Enemy {
       return;
     }
     
+    // If forced to continue updating (for remote players when host is dead)
+    // then make sure we don't skip this update
+    if (this._forceContinueUpdating) {
+      // Continue with the update
+    } 
+    
     // If enemy is dead, just update death animation
     if (this.isDead) {
       this.updateDeathAnimation(deltaTime);
@@ -377,17 +391,22 @@ export class Enemy {
               if (!player.isDead && player.position) {
                 foundLivingTarget = true;
                 targetPosition = player.position;
+                
+                // Cache this target position to ensure consistent movement
+                this.currentRemoteTargetPosition = {...player.position};
               }
             });
+            
+            // If we didn't find a living target but have a previous position, use that
+            // This helps prevent rubber-banding when network updates are inconsistent
+            if (!foundLivingTarget && this.currentRemoteTargetPosition) {
+              foundLivingTarget = true;
+              targetPosition = this.currentRemoteTargetPosition;
+            }
           }
           
           // Either chase remote players or move randomly if none alive
           if (foundLivingTarget && targetPosition) {
-            // Only log occasionally to reduce spam
-            if (Math.random() < 0.005) { // 0.5% chance per frame
-              console.log(`Zombie: Targeting remote player`);
-            }
-            
             // Calculate direction to player (only on x and z axes)
             const direction = new THREE.Vector3(
               targetPosition.x - this.instance.position.x,
