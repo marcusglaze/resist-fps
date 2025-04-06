@@ -916,152 +916,46 @@ export class PlayerControls {
    */
   shoot() {
     try {
+      console.log("SHOOTING: shoot() method called");
+      
       // Skip if dead or no weapon
       if (this.isDead || !this.activeWeapon) {
+        console.log("SHOOTING: Skipping - player is dead or no active weapon");
         return;
       }
       
-      // Check if we can shoot (cooldown and ammo)
-      const currentTime = performance.now() / 1000;
-      const timeSinceLastShot = currentTime - this.lastShootTime;
-      
-      if (timeSinceLastShot < this.activeWeapon.cooldown || this.isReloading) {
+      // Skip if weapon isn't ready (cooldown)
+      if (this.activeWeapon && !this.activeWeapon.canShoot()) {
+        console.log("SHOOTING: Skipping - weapon on cooldown");
         return;
       }
       
-      // Try to fire the weapon
-      const fireData = this.activeWeapon.fire();
-      
-      // If no fire data, weapon couldn't shoot (no ammo)
-      if (!fireData) {
-        // Check if the weapon is completely out of ammo
-        if (this.activeWeapon.currentAmmo === 0 && this.activeWeapon.totalAmmo === 0 && !this.activeWeapon.hasInfiniteAmmo) {
-          console.log(`${this.activeWeapon.name} is completely out of ammo, switching to pistol`);
-          // Stop any continuous weapon sound before switching
-          this.stopWeaponSound();
-          this.switchToPistol();
-          return;
-        }
-        
-        // Try to reload if no ammo
-        if (this.activeWeapon.currentAmmo === 0) {
-          this.reload();
-        }
+      // Skip if reloading
+      if (this.isReloading) {
+        console.log("SHOOTING: Skipping - weapon is reloading");
         return;
       }
       
-      // Update last shoot time
-      this.lastShootTime = currentTime;
-      
-      // Update ammo display
-      this.updateAmmoDisplay();
-      
-      // Play shoot animation
-      this.playShootAnimation();
-      
-      // Play appropriate sound based on weapon type
-      this.playWeaponShootSound();
-      
-      // Check if we have access to the scene
-      if (!this.scene) {
-        console.warn("Cannot shoot: scene reference not set");
+      // Check ammo
+      if (this.activeWeapon.currentAmmo <= 0) {
+        console.log("SHOOTING: No ammo, playing empty sound");
+        this.playSound('empty');
         return;
       }
       
-      try {
-        // Process each projectile (for shotguns and similar weapons)
-        for (let i = 0; i < fireData.projectiles; i++) {
-          // Calculate spread effect
-          const spread = fireData.spread;
-          const spreadVector = new THREE.Vector2(
-            (Math.random() - 0.5) * 2 * spread,
-            (Math.random() - 0.5) * 2 * spread
-          );
-          
-          // Create ray from camera with spread
-          this.raycaster.setFromCamera(spreadVector, this.camera);
-          
-          // Create arrays of objects to check for intersection
-          const zombieObjects = this.getZombieObjects();
-          const wallObjects = this.getWallObjects();
-          
-          if (zombieObjects.length === 0 && wallObjects.length === 0) {
-            continue; // No objects to hit
-          }
-          
-          // Check wall collisions first
-          const wallIntersects = this.raycaster.intersectObjects(wallObjects, true);
-          
-          // Get the closest wall hit distance
-          let closestWallDistance = Infinity;
-          if (wallIntersects.length > 0) {
-            closestWallDistance = wallIntersects[0].distance;
-          }
-          
-          // Check zombie intersections
-          const zombieIntersects = this.raycaster.intersectObjects(zombieObjects, true);
-          
-          // Filter zombie hits that are behind walls
-          const validZombieHits = zombieIntersects.filter(hit => hit.distance < closestWallDistance);
-          
-          if (validZombieHits.length > 0) {
-            // Get the first object hit
-            const hit = validZombieHits[0];
-            const zombieObject = this.findZombieParent(hit.object);
-            
-            if (zombieObject && zombieObject.userData && zombieObject.userData.enemy) {
-              // Check if it's a headshot
-              const isHeadshot = this.isHeadshot(hit, zombieObject);
-              const enemy = zombieObject.userData.enemy;
-              
-              // Apply damage to zombie
-              if (isHeadshot) {
-                const damageDealt = fireData.headDamage;
-                
-                // If we're a client, use the special client damage method that handles networking
-                if (this.networkManager && !this.networkManager.isHost) {
-                  enemy.clientTakeDamage(damageDealt, true, this.networkManager);
-                } else {
-                  // Otherwise just apply damage directly (for host or single player)
-                  enemy.takeDamage(damageDealt);
-                }
-                
-                this.showDamageNumber(hit.point, damageDealt, true);
-                
-                // Add points based on damage (headshots are worth more)
-                this.addPoints(damageDealt * 2, false, true);
-                
-                // If this damage kills the zombie, award bonus points
-                if (enemy.health <= 0) {
-                  this.addPoints(100, true, true); // Headshot kill bonus
-                }
-              } else {
-                // Handle body shots
-                const damageDealt = fireData.bodyDamage;
-                
-                // If we're a client, use the special client damage method that handles networking
-                if (this.networkManager && !this.networkManager.isHost) {
-                  enemy.clientTakeDamage(damageDealt, false, this.networkManager);
-                } else {
-                  // Otherwise just apply damage directly (for host or single player)
-                  enemy.takeDamage(damageDealt);
-                }
-                
-                this.showDamageNumber(hit.point, damageDealt, false);
-                
-                // Add points based on damage
-                this.addPoints(damageDealt, false, false);
-                
-                // If this damage kills the zombie, award bonus points
-                if (enemy.health <= 0) {
-                  this.addPoints(50, true, false); // Regular kill bonus
-                }
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error("Error during shooting:", error);
+      // We're good to shoot - update ammo count
+      this.activeWeapon.currentAmmo--;
+      
+      // Check for raycast hit
+      this.castRay();
+      console.log("SHOOTING: Ray cast results:", this.hitResult ? "Hit something" : "No hit");
+      
+      if (this.hitResult) {
+        console.log("SHOOTING: Hit object details:", {
+          hasObject: !!this.hitResult.object,
+          hasUserData: this.hitResult.object ? !!this.hitResult.object.userData : false,
+          userDataType: this.hitResult.object && this.hitResult.object.userData ? this.hitResult.object.userData.type : 'none'
+        });
       }
       
       // If we hit a zombie, damage it
@@ -1079,6 +973,16 @@ export class PlayerControls {
           networkManager = this.gameEngine.networkManager;
         }
         
+        console.log("SHOOTING: Network manager found?", !!networkManager);
+        if (networkManager) {
+          console.log("SHOOTING: Network details:", {
+            isHost: networkManager.isHost,
+            isMultiplayer: networkManager.isMultiplayer,
+            isConnected: networkManager.isConnected,
+            gameMode: networkManager.gameMode
+          });
+        }
+        
         // Apply damage based on headshot or body shot
         const isClient = networkManager && !networkManager.isHost && networkManager.isMultiplayer;
         
@@ -1090,8 +994,10 @@ export class PlayerControls {
           // Client-side damage with host notification
           if (isHeadshot) {
             enemy.clientTakeDamage(this.headshotDamage, true, networkManager);
+            console.log("SHOOTING: Applied headshot damage:", this.headshotDamage);
           } else {
             enemy.clientTakeDamage(this.damage, false, networkManager);
+            console.log("SHOOTING: Applied body shot damage:", this.damage);
           }
         } else {
           console.log("SHOOTING: Host/singleplayer applying damage directly");
@@ -1119,7 +1025,16 @@ export class PlayerControls {
             }
           }
         }
+      } else if (this.hitResult) {
+        console.log("SHOOTING: Hit something else:", this.hitResult.object ? this.hitResult.object.name || "unnamed object" : "no object");
       }
+      
+      // Play weapon firing effects
+      this.activeWeapon.shoot();
+      
+      // Update UI elements
+      this.updateAmmoDisplay();
+      
     } catch (error) {
       console.error("Error during shooting:", error);
     }
@@ -1240,28 +1155,63 @@ export class PlayerControls {
   }
 
   /**
-   * Check if the hit is a headshot
-   * @param {Object} hit - The intersection data
-   * @param {Object3D} zombieObject - The zombie object
-   * @returns {boolean} True if it's a headshot
+   * Check if a hit is a headshot
+   * @param {Object} hitResult - The raycast hit result
+   * @returns {boolean} True if headshot
    */
-  isHeadshot(hit, zombieObject) {
-    if (!hit || !hit.point || !zombieObject) {
-      return false;
-    }
-    
+  isHeadshot(hitResult) {
     try {
-      // First check if we hit an object explicitly named as the head
-      if (hit.object && hit.object.name === "zombieHead") {
-        return true;
+      console.log("SHOOTING: Checking if hit is a headshot");
+      
+      if (!hitResult || !hitResult.point) {
+        console.log("SHOOTING: No hit result or point, can't check for headshot");
+        return false;
       }
       
-      // Get the hit position relative to the zombie
-      const localHitPoint = zombieObject.worldToLocal(hit.point.clone());
+      // Get the hit point y coordinate
+      const hitPointY = hitResult.point.y;
       
-      // Check if the y position is in the head region
-      // Head is typically above 1.5 units from the base for our 1.7-unit tall zombies
-      return localHitPoint.y > 1.5;
+      // Get the enemy object
+      let enemyObject = hitResult.object;
+      
+      console.log("SHOOTING: Hit point Y coordinate:", hitPointY);
+      
+      // Check if target is an enemy with head position information
+      if (enemyObject && enemyObject.userData && enemyObject.userData.enemy) {
+        const enemy = enemyObject.userData.enemy;
+        
+        // If we hit the head mesh directly
+        if (enemyObject.name === "zombieHead") {
+          console.log("SHOOTING: Direct hit on zombie head mesh");
+          return true;
+        }
+        
+        // The head is approximately 1.85 units high on the standard zombie model
+        const headHeight = 1.85;
+        const headRadius = 0.3; // From the createEnemyMesh method
+        
+        // Get enemy's position
+        const enemyPosY = enemy.instance.position.y;
+        
+        // Calculate the approximate head region
+        const headBottom = enemyPosY + headHeight - headRadius;
+        const headTop = enemyPosY + headHeight + headRadius;
+        
+        console.log("SHOOTING: Enemy head region:", {
+          enemyPositionY: enemyPosY,
+          headBottom: headBottom,
+          headTop: headTop
+        });
+        
+        // Check if hit point is in the head region
+        const isInHeadRegion = hitPointY >= headBottom && hitPointY <= headTop;
+        console.log("SHOOTING: Hit in head region?", isInHeadRegion);
+        
+        return isInHeadRegion;
+      }
+      
+      console.log("SHOOTING: Not a valid enemy object for headshot check");
+      return false;
     } catch (error) {
       console.error("Error checking for headshot:", error);
       return false;
@@ -3747,5 +3697,75 @@ export class PlayerControls {
    */
   isMobileDevice() {
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  }
+
+  castRay() {
+    try {
+      console.log("SHOOTING: castRay called");
+      
+      if (!this.scene) {
+        console.warn("SHOOTING: Cannot cast ray: scene reference not set");
+        return;
+      }
+      
+      // Reset hit result
+      this.hitResult = null;
+      
+      // Create ray from camera center
+      this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+      
+      // Get all objects in the scene that can be hit
+      const objects = [];
+      
+      this.scene.traverse((object) => {
+        if (object.userData && (object.userData.type === 'zombie' || object.userData.enemy)) {
+          objects.push(object);
+        }
+      });
+      
+      console.log(`SHOOTING: Found ${objects.length} zombie objects to check`);
+      
+      if (objects.length === 0) {
+        console.log("SHOOTING: No zombie objects found in scene");
+        return;
+      }
+      
+      // Cast the ray
+      const intersects = this.raycaster.intersectObjects(objects, true);
+      console.log(`SHOOTING: Ray intersected with ${intersects.length} objects`);
+      
+      if (intersects.length > 0) {
+        // Get the first intersection
+        this.hitResult = intersects[0];
+        
+        // Log details about what was hit
+        console.log("SHOOTING: Hit details:", {
+          distance: this.hitResult.distance,
+          objectName: this.hitResult.object ? this.hitResult.object.name : "unknown",
+          hasUserData: this.hitResult.object ? !!this.hitResult.object.userData : false,
+          pointPosition: this.hitResult.point ? [
+            this.hitResult.point.x,
+            this.hitResult.point.y,
+            this.hitResult.point.z
+          ] : "unknown"
+        });
+        
+        // Check userData up the parent chain if necessary
+        let currentObject = this.hitResult.object;
+        while (currentObject && !currentObject.userData.type && !currentObject.userData.enemy) {
+          console.log("SHOOTING: Checking parent for userData");
+          currentObject = currentObject.parent;
+        }
+        
+        if (currentObject && (currentObject.userData.type === 'zombie' || currentObject.userData.enemy)) {
+          console.log("SHOOTING: Found zombie in parent chain, setting hitResult.object");
+          this.hitResult.object = currentObject;
+        }
+      } else {
+        console.log("SHOOTING: Ray did not hit any objects");
+      }
+    } catch (error) {
+      console.error("Error in castRay:", error);
+    }
   }
 } 

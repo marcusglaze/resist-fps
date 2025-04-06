@@ -89,20 +89,33 @@ export class Enemy {
    * Initialize enemy
    */
   init() {
+    console.log("ENEMY: Initializing enemy with ID:", this.id);
+    
     this.createEnemyMesh();
     this.updateTargetPosition();
     this.positionOutsideWindow();
     this.createAttackEffect();
     this.createHealthBar();
     
-    // Set enemy reference in instance userData (for raycasting)
+    // Set type for userData
+    this.instance.userData.type = 'zombie';
+    
+    // Set direct reference to the enemy object
     this.instance.userData.enemy = this;
     
     // Set enemy reference in children (for raycasting)
     this.instance.traverse((child) => {
       if (child.isMesh) {
+        child.userData.type = 'zombie';
         child.userData.enemy = this;
+        console.log(`ENEMY: Set userData for mesh "${child.name}"`);
       }
+    });
+    
+    console.log("ENEMY: Initialization complete, userData check:", {
+      instanceHasUserData: !!this.instance.userData,
+      typeSet: this.instance.userData.type,
+      enemyReferenceSet: !!this.instance.userData.enemy
     });
   }
 
