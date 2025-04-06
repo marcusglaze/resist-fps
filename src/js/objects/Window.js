@@ -437,6 +437,16 @@ export class Window {
     if (boardAdded) {
       console.log("WINDOW: Local board added successfully, sending to network");
       
+      // Set a pending action timestamp to prevent host state updates from immediately overriding
+      this.pendingBoardAction = {
+        timestamp: Date.now(),
+        timeoutId: setTimeout(() => {
+          // If we don't get a confirmation within 3 seconds, clear the pending state
+          console.log("WINDOW: Pending board action timed out");
+          this.pendingBoardAction = null;
+        }, 3000)
+      };
+      
       // Create action data
       const actionData = {
         windowIndex: this.windowIndex,
@@ -452,6 +462,10 @@ export class Window {
         
         if (actionId) {
           console.log("WINDOW: Successfully sent window board action with ID:", actionId);
+          // Store action ID for confirmation tracking
+          if (this.pendingBoardAction) {
+            this.pendingBoardAction.actionId = actionId;
+          }
         } else {
           console.warn("WINDOW: Failed to send window board action");
         }
@@ -653,6 +667,99 @@ export class Window {
     
     // Re-initialize the window
     this.init();
+  }
+
+  /**
+   * Update window state from host data
+   * Only applies changes if we don't have a pending action
+   * @param {Object} hostData - Window data from host
+   */
+  updateFromHostData(hostData) {
+    // If this window doesn't match the host data, return
+    if (this.windowIndex !== hostData.windowIndex) {
+      return;
+    }
+    
+    // Check if we have a pending action
+    if (this.pendingBoardAction) {
+      const now = Date.now();
+      const timeSincePending = now - this.pendingBoardAction.timestamp;
+      
+      // If the pending action is recent (within last 5 seconds), don't override local state
+      if (timeSincePending < 5000) {
+        console.log(`WINDOW: Ignoring host update for window ${this.windowIndex} - pending action in progress (${timeSincePending}ms ago)`);
+        return;
+      }
+      
+      // If pending action is old, clear it and apply host state
+      console.log(`WINDOW: Pending action timed out for window ${this.windowIndex}, accepting host state`);
+      clearTimeout(this.pendingBoardAction.timeoutId);
+      this.pendingBoardAction = null;
+    }
+    
+    // Apply host state
+    console.log(`WINDOW: Updating window ${this.windowIndex} from host data:`, hostData);
+    
+    // Update board count and health values
+    this.updateBoardsFromHost(hostData.boardsCount, hostData.health || []);
+    
+    // Update open state if different
+    if (this.isOpen !== hostData.isOpen) {
+      this.isOpen = hostData.isOpen;
+      // Update visual appearance if needed
+      this.updateWindowAppearance();
+    }
+  }
+
+  /**
+   * Update the board count and health values from host data
+   * @param {number} newBoardCount - Number of boards from host
+   * @param {Array} newHealthValues - Board health values from host
+   */
+  updateBoardsFromHost(newBoardCount, newHealthValues) {
+    // Get current board count
+    const currentBoards = this.boardsCount || 0;
+    
+    // If we need to remove boards
+    while (this.boardsCount > newBoardCount) {
+      this.removeBoard();
+    }
+    
+    // If we need to add boards
+    while (this.boardsCount < newBoardCount) {
+      this.addBoard();
+    }
+    
+    // Update health values if provided
+    if (Array.isArray(newHealthValues) && newHealthValues.length > 0) {
+      // Copy health values to match current board count
+      this.boardHealths = [...newHealthValues].slice(0, this.boardsCount);
+      
+      // Update visual appearance of each board
+      for (let i = 0; i < this.boardsCount; i++) {
+        this.updateBoardAppearance(i);
+      }
+    }
+  }
+
+  /**
+   * Handle result data from a board action
+   * @param {Object} resultData - Result data from host
+   */
+  handleActionResult(resultData) {
+    if (this.windowIndex !== resultData.windowIndex) return;
+    
+    console.log(`WINDOW: Received action result for window ${this.windowIndex}`, resultData);
+    
+    // Clear pending action
+    if (this.pendingBoardAction) {
+      clearTimeout(this.pendingBoardAction.timeoutId);
+      this.pendingBoardAction = null;
+      console.log("WINDOW: Cleared pending board action after receiving result");
+    }
+    
+    // Update board state from result
+    this.updateBoardsFromHost(resultData.boardsCount, resultData.boardHealths);
   }
 } 
  

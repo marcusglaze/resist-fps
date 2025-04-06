@@ -466,43 +466,48 @@ export class NetworkManager {
               window.windowIndex = index;
             }
             
-            // If the window is open but our local state has it closed, break it
-            if (windowData.isOpen && !window.isOpen) {
-              console.log(`Window ${index} is now open (broken)`);
-              window.breakWindow();
-            }
-            
-            // Update board count - Add or remove boards to match host state
-            if (window.boardsCount !== windowData.boardsCount) {
-              console.log(`Syncing window ${index} boards: local=${window.boardsCount}, host=${windowData.boardsCount}`);
-              
-              // If we have fewer boards than the host, add boards
-              while (window.boardsCount < windowData.boardsCount) {
-                console.log(`Adding board ${window.boardsCount + 1} to window ${index}`);
-                window.addBoard();
+            // Use the updateFromHostData method if available to respect pending actions
+            if (typeof window.updateFromHostData === 'function') {
+              window.updateFromHostData(windowData);
+            } else {
+              // Otherwise fallback to manual update
+              if (windowData.isOpen && !window.isOpen) {
+                console.log(`Window ${index} is now open (broken)`);
+                window.breakWindow();
               }
               
-              // If we have more boards than the host, remove boards
-              while (window.boardsCount > windowData.boardsCount) {
-                console.log(`Removing board ${window.boardsCount} from window ${index}`);
-                window.removeBoard();
-              }
-            }
-            
-            // Update board health values if provided
-            if (Array.isArray(windowData.health) && window.boardHealths) {
-              // Make sure arrays have same length
-              const oldHealths = [...window.boardHealths];
-              window.boardHealths = windowData.health.slice(0, window.boardsCount);
-              
-              console.log(`Updated window ${index} board health: ${JSON.stringify(oldHealths)} -> ${JSON.stringify(window.boardHealths)}`);
-              
-              // Update board appearance based on health
-              window.boardHealths.forEach((health, boardIndex) => {
-                if (window.updateBoardAppearance) {
-                  window.updateBoardAppearance(boardIndex);
+              // Update board count - Add or remove boards to match host state
+              if (window.boardsCount !== windowData.boardsCount) {
+                console.log(`Syncing window ${index} boards: local=${window.boardsCount}, host=${windowData.boardsCount}`);
+                
+                // If we have fewer boards than the host, add boards
+                while (window.boardsCount < windowData.boardsCount) {
+                  console.log(`Adding board ${window.boardsCount + 1} to window ${index}`);
+                  window.addBoard();
                 }
-              });
+                
+                // If we have more boards than the host, remove boards
+                while (window.boardsCount > windowData.boardsCount) {
+                  console.log(`Removing board ${window.boardsCount} from window ${index}`);
+                  window.removeBoard();
+                }
+              }
+              
+              // Update board health values if provided
+              if (Array.isArray(windowData.health) && window.boardHealths) {
+                // Make sure arrays have same length
+                const oldHealths = [...window.boardHealths];
+                window.boardHealths = windowData.health.slice(0, window.boardsCount);
+                
+                console.log(`Updated window ${index} board health: ${JSON.stringify(oldHealths)} -> ${JSON.stringify(window.boardHealths)}`);
+                
+                // Update board appearance based on health
+                window.boardHealths.forEach((health, boardIndex) => {
+                  if (window.updateBoardAppearance) {
+                    window.updateBoardAppearance(boardIndex);
+                  }
+                });
+              }
             }
           } else {
             console.error(`Window at index ${index} is null or undefined`);
@@ -2615,50 +2620,65 @@ export class NetworkManager {
         window.windowIndex = windowIndex;
       }
       
-      // Update window state
-      
-      // First handle open/closed state
-      if (isOpen !== undefined && window.isOpen !== isOpen) {
-        if (isOpen && !window.isOpen) {
-          console.log(`Window ${windowIndex} is now open (broken)`);
-          window.breakWindow();
-        }
-      }
-      
-      // Then handle board count
-      if (boardsCount !== undefined && window.boardsCount !== boardsCount) {
-        console.log(`Syncing window ${windowIndex} boards: local=${window.boardsCount}, host=${boardsCount}`);
-        
-        // If we have fewer boards than the host, add boards
-        while (window.boardsCount < boardsCount) {
-          console.log(`Adding board ${window.boardsCount + 1} to window ${windowIndex}`);
-          window.addBoard();
-        }
-        
-        // If we have more boards than the host, remove boards
-        while (window.boardsCount > boardsCount) {
-          console.log(`Removing board ${window.boardsCount} from window ${windowIndex}`);
-          window.removeBoard();
-        }
-      }
-      
-      // Finally update board health values
-      if (Array.isArray(boardHealths) && window.boardHealths) {
-        // Make sure arrays have same length
-        const oldHealths = [...window.boardHealths];
-        window.boardHealths = boardHealths.slice(0, window.boardsCount);
-        
-        console.log(`Updated window ${windowIndex} board health: ${JSON.stringify(oldHealths)} -> ${JSON.stringify(window.boardHealths)}`);
-        
-        // Update board appearance based on health
-        window.boardHealths.forEach((health, boardIndex) => {
-          if (window.updateBoardAppearance) {
-            window.updateBoardAppearance(boardIndex);
-          }
-        });
+      // Use the new updateFromHostData method if available to respect pending actions
+      if (typeof window.updateFromHostData === 'function') {
+        window.updateFromHostData(windowData);
+      } else {
+        // Fallback to old method if updateFromHostData isn't available
+        this.legacyUpdateWindow(window, windowData);
       }
     } catch (error) {
       console.error("Error handling window update:", error);
+    }
+  }
+  
+  /**
+   * Legacy window update method (fallback)
+   * @param {Window} window - The window to update
+   * @param {Object} windowData - The window data from host
+   */
+  legacyUpdateWindow(window, windowData) {
+    const { windowIndex, boardsCount, boardHealths, isOpen } = windowData;
+    
+    // First handle open/closed state
+    if (isOpen !== undefined && window.isOpen !== isOpen) {
+      if (isOpen && !window.isOpen) {
+        console.log(`Window ${windowIndex} is now open (broken)`);
+        window.breakWindow();
+      }
+    }
+    
+    // Then handle board count
+    if (boardsCount !== undefined && window.boardsCount !== boardsCount) {
+      console.log(`Syncing window ${windowIndex} boards: local=${window.boardsCount}, host=${boardsCount}`);
+      
+      // If we have fewer boards than the host, add boards
+      while (window.boardsCount < boardsCount) {
+        console.log(`Adding board ${window.boardsCount + 1} to window ${windowIndex}`);
+        window.addBoard();
+      }
+      
+      // If we have more boards than the host, remove boards
+      while (window.boardsCount > boardsCount) {
+        console.log(`Removing board ${window.boardsCount} from window ${windowIndex}`);
+        window.removeBoard();
+      }
+    }
+    
+    // Finally update board health values
+    if (Array.isArray(boardHealths) && window.boardHealths) {
+      // Make sure arrays have same length
+      const oldHealths = [...window.boardHealths];
+      window.boardHealths = boardHealths.slice(0, window.boardsCount);
+      
+      console.log(`Updated window ${windowIndex} board health: ${JSON.stringify(oldHealths)} -> ${JSON.stringify(window.boardHealths)}`);
+      
+      // Update board appearance based on health
+      window.boardHealths.forEach((health, boardIndex) => {
+        if (window.updateBoardAppearance) {
+          window.updateBoardAppearance(boardIndex);
+        }
+      });
     }
   }
 } 
