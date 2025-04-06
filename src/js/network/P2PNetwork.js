@@ -1861,16 +1861,45 @@ export class P2PNetwork {
       if (hasLivingRemotePlayers) {
         console.log("HOST IS DEAD BUT REMOTE PLAYERS ALIVE: FORCING GAME STATE UPDATES");
         
-        // Increase update frequency when host is dead to ensure smooth experience for clients
-        if (this._stateUpdateInterval) {
-          clearInterval(this._stateUpdateInterval);
-          this._stateUpdateInterval = setInterval(() => {
+        // If we don't already have a more frequent update interval for dead host state,
+        // set one up to improve remote player experience
+        if (!this._deadHostUpdateInterval) {
+          // First clear any existing interval to avoid duplicates
+          if (this._stateUpdateInterval) {
+            clearInterval(this._stateUpdateInterval);
+            this._stateUpdateInterval = null;
+          }
+          
+          // Setup new faster update interval for dead host case
+          const fasterInterval = this.stateUpdateInterval / 2; // Twice as frequent
+          console.log(`Setting up faster state update interval: ${fasterInterval}ms for dead host case`);
+          
+          this._deadHostUpdateInterval = setInterval(() => {
             try {
-              this.broadcastGameState(true);
+              // Check if we should still be in this state
+              const stillHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
+              let stillLivingRemotes = false;
+              
+              if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
+                this.gameEngine.networkManager.remotePlayers.forEach(player => {
+                  if (!player.isDead) {
+                    stillLivingRemotes = true;
+                  }
+                });
+              }
+              
+              if (stillHostDead && stillLivingRemotes) {
+                // Still valid state, continue with forced updates
+                this.broadcastGameState(true);
+              } else {
+                // State has changed, revert to normal interval
+                console.log("Host state or remote player state changed, reverting to normal interval");
+                this.resetUpdateIntervals();
+              }
             } catch (error) {
-              console.error("Error in game state update:", error);
+              console.error("Error in dead host game state update:", error);
             }
-          }, this.stateUpdateInterval / 2); // Send updates twice as frequently
+          }, fasterInterval);
         }
         
         // Force all enemies to be in moving state to ensure they keep functioning
@@ -1884,7 +1913,13 @@ export class P2PNetwork {
             enemy._forceContinueUpdating = true;
           });
         }
+      } else if (this._deadHostUpdateInterval) {
+        // No more living remote players, clean up the special interval
+        this.resetUpdateIntervals();
       }
+    } else if (this._deadHostUpdateInterval) {
+      // Host is no longer dead, clean up the special interval
+      this.resetUpdateIntervals();
     }
     
     // Log state updates if forced or significant changes
@@ -1920,6 +1955,34 @@ export class P2PNetwork {
     }
     
     return broadcastSuccess;
+  }
+  
+  /**
+   * Reset update intervals to their default state
+   */
+  resetUpdateIntervals() {
+    // Clear any dead host special interval
+    if (this._deadHostUpdateInterval) {
+      clearInterval(this._deadHostUpdateInterval);
+      this._deadHostUpdateInterval = null;
+    }
+    
+    // Clear any regular interval
+    if (this._stateUpdateInterval) {
+      clearInterval(this._stateUpdateInterval);
+      this._stateUpdateInterval = null;
+    }
+    
+    // Setup regular interval if needed
+    if (this.isHost && this.isConnected) {
+      this._stateUpdateInterval = setInterval(() => {
+        try {
+          this.broadcastGameState();
+        } catch (error) {
+          console.error("Error in regular game state update:", error);
+        }
+      }, this.stateUpdateInterval);
+    }
   }
   
   /**

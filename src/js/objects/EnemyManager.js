@@ -170,37 +170,45 @@ export class EnemyManager {
   }
 
   /**
-   * Update all enemies and handle round logic
+   * Update all enemies
    * @param {number} deltaTime - Time elapsed since last update
    */
   update(deltaTime) {
-    if (this.isPaused) return;
-
-    // Periodically check for stuck rounds
-    this.checkRoundStateConsistency();
-    
-    // Handle round transitions
-    this.updateRoundState(deltaTime);
-    
-    // Check if we should spawn a new enemy
-    if (this.roundActive && this.zombiesRemaining > 0) {
-      // Only spawn after the initial delay
-      const currentTime = performance.now() / 1000;
-      if (currentTime - this.roundStartTime >= this.roundStartDelay) {
-        this.trySpawnEnemy();
-        
-        // If there are no enemies but we have zombies left to spawn,
-        // force a spawn after waiting for a bit (potential fix for stuck zombies)
-        if (this.enemies.length === 0 && currentTime - this.lastSpawnTime > 5) {
-          const enemy = this.forceSpawnEnemy();
-          if (enemy) {
-            this.zombiesSpawned++;
-            this.zombiesRemaining--;
-            this.lastSpawnTime = currentTime;
-          }
+    // Skip if paused - but add special handling for multiplayer case
+    if (this.isPaused) {
+      // In multiplayer, override the pause if there are living remote players
+      let hasLivingRemotePlayers = false;
+      
+      if (this.player && this.player.isDead && this.gameEngine && this.gameEngine.networkManager) {
+        const remotePlayers = this.gameEngine.networkManager.remotePlayers;
+        if (remotePlayers && remotePlayers.size > 0) {
+          remotePlayers.forEach(player => {
+            if (!player.isDead) {
+              hasLivingRemotePlayers = true;
+            }
+          });
         }
       }
+      
+      // If we're paused but there are living remote players, allow updates to continue
+      if (!hasLivingRemotePlayers) {
+        return; // Truly paused - no living players at all
+      } else {
+        console.log("EnemyManager is technically paused, but continuing updates for living remote players");
+      }
     }
+  
+    // Check for enemy spawn
+    this.checkEnemySpawn(deltaTime);
+    
+    // Update round state
+    this.updateRoundState(deltaTime);
+    
+    // Update round timer
+    this.updateRoundTimer(deltaTime);
+    
+    // Check consistency of round state
+    this.checkRoundStateConsistency();
     
     // Check if there are living remote players when the host player is dead
     let hasLivingRemotePlayers = false;
@@ -837,6 +845,48 @@ export class EnemyManager {
   }
 
   /**
+   * Check if we should spawn new enemies
+   * @param {number} deltaTime - Time elapsed since last update
+   */
+  checkEnemySpawn(deltaTime) {
+    // Only check if round is active and there are zombies to spawn
+    if (this.roundActive && this.zombiesRemaining > 0) {
+      // Only spawn after the initial delay
+      const currentTime = performance.now() / 1000;
+      if (currentTime - this.roundStartTime >= this.roundStartDelay) {
+        this.trySpawnEnemy();
+        
+        // If there are no enemies but we have zombies left to spawn,
+        // force a spawn after waiting for a bit (potential fix for stuck zombies)
+        if (this.enemies.length === 0 && currentTime - this.lastSpawnTime > 5) {
+          const enemy = this.forceSpawnEnemy();
+          if (enemy) {
+            this.zombiesSpawned++;
+            this.zombiesRemaining--;
+            this.lastSpawnTime = currentTime;
+          }
+        }
+      }
+    }
+  }
+  
+  /**
+   * Update the round timer and UI
+   * @param {number} deltaTime - Time elapsed since last update
+   */
+  updateRoundTimer(deltaTime) {
+    // Update the round timer if the round is not active
+    if (!this.roundActive && this.currentRound > 0) {
+      // Calculate time left until next round
+      const timeLeft = Math.max(0, this.roundChangeDelay - this.timeSinceLastRound);
+      const roundsLeft = Math.ceil(timeLeft);
+      
+      // Update the round timer UI
+      this.updateRoundDisplay(`Next Round in: ${roundsLeft}`);
+    }
+  }
+
+  /**
    * Try to spawn a new enemy based on spawn rate
    */
   trySpawnEnemy() {
@@ -1295,6 +1345,36 @@ export class EnemyManager {
    * @param {boolean} isPaused - Whether to pause enemies
    */
   setPaused(isPaused) {
+    // Log state change
+    console.log(`EnemyManager: Setting paused state to ${isPaused}`);
+    
+    // Check if we're in multiplayer with living remote players
+    let hasLivingRemotePlayers = false;
+    if (this.gameEngine && this.gameEngine.networkManager) {
+      const networkManager = this.gameEngine.networkManager;
+      
+      if (networkManager.remotePlayers && networkManager.remotePlayers.size > 0) {
+        networkManager.remotePlayers.forEach(player => {
+          if (!player.isDead) {
+            hasLivingRemotePlayers = true;
+          }
+        });
+      }
+    }
+    
+    // In multiplayer, if we're pausing but there are living remote players
+    if (isPaused && hasLivingRemotePlayers && this.gameEngine && this.gameEngine.networkManager) {
+      console.log("EnemyManager: Not fully pausing because there are living remote players");
+      
+      // Ensure game state continues to broadcast
+      if (this.gameEngine.networkManager.network && 
+          this.gameEngine.networkManager.network.broadcastGameState) {
+        console.log("EnemyManager: Forcing a game state broadcast to keep remote clients updated");
+        this.gameEngine.networkManager.network.broadcastGameState(true);
+      }
+    }
+    
+    // Set the pause state
     this.isPaused = isPaused;
   }
 

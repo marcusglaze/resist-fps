@@ -917,18 +917,18 @@ export class PlayerControls {
     try {
       console.log("SHOOTING: shoot() method called");
       
-      // Skip if dead or no weapon
-      if (this.isDead || !this.activeWeapon) {
+    // Skip if dead or no weapon
+    if (this.isDead || !this.activeWeapon) {
         console.log("SHOOTING: Skipping - player is dead or no active weapon");
-        return;
-      }
-      
+      return;
+    }
+    
       // Skip if weapon isn't ready (cooldown)
       if (this.activeWeapon && !this.activeWeapon.canShoot()) {
         console.log("SHOOTING: Skipping - weapon on cooldown");
-        return;
-      }
-      
+      return;
+    }
+    
       // Skip if reloading
       if (this.isReloading) {
         console.log("SHOOTING: Skipping - weapon is reloading");
@@ -939,9 +939,9 @@ export class PlayerControls {
       if (this.activeWeapon.currentAmmo <= 0) {
         console.log("SHOOTING: No ammo, playing empty sound");
         this.playSound('empty');
-        return;
-      }
-      
+      return;
+    }
+    
       // We're good to shoot - update ammo count
       this.activeWeapon.currentAmmo--;
       
@@ -1064,9 +1064,9 @@ export class PlayerControls {
                       damage: headDamage,
                       isHeadshot: true,
                       timestamp: Date.now()
-                    });
-                  }
-                } else {
+                });
+              }
+            } else {
                   enemy.takeDamage(bodyDamage);
                   console.log("SHOOTING: Applied body shot damage (fallback):", bodyDamage);
                   // Manually send damage to host
@@ -1081,13 +1081,13 @@ export class PlayerControls {
                 }
                 
                 // Display damage numbers for feedback
-                this.displayDamageNumber(this.hitResult.point, isHeadshot ? headDamage : bodyDamage, isHeadshot);
+                this.showDamageNumber(this.hitResult.point, isHeadshot ? headDamage : bodyDamage, isHeadshot);
               } else {
                 // Client-side damage with host notification
                 if (isHeadshot) {
                   enemy.clientTakeDamage(headDamage, true, networkManager);
                   console.log("SHOOTING: Applied headshot damage:", headDamage);
-                  this.displayDamageNumber(this.hitResult.point, headDamage, true);
+                  this.showDamageNumber(this.hitResult.point, headDamage, true);
                 } else {
                   enemy.clientTakeDamage(bodyDamage, false, networkManager);
                   console.log("SHOOTING: Applied body shot damage:", bodyDamage);
@@ -1278,9 +1278,9 @@ export class PlayerControls {
       
       if (!hitResult || !hitResult.point) {
         console.log("SHOOTING: No hit result or point, can't check for headshot");
-        return false;
-      }
-      
+      return false;
+    }
+    
       // Get the hit point y coordinate
       const hitPointY = hitResult.point.y;
       
@@ -1296,9 +1296,9 @@ export class PlayerControls {
         // If we hit the head mesh directly
         if (enemyObject.name === "zombieHead") {
           console.log("SHOOTING: Direct hit on zombie head mesh");
-          return true;
-        }
-        
+        return true;
+      }
+      
         // The head is approximately 1.85 units high on the standard zombie model
         const headHeight = 1.85;
         const headRadius = 0.3; // From the createEnemyMesh method

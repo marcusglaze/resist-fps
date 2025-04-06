@@ -529,8 +529,28 @@ export class Engine {
     // Unlock pointer
     this.unlockPointer();
     
-    // Pause all enemies
-    if (this.scene.room && this.scene.room.enemyManager) {
+    // In multiplayer mode, check if there are living remote players before pausing enemies
+    let shouldPauseEnemies = true;
+    
+    if (this.networkManager && this.networkManager.isMultiplayer) {
+      // Check if any remote players are still alive
+      let hasLivingRemotePlayers = false;
+      this.networkManager.remotePlayers.forEach(player => {
+        if (!player.isDead) {
+          hasLivingRemotePlayers = true;
+        }
+      });
+      
+      // Only pause enemies if all players are dead
+      if (hasLivingRemotePlayers) {
+        console.log("Not pausing enemies because there are still living remote players");
+        shouldPauseEnemies = false;
+      }
+    }
+    
+    // Pause all enemies if needed
+    if (shouldPauseEnemies && this.scene.room && this.scene.room.enemyManager) {
+      console.log("Pausing all enemies - no living players remaining");
       this.scene.room.enemyManager.setPaused(true);
     }
     
