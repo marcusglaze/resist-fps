@@ -1122,14 +1122,28 @@ export class P2PNetwork {
     
     if (!this.gameEngine) return {};
     
-    return {
+    console.log("***** GETTING GAME STATE - TRACE *****");
+    
+    // CRITICAL: Force clean state without cached data
+    const freshState = {
       playerPositions: this.getPlayerPositions(),
       enemies: this.getEnemiesState(),
       round: this.getRoundInfo(),
       windows: this.getWindowsState(),
       gameStatus: this.getGameStatus(),
-      // Add other relevant game state data
     };
+    
+    // Log the complete enemy data for debugging
+    if (freshState.enemies && freshState.enemies.length > 0) {
+      console.log(`Got ${freshState.enemies.length} enemy positions for network transmission:`);
+      freshState.enemies.forEach(enemy => {
+        console.log(`> Enemy ${enemy.id}: FINAL STATE TO TRANSMIT [${enemy.position.x.toFixed(2)}, ${enemy.position.y.toFixed(2)}, ${enemy.position.z.toFixed(2)}], State: ${enemy.state}`);
+      });
+    }
+    
+    console.log("***** END GETTING GAME STATE - TRACE *****");
+    
+    return freshState;
   }
   
   /**
@@ -1205,7 +1219,10 @@ export class P2PNetwork {
       console.log("ACTUAL ENEMY POSITIONS ON HOST BEFORE NETWORK TRANSFORMATION:");
       enemies.forEach(enemy => {
         if (enemy && enemy.instance) {
-          console.log(`Enemy ${enemy.id}: ACTUAL POSITION [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}], State: ${enemy.state}`);
+          // CRITICAL: Log the enemy.position vs enemy.instance.position to see if they're different
+          console.log(`Enemy ${enemy.id}: 
+            ACTUAL instance.position [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}]
+            ENEMY.position property [${enemy.position ? enemy.position.x.toFixed(2) : 'N/A'}, ${enemy.position ? enemy.position.y.toFixed(2) : 'N/A'}, ${enemy.position ? enemy.position.z.toFixed(2) : 'N/A'}]`);
         }
       });
       
@@ -1228,19 +1245,20 @@ export class P2PNetwork {
           modifiedState = 'moving';
         }
         
-        // Store the exact position being sent for this enemy
-        const positionForNetwork = {
+        // CRITICAL FIX: Make sure we're using the latest instance position, not the potentially stale enemy.position property
+        // Create a fresh position object based on the current instance position
+        const currentPosition = enemy.instance ? {
           x: enemy.instance.position.x,
           y: enemy.instance.position.y,
           z: enemy.instance.position.z
-        };
+        } : { x: 0, y: 0, z: 0 };
         
         // Log the exact position being sent
-        console.log(`Enemy ${enemy.id}: SENDING POSITION [${positionForNetwork.x.toFixed(2)}, ${positionForNetwork.y.toFixed(2)}, ${positionForNetwork.z.toFixed(2)}], State: ${originalState}${originalState !== modifiedState ? ' -> ' + modifiedState : ''}`);
+        console.log(`Enemy ${enemy.id}: SENDING POSITION [${currentPosition.x.toFixed(2)}, ${currentPosition.y.toFixed(2)}, ${currentPosition.z.toFixed(2)}], State: ${originalState}${originalState !== modifiedState ? ' -> ' + modifiedState : ''}`);
         
         return {
           id: enemy.id,
-          position: positionForNetwork,
+          position: currentPosition, // Use the fresh position data
           health: enemy.health,
           type: enemy.type || 'standard', // Include zombie type for proper spawning
           state: modifiedState || 'moving', // idle, attacking, dying, etc.
@@ -1898,8 +1916,79 @@ export class P2PNetwork {
     // Get current game state
     const gameState = this.getGameState();
     
-    // Sample the enemy positions collected for sending
+    // CRITICAL: Check for static enemy positions that might indicate a bug
     if (gameState.enemies && gameState.enemies.length > 0) {
+      // Track if we've seen these exact positions before
+      if (!this._lastEnemyPositions) {
+        this._lastEnemyPositions = new Map();
+      }
+      
+      let staticPositionsDetected = false;
+      
+      // Check all enemies for static positions
+      gameState.enemies.forEach(enemy => {
+        const enemyId = enemy.id;
+        const pos = enemy.position;
+        const posStr = `${pos.x},${pos.y},${pos.z}`;
+        
+        if (this._lastEnemyPositions.has(enemyId)) {
+          const lastPos = this._lastEnemyPositions.get(enemyId);
+          if (lastPos === posStr) {
+            console.warn(`⚠️ DETECTED STATIC POSITION for enemy ${enemyId}: [${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}]`);
+            staticPositionsDetected = true;
+          }
+        }
+        
+        // Store this position for next comparison
+        this._lastEnemyPositions.set(enemyId, posStr);
+      });
+      
+      // If we detected static positions, try to find the real positions from the enemy manager
+      if (staticPositionsDetected && this.gameEngine && this.gameEngine.scene && 
+          this.gameEngine.scene.room && this.gameEngine.scene.room.enemyManager) {
+        
+        const enemies = this.gameEngine.scene.room.enemyManager.enemies;
+        if (enemies && enemies.length > 0) {
+          console.warn("ACTUAL POSITIONS FROM ENEMY MANAGER:");
+          enemies.forEach(enemy => {
+            if (enemy && enemy.instance) {
+              console.warn(`Enemy ${enemy.id}: ACTUAL POSITION [${enemy.instance.position.x.toFixed(3)}, ${enemy.instance.position.y.toFixed(3)}, ${enemy.instance.position.z.toFixed(3)}]`);
+            }
+          });
+          
+          // CRITICAL FIX: Update gameState.enemies with fresh position data directly from enemy.instance
+          console.log("📝 UPDATING GAME STATE WITH FRESH POSITION DATA");
+          gameState.enemies = enemies.map(enemy => {
+            // Get current state
+            const originalState = enemy.state;
+            let modifiedState = enemy.state;
+            
+            // Force moving state if needed
+            const isLocalPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
+            const hasLivingRemotePlayers = isLocalPlayerDead && this.checkForLivingRemotePlayers();
+            if (isLocalPlayerDead && hasLivingRemotePlayers && enemy.state === 'idle') {
+              modifiedState = 'moving';
+            }
+            
+            return {
+              id: enemy.id,
+              position: {
+                x: enemy.instance.position.x,
+                y: enemy.instance.position.y,
+                z: enemy.instance.position.z
+              },
+              health: enemy.health,
+              type: enemy.type || 'standard',
+              state: modifiedState || 'moving',
+              targetWindow: enemy.targetWindow ? {
+                index: this.gameEngine.scene.room.windows.indexOf(enemy.targetWindow)
+              } : null,
+              insideRoom: enemy.insideRoom || false
+            };
+          });
+        }
+      }
+      
       console.log(`READY TO SEND: Enemy positions data for ${gameState.enemies.length} enemies:`);
       
       // Log a sample of positions about to be sent
@@ -2126,5 +2215,25 @@ export class P2PNetwork {
     } catch (error) {
       console.error("Error handling enemy damage confirmation:", error);
     }
+  }
+  
+  /**
+   * Helper method to check if there are living remote players
+   * @returns {boolean} true if there are living remote players
+   */
+  checkForLivingRemotePlayers() {
+    if (!this.gameEngine || !this.gameEngine.networkManager || 
+        !this.gameEngine.networkManager.remotePlayers) {
+      return false;
+    }
+    
+    let hasLivingRemotePlayers = false;
+    this.gameEngine.networkManager.remotePlayers.forEach(player => {
+      if (!player.isDead) {
+        hasLivingRemotePlayers = true;
+      }
+    });
+    
+    return hasLivingRemotePlayers;
   }
 } 
