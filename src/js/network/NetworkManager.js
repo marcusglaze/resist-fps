@@ -326,6 +326,17 @@ export class NetworkManager {
         console.log(`========== CLIENT RECEIVING ENEMY UPDATES ==========`);
         console.log(`Syncing ${state.enemies.length} enemies from host`);
         
+        // IMPORTANT: Debug the raw position data from host, before any client processing
+        console.log("RAW ENEMY DATA RECEIVED FROM HOST (BEFORE ANY CLIENT PROCESSING):");
+        state.enemies.forEach((enemyData, index) => {
+          if (enemyData && enemyData.position) {
+            // Log with full precision to check for any truncation
+            console.log(`Enemy ${enemyData.id}: RAW POSITION FROM HOST [${enemyData.position.x}, ${enemyData.position.y}, ${enemyData.position.z}], State: ${enemyData.state}`);
+          } else {
+            console.log(`WARNING: Enemy data at index ${index} missing position:`, enemyData);
+          }
+        });
+        
         // If host has no enemies, clear client enemies
         if (state.enemies.length === 0 && enemyManager.enemies.length > 0) {
           console.log("Host has no enemies, clearing client enemies");

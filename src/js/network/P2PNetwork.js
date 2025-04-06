@@ -126,95 +126,70 @@ export class P2PNetwork {
    * Create the host connection
    */
   createHost() {
-    return new Promise((resolve, reject) => {
-      try {
-        // Get the server's host
-        const host = window.location.hostname;
-        const port = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
-        const secure = window.location.protocol === 'https:';
-        
-        console.log("Creating peer with host:", host, "port:", port, "secure:", secure);
-        
-        // Create a new Peer with a randomized ID (don't let the browser assign it)
-        const randomId = 'host_' + Math.random().toString(36).substring(2, 15);
-        
-        // Create a new Peer using our custom server with better configuration
-        this.peer = new Peer(randomId, {
-          host: host,
-          port: port,
-          path: '/peerjs',
-          secure: secure,
-          debug: 3,
-          config: {
-            // Add STUN and TURN servers for connection in restrictive networks
-            'iceServers': [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:stun2.l.google.com:19302' }
-            ],
-            'sdpSemantics': 'unified-plan'
-          },
-          // Reconnection parameters
-          pingInterval: 3000,   // Check connection every 3 seconds
-          retryCount: 3,        // Retry 3 times
-          retryDelay: 1000,     // 1 second between retries
-          // Use less reliable but faster connections with lower overheads
-          serialization: 'binary',
-          reliable: true        // Use reliable connections
-        });
-        
-        this.peer.on('open', (id) => {
-          console.log('Host ID:', id);
-          this.hostId = id;
-          this.isHost = true;
-          this.isConnected = true;
-          
-          // Keep connection alive with ping
-          this.startHeartbeat();
-          
-          // Set up event handler for new connections
-          this.peer.on('connection', (conn) => this.handleNewConnection(conn));
-          
-          resolve(id);
-        });
-        
-        this.peer.on('error', (err) => {
-          console.error('Host peer error:', err);
-          
-          // Handle specific errors
-          if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
-            console.log('Attempting to reconnect...');
-            // Try to destroy and recreate peer after delay
-            setTimeout(() => {
-              if (this.peer) {
-                this.peer.destroy();
-                this.peer = null;
-                this.createHost().then(resolve).catch(reject);
-              }
-            }, 2000);
-          } else {
-            if (this.onError) this.onError(err);
-            reject(err);
-          }
-        });
-        
-        this.peer.on('disconnected', () => {
-          console.log('Peer disconnected. Attempting to reconnect...');
-          
-          // Try to reconnect
-          this.peer.reconnect();
-        });
-        
-        this.peer.on('close', () => {
-          console.log('Peer connection closed.');
-          this.stopHeartbeat();
-          this.isConnected = false;
-        });
-      } catch (err) {
-        console.error('Failed to create host:', err);
-        reject(err);
+    this.peer = new Peer(null, {
+      host: this.peerServer.host,
+      port: this.peerServer.port,
+      path: this.peerServer.path,
+      secure: this.peerServer.secure,
+      debug: 1, // Changed from 3 to reduce console spam but keep important logs
+      config: {
+        'iceServers': this.iceServers
       }
     });
+    
+    console.log("Peer created with config:", {
+      host: this.peerServer.host,
+      port: this.peerServer.port,
+      path: this.peerServer.path,
+      secure: this.peerServer.secure
+    });
+    
+    this.peer.on('open', (id) => {
+      console.log('Host ID:', id);
+      this.hostId = id;
+      this.clientId = id; // Also set clientId for consistent reference
+      this.isHost = true;
+      
+      // Keep connection alive with ping
+      this.startHeartbeat();
+      
+      // Start sending game state updates to clients
+      this.startGameStateUpdates();
+      
+      // Create the game
+      this.connectedToServer = true;
+      
+      // Accept incoming connections
+      this.peer.on('connection', (conn) => {
+        console.log('New connection from:', conn.peer);
+        
+        // Configure connection with JSON serialization to avoid binary data issues
+        conn.serialization = 'json';
+        
+        conn.on('open', () => {
+          this.handleNewConnection(conn);
+        });
+      });
+    });
+    
+    this.peer.on('error', (err) => {
+      console.error('Host peer error:', err);
+      if (this.onError) this.onError(err);
+    });
+    
+    this.peer.on('disconnected', () => {
+      console.log('Peer disconnected. Attempting to reconnect...');
+      this.peer.reconnect();
+    });
+    
+    this.peer.on('close', () => {
+      console.log('Peer connection closed.');
+      this.stopHeartbeat();
+      this.isConnected = false;
+    });
+    
+    // Handle window close event to clean up connections
+    this._handleWindowClose();
   }
   
   /**
@@ -313,40 +288,13 @@ export class P2PNetwork {
   connectToHost(hostId) {
     return new Promise((resolve, reject) => {
       try {
-        // Get the server's host
-        const host = window.location.hostname;
-        const port = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
-        const secure = window.location.protocol === 'https:';
+        console.log('Connecting to host:', hostId);
         
-        console.log("Creating client peer with host:", host, "port:", port, "secure:", secure);
-        
-        // Create a random ID for the client
-        const randomId = 'client_' + Math.random().toString(36).substring(2, 15);
-        
-        // Create a new Peer using our custom server with better configuration
-        this.peer = new Peer(randomId, {
-          host: host,
-          port: port,
-          path: '/peerjs',
-          secure: secure,
-          debug: 3,
-          config: {
-            // Add STUN and TURN servers for connection in restrictive networks
-            'iceServers': [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:stun2.l.google.com:19302' }
-            ],
-            'sdpSemantics': 'unified-plan'
-          },
-          // Reconnection parameters
-          pingInterval: 3000,   // Check connection every 3 seconds
-          retryCount: 3,        // Retry 3 times
-          retryDelay: 1000,     // 1 second between retries
-          // Use less reliable but faster connections with lower overheads
-          serialization: 'binary',
-          reliable: true        // Use reliable connections
-        });
+        if (!this.peer) {
+          console.error('Peer not initialized');
+          reject(new Error('Peer not initialized'));
+          return;
+        }
         
         this.peer.on('open', (id) => {
           console.log('Client ID:', id);
@@ -357,10 +305,10 @@ export class P2PNetwork {
           // Keep connection alive with ping
           this.startHeartbeat();
           
-          // Connect to the host
+          // Connect to the host with JSON serialization to avoid binary data issues
           const conn = this.peer.connect(hostId, {
             reliable: true,
-            serialization: 'binary'
+            serialization: 'json'
           });
           
           conn.on('open', () => {
@@ -458,6 +406,24 @@ export class P2PNetwork {
         case 'gameState':
           // Received a game state update from the host
           if (!this.isHost && this.gameEngine && this.onGameStateUpdate) {
+            // Log the raw enemy positions from the received data occasionally
+            if (data.state && data.state.enemies && Math.random() < 0.1) { // 10% of the time
+              console.log(`========== GAME STATE DATA RECEIVED (RAW) ==========`);
+              const enemyCount = data.state.enemies.length;
+              console.log(`Received game state with ${enemyCount} enemies`);
+              
+              // Sample a few enemies to avoid console spam
+              const sampleSize = Math.min(2, enemyCount);
+              for (let i = 0; i < sampleSize; i++) {
+                const enemy = data.state.enemies[i];
+                if (enemy && enemy.position) {
+                  // Print raw position data to check for truncation
+                  console.log(`Enemy ${enemy.id}: DATA AS RECEIVED: [${enemy.position.x}, ${enemy.position.y}, ${enemy.position.z}], State: ${enemy.state}`);
+                }
+              }
+              console.log(`========== END GAME STATE DATA RECEIVED ==========`);
+            }
+            
             this.onGameStateUpdate(data.state);
           }
           break;
@@ -1149,7 +1115,7 @@ export class P2PNetwork {
       return [];
     }
     
-    console.log("========== GATHERING ENEMY STATES FOR NETWORK ==========");
+    console.log("========== GATHERING ENEMY DATA FOR NETWORK - DETAILED ==========");
     
     const enemies = this.gameEngine.scene.room.enemyManager.enemies;
     const isLocalPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
@@ -1173,6 +1139,14 @@ export class P2PNetwork {
     
     // If there are any enemies to report
     if (enemies && enemies.length > 0) {
+      // Log ALL enemy positions before processing for network
+      console.log("ACTUAL ENEMY POSITIONS ON HOST BEFORE NETWORK TRANSFORMATION:");
+      enemies.forEach(enemy => {
+        if (enemy && enemy.instance) {
+          console.log(`Enemy ${enemy.id}: ACTUAL POSITION [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}], State: ${enemy.state}`);
+        }
+      });
+      
       // Generate enemy states for all enemies
       const enemyStates = enemies.map(enemy => {
         // Ensure each enemy has a consistent unique ID without modifying the original
@@ -1192,18 +1166,19 @@ export class P2PNetwork {
           modifiedState = 'moving';
         }
         
-        // Log every 10th enemy position to avoid console spam
-        if (Math.random() < 0.1) {
-          console.log(`Enemy ${enemy.id} position: [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}], State: ${originalState}${originalState !== modifiedState ? ' -> ' + modifiedState : ''}`);
-        }
+        // Store the exact position being sent for this enemy
+        const positionForNetwork = {
+          x: enemy.instance.position.x,
+          y: enemy.instance.position.y,
+          z: enemy.instance.position.z
+        };
+        
+        // Log the exact position being sent
+        console.log(`Enemy ${enemy.id}: SENDING POSITION [${positionForNetwork.x.toFixed(2)}, ${positionForNetwork.y.toFixed(2)}, ${positionForNetwork.z.toFixed(2)}], State: ${originalState}${originalState !== modifiedState ? ' -> ' + modifiedState : ''}`);
         
         return {
           id: enemy.id,
-          position: {
-            x: enemy.instance.position.x,
-            y: enemy.instance.position.y,
-            z: enemy.instance.position.z
-          },
+          position: positionForNetwork,
           health: enemy.health,
           type: enemy.type || 'standard', // Include zombie type for proper spawning
           state: modifiedState || 'moving', // idle, attacking, dying, etc.
@@ -1214,13 +1189,13 @@ export class P2PNetwork {
         };
       });
       
-      console.log("========== END ENEMY STATES GATHERING ==========");
+      console.log("========== END ENEMY DATA GATHERING - DETAILED ==========");
       return enemyStates;
     }
     
     // Return empty array if no enemies
     console.log("No enemies to send");
-    console.log("========== END ENEMY STATES GATHERING ==========");
+    console.log("========== END ENEMY DATA GATHERING - DETAILED ==========");
     return [];
   }
   
@@ -1856,8 +1831,22 @@ export class P2PNetwork {
       return false;
     }
     
+    console.log("========== BROADCASTING GAME STATE ==========");
+    
     // Get current game state
     const gameState = this.getGameState();
+    
+    // Sample the enemy positions collected for sending
+    if (gameState.enemies && gameState.enemies.length > 0) {
+      console.log(`READY TO SEND: Enemy positions data for ${gameState.enemies.length} enemies:`);
+      
+      // Log a sample of positions about to be sent
+      const sampleSize = Math.min(3, gameState.enemies.length);
+      for (let i = 0; i < sampleSize; i++) {
+        const enemy = gameState.enemies[i];
+        console.log(`Enemy ${enemy.id} FINAL position for network: [${enemy.position.x.toFixed(2)}, ${enemy.position.y.toFixed(2)}, ${enemy.position.z.toFixed(2)}], State: ${enemy.state}`);
+      }
+    }
     
     // Check if host player is dead but there are living remote players
     const isHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
@@ -1955,10 +1944,27 @@ export class P2PNetwork {
     this.connections.forEach((conn) => {
       if (conn.open) {
         try {
-          conn.send({
+          // Create the message object
+          const message = {
             type: 'gameState',
             state: gameState
-          });
+          };
+          
+          // Log a sample of the actual data being sent after any JSON transformations
+          if (gameState.enemies && gameState.enemies.length > 0 && Math.random() < 0.1) { // 10% of the time
+            // Convert to JSON and back to see if there's any data loss
+            const serialized = JSON.stringify(message);
+            const deserialized = JSON.parse(serialized);
+            
+            if (deserialized.state.enemies && deserialized.state.enemies.length > 0) {
+              console.log("SERIALIZATION TEST: Enemy positions after JSON serialization:");
+              const testEnemy = deserialized.state.enemies[0];
+              console.log(`Enemy ${testEnemy.id}: POST-SERIALIZATION [${testEnemy.position.x.toFixed(2)}, ${testEnemy.position.y.toFixed(2)}, ${testEnemy.position.z.toFixed(2)}]`);
+            }
+          }
+          
+          // Send the actual message
+          conn.send(message);
           broadcastSuccess = true;
         } catch (error) {
           console.error(`Error broadcasting game state to ${conn.peer}:`, error);
@@ -1970,6 +1976,8 @@ export class P2PNetwork {
     if (broadcastSuccess) {
       this.lastStateSent = now;
     }
+    
+    console.log("========== END BROADCASTING GAME STATE ==========");
     
     return broadcastSuccess;
   }
