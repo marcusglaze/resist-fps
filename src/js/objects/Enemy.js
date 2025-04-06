@@ -1018,6 +1018,8 @@ export class Enemy {
    * @param {NetworkManager} networkManager - Reference to network manager
    */
   clientTakeDamage(damage, isHeadshot, networkManager) {
+    console.log("ENEMY: clientTakeDamage called with damage:", damage, "headshot:", isHeadshot);
+    
     // First apply damage locally for immediate feedback
     this.takeDamage(damage);
     

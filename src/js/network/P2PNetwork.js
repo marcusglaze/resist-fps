@@ -1477,6 +1477,10 @@ export class P2PNetwork {
    */
   sendPlayerAction(actionType, actionData) {
     console.log("NETWORK: *** SENDING PLAYER ACTION ***", actionType, actionData);
+    // Add a more visible console log with large stars at beginning and end
+    console.log("********************************************************************************");
+    console.log(`* NETWORK DEBUG: Sending action ${actionType} with data:`, actionData);
+    console.log("********************************************************************************");
     
     if (!this.isConnected) {
       console.error("Cannot send player action: not connected");

@@ -1062,6 +1062,28 @@ export class PlayerControls {
     } catch (error) {
       console.error("Error during shooting:", error);
     }
+    
+    // If we hit a zombie, damage it
+    if (this.hitResult && this.hitResult.object && this.hitResult.object.userData && this.hitResult.object.userData.type === 'zombie') {
+      console.log("SHOOTING: Hit a zombie, about to apply damage");
+      const enemy = this.hitResult.object.userData;
+      
+      // Check if headshot
+      const isHeadshot = this.isHeadshot(this.hitResult);
+      console.log("SHOOTING: Headshot check:", isHeadshot);
+      
+      // Apply damage based on headshot or body shot
+      if (this.gameEngine && this.gameEngine.networkManager && !this.gameEngine.networkManager.isHost) {
+        console.log("SHOOTING: Client applying damage using clientTakeDamage");
+        
+        // Client-side damage with host notification
+        if (isHeadshot) {
+          enemy.clientTakeDamage(this.headshotDamage, true, this.gameEngine.networkManager);
+        } else {
+          enemy.clientTakeDamage(this.damage, false, this.gameEngine.networkManager);
+        }
+      }
+    }
   }
 
   /**

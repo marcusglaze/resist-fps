@@ -416,6 +416,8 @@ export class Window {
    * @param {NetworkManager} networkManager - Reference to the network manager
    */
   clientAddBoard(networkManager) {
+    console.log("WINDOW: clientAddBoard called");
+    
     if (!networkManager || !networkManager.network) {
       console.warn("Cannot add board as client: no network manager");
       return false;

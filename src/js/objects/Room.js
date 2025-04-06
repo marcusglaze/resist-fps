@@ -991,21 +991,28 @@ export class Room {
       
       // For window boarding, we'll keep the quick press interaction
       if (this.player.isInteracting && !this.isHoldingF) {
+        console.log("WINDOW: Player is interacting with window", nearestWindow.windowIndex);
+        
         // Check if we're in a multiplayer game as a client
         const isClient = this.gameEngine && 
                          this.gameEngine.networkManager && 
                          !this.gameEngine.networkManager.isHost &&
                          this.gameEngine.networkManager.isMultiplayer;
         
+        console.log("WINDOW: Player is a client?", isClient);
+        
         let boardAdded = false;
         
         // Use client-side version if we're a client in multiplayer
         if (isClient) {
-          console.log("Client is boarding window, using client-side method");
+          console.log("WINDOW: Client is boarding window, using client-side method");
           boardAdded = nearestWindow.clientAddBoard(this.gameEngine.networkManager);
+          console.log("WINDOW: Client-side board add result:", boardAdded);
         } else {
           // Otherwise use regular version for host or singleplayer
+          console.log("WINDOW: Host/singleplayer is boarding window, using regular method");
           boardAdded = nearestWindow.addBoard();
+          console.log("WINDOW: Regular board add result:", boardAdded);
         }
         
         // If board was successfully added, award points to the player
