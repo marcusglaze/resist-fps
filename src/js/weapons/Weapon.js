@@ -50,6 +50,9 @@ export class Weapon {
     this.isFiring = false;
     this.firingVisibilityTimeout = null;
     
+    // Timing for cooldown
+    this.lastFireTime = 0;
+    
     // Store original color for restoration if needed
     if (this.customColor) {
       this.originalColor = {...this.customColor};
@@ -192,6 +195,9 @@ export class Weapon {
     // Reduce ammo
     this.currentAmmo--;
     
+    // Update last fire time for cooldown tracking
+    this.lastFireTime = Date.now();
+    
     // Calculate spread for this shot
     const actualSpread = this.calculateSpread();
     
@@ -246,6 +252,37 @@ export class Weapon {
   calculateSpread() {
     // Base spread
     return this.spread;
+  }
+  
+  /**
+   * Check if the weapon can shoot
+   * @returns {boolean} Whether the weapon can shoot
+   */
+  canShoot() {
+    // Check for active cooldown
+    if (this.lastFireTime && ((Date.now() - this.lastFireTime) / 1000 < this.cooldown)) {
+      return false;
+    }
+    
+    // Check if we have ammo
+    if (this.currentAmmo <= 0 && !this.hasInfiniteAmmo) {
+      return false;
+    }
+    
+    // Check if we're reloading
+    if (this.isReloading) {
+      return false;
+    }
+    
+    return true;
+  }
+  
+  /**
+   * Alias for fire() - for backward compatibility
+   * @returns {Object} Firing data including damage, spread, etc.
+   */
+  shoot() {
+    return this.fire();
   }
   
   /**

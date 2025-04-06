@@ -1030,7 +1030,7 @@ export class PlayerControls {
       }
       
       // Play weapon firing effects
-      this.activeWeapon.shoot();
+      this.activeWeapon.fire();
       
       // Update UI elements
       this.updateAmmoDisplay();
