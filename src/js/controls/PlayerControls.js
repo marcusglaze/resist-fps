@@ -1099,8 +1099,8 @@ export class PlayerControls {
               
               // Server-side or singleplayer damage
               if (isHeadshot) {
-                enemy.takeDamage(headshotDamage);
-                this.displayDamageNumber(this.hitResult.point, headshotDamage, true);
+                enemy.takeDamage(headDamage);
+                this.displayDamageNumber(this.hitResult.point, headDamage, true);
                 
                 // Award extra points for headshot kills
                 if (enemy.health <= 0) {
@@ -1137,7 +1137,16 @@ export class PlayerControls {
       console.log("SHOOTING: Firing weapon");
       if (this.activeWeapon) {
         this.activeWeapon.fire();
+        // Play weapon shooting sound
+        this.playWeaponShootSound();
+        // Play weapon recoil animation
+        this.playShootAnimation();
         this.updateAmmoDisplay();
+        
+        // Check if we need to reload automatically
+        if (this.activeWeapon.currentAmmo <= 0 && this.activeWeapon.totalAmmo > 0) {
+          this.reload();
+        }
       }
     } catch (weaponError) {
       console.error("Error firing weapon:", weaponError);
