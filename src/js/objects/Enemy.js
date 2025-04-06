@@ -1029,23 +1029,39 @@ export class Enemy {
    * @param {number} damage - Amount of damage to apply
    * @param {boolean} isHeadshot - Whether this was a headshot
    * @param {NetworkManager} networkManager - Reference to network manager
+   * @returns {number} The enemy's health after applying damage
    */
   clientTakeDamage(damage, isHeadshot, networkManager) {
     console.log("ENEMY: clientTakeDamage called with damage:", damage, "headshot:", isHeadshot);
     
+    if (!damage || damage <= 0) {
+      console.warn("ENEMY: Invalid damage value:", damage);
+      return this.health;
+    }
+    
+    // Save the original health for logging
+    const originalHealth = this.health;
+    
     // First apply damage locally for immediate feedback
     this.takeDamage(damage);
+    console.log(`ENEMY: Local damage applied, health reduced from ${originalHealth} to ${this.health}`);
+    
+    // Record the pending action time to prevent host overrides
+    this.lastDamageTime = Date.now();
     
     // Then notify the host if in multiplayer mode
     if (networkManager && networkManager.network && !networkManager.isHost) {
       console.log(`NETWORK: Client applying ${damage} damage to enemy ${this.id}, isHeadshot=${isHeadshot}, notifying host`);
       
-      // Ensure we're actually sending the damage to the host with the correct action type
+      // Create action data with all necessary information
       const actionData = {
         enemyId: this.id,
         damage: damage,
         isHeadshot: isHeadshot,
-        timestamp: Date.now()
+        originalHealth: originalHealth,
+        newHealth: this.health,
+        isDead: this.health <= 0,
+        timestamp: this.lastDamageTime
       };
       
       // Send with reliable delivery
@@ -1054,6 +1070,20 @@ export class Enemy {
       // Log the action ID and current health after applying local damage
       if (actionId) {
         console.log(`NETWORK: Sent damage action ${actionId} for enemy ${this.id}, local health now: ${this.health}`);
+        
+        // Store this action in the enemy for reference (optional)
+        this.pendingDamageActions = this.pendingDamageActions || [];
+        this.pendingDamageActions.push({
+          actionId: actionId,
+          timestamp: this.lastDamageTime,
+          damage: damage,
+          newHealth: this.health
+        });
+        
+        // Limit the pending actions list to avoid memory growth
+        if (this.pendingDamageActions.length > 10) {
+          this.pendingDamageActions.shift(); // Remove oldest action
+        }
       } else {
         console.warn(`NETWORK: Failed to send damage action for enemy ${this.id}`);
       }

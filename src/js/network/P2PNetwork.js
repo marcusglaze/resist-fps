@@ -664,14 +664,14 @@ export class P2PNetwork {
     this.lastClientActionTime = Date.now();
     
     try {
-      const { enemyId, damage, isHeadshot, timestamp } = damageData;
+      const { enemyId, damage, isHeadshot, originalHealth, newHealth, isDead, timestamp } = damageData;
       
       if (!enemyId) {
         console.error("Invalid enemy damage data: missing enemyId", damageData);
         return null;
       }
       
-      console.log(`NETWORK: Host applying damage from client ${playerId}: ${damage} to enemy ${enemyId} (headshot: ${isHeadshot}, timestamp: ${timestamp})`);
+      console.log(`NETWORK: Host applying damage from client ${playerId}: ${damage} to enemy ${enemyId} (headshot: ${isHeadshot}, client health: ${newHealth}, timestamp: ${timestamp})`);
       
       // Find the enemy by ID
       const enemyManager = this.gameEngine.scene.room.enemyManager;
@@ -701,7 +701,11 @@ export class P2PNetwork {
           health: enemy.health,
           isDead: enemy.health <= 0,
           isHeadshot: isHeadshot,
-          timestamp: timestamp || Date.now()
+          timestamp: timestamp || Date.now(),
+          // Add comparison with client data
+          clientHealth: newHealth,
+          healthDifference: newHealth - enemy.health,
+          clientIsDead: isDead
         };
         
         // Send confirmation of damage back to ALL clients
@@ -1900,8 +1904,8 @@ export class P2PNetwork {
     }
     
     try {
-      const { enemyId, health, isDead } = data;
-      console.log(`Client received damage confirmation for enemy ${enemyId}: health=${health}, isDead=${isDead}`);
+      const { enemyId, health, isDead, timestamp } = data;
+      console.log(`Client received damage confirmation for enemy ${enemyId}: health=${health}, isDead=${isDead}, timestamp=${timestamp}`);
       
       // Find the enemy in the client's game
       const enemyManager = this.gameEngine.scene.room.enemyManager;
@@ -1912,6 +1916,13 @@ export class P2PNetwork {
       const enemy = enemyManager.enemies.find(e => e.id === enemyId);
       
       if (enemy) {
+        // Check if this is a stale update (happened before our most recent local action)
+        const now = Date.now();
+        if (enemy.lastDamageTime && (now - enemy.lastDamageTime < this.clientActionDebounceTime)) {
+          console.log(`Skipping enemy health update because local damage was applied recently (${now - enemy.lastDamageTime}ms ago)`);
+          return;
+        }
+        
         // Update the enemy's health locally to match the host's value
         const oldHealth = enemy.health;
         enemy.health = health;

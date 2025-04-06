@@ -945,6 +945,12 @@ export class PlayerControls {
       // We're good to shoot - update ammo count
       this.activeWeapon.currentAmmo--;
       
+      // Get damage values from the active weapon
+      const bodyDamage = this.activeWeapon.bodyDamage || 15; // Default to 15 if not set
+      const headDamage = this.activeWeapon.headDamage || bodyDamage * 2; // Default to double body damage
+      
+      console.log("SHOOTING: Weapon damage values - Body:", bodyDamage, "Head:", headDamage);
+      
       // Check for raycast hit
       this.castRay();
       console.log("SHOOTING: Ray cast results:", this.hitResult ? "Hit something" : "No hit");
@@ -1049,25 +1055,25 @@ export class PlayerControls {
                 
                 // Fallback to direct takeDamage with network notification
                 if (isHeadshot) {
-                  enemy.takeDamage(this.headshotDamage);
-                  console.log("SHOOTING: Applied headshot damage (fallback):", this.headshotDamage);
+                  enemy.takeDamage(headDamage);
+                  console.log("SHOOTING: Applied headshot damage (fallback):", headDamage);
                   // Manually send damage to host
                   if (networkManager && networkManager.network) {
                     networkManager.network.sendPlayerAction('damageEnemy', {
                       enemyId: enemy.id || 'unknown',
-                      damage: this.headshotDamage,
+                      damage: headDamage,
                       isHeadshot: true,
                       timestamp: Date.now()
                     });
                   }
                 } else {
-                  enemy.takeDamage(this.damage);
-                  console.log("SHOOTING: Applied body shot damage (fallback):", this.damage);
+                  enemy.takeDamage(bodyDamage);
+                  console.log("SHOOTING: Applied body shot damage (fallback):", bodyDamage);
                   // Manually send damage to host
                   if (networkManager && networkManager.network) {
                     networkManager.network.sendPlayerAction('damageEnemy', {
                       enemyId: enemy.id || 'unknown',
-                      damage: this.damage,
+                      damage: bodyDamage,
                       isHeadshot: false,
                       timestamp: Date.now()
                     });
@@ -1075,17 +1081,17 @@ export class PlayerControls {
                 }
                 
                 // Display damage numbers for feedback
-                this.displayDamageNumber(this.hitResult.point, isHeadshot ? this.headshotDamage : this.damage, isHeadshot);
+                this.displayDamageNumber(this.hitResult.point, isHeadshot ? headDamage : bodyDamage, isHeadshot);
               } else {
                 // Client-side damage with host notification
                 if (isHeadshot) {
-                  enemy.clientTakeDamage(this.headshotDamage, true, networkManager);
-                  console.log("SHOOTING: Applied headshot damage:", this.headshotDamage);
-                  this.displayDamageNumber(this.hitResult.point, this.headshotDamage, true);
+                  enemy.clientTakeDamage(headDamage, true, networkManager);
+                  console.log("SHOOTING: Applied headshot damage:", headDamage);
+                  this.displayDamageNumber(this.hitResult.point, headDamage, true);
                 } else {
-                  enemy.clientTakeDamage(this.damage, false, networkManager);
-                  console.log("SHOOTING: Applied body shot damage:", this.damage);
-                  this.displayDamageNumber(this.hitResult.point, this.damage, false);
+                  enemy.clientTakeDamage(bodyDamage, false, networkManager);
+                  console.log("SHOOTING: Applied body shot damage:", bodyDamage);
+                  this.displayDamageNumber(this.hitResult.point, bodyDamage, false);
                 }
               }
             } else {
@@ -1093,8 +1099,8 @@ export class PlayerControls {
               
               // Server-side or singleplayer damage
               if (isHeadshot) {
-                enemy.takeDamage(this.headshotDamage);
-                this.displayDamageNumber(this.hitResult.point, this.headshotDamage, true);
+                enemy.takeDamage(headshotDamage);
+                this.displayDamageNumber(this.hitResult.point, headshotDamage, true);
                 
                 // Award extra points for headshot kills
                 if (enemy.health <= 0) {
@@ -1103,8 +1109,8 @@ export class PlayerControls {
                   this.addPoints(this.headshotPoints);
                 }
               } else {
-                enemy.takeDamage(this.damage);
-                this.displayDamageNumber(this.hitResult.point, this.damage, false);
+                enemy.takeDamage(bodyDamage);
+                this.displayDamageNumber(this.hitResult.point, bodyDamage, false);
                 
                 // Award points for regular kills
                 if (enemy.health <= 0) {
