@@ -1005,11 +1005,19 @@ export class Room {
           }
         }
         
+        // Fix: Get networkManager from the player if available (fallback mechanism)
+        let networkManager = null;
+        if (this.gameEngine && this.gameEngine.networkManager) {
+          networkManager = this.gameEngine.networkManager;
+        } else if (this.player && this.player.gameEngine && this.player.gameEngine.networkManager) {
+          networkManager = this.player.gameEngine.networkManager;
+          console.log("DEBUG: Using networkManager from player.gameEngine instead");
+        }
+        
         // Check if we're in a multiplayer game as a client
-        const isClient = this.gameEngine && 
-                         this.gameEngine.networkManager && 
-                         !this.gameEngine.networkManager.isHost &&
-                         this.gameEngine.networkManager.isMultiplayer;
+        const isClient = networkManager && 
+                        !networkManager.isHost &&
+                        networkManager.isMultiplayer;
         
         console.log("WINDOW: Player is a client?", isClient);
         
@@ -1018,7 +1026,7 @@ export class Room {
         // Use client-side version if we're a client in multiplayer
         if (isClient) {
           console.log("WINDOW: Client is boarding window, using client-side method");
-          boardAdded = nearestWindow.clientAddBoard(this.gameEngine.networkManager);
+          boardAdded = nearestWindow.clientAddBoard(networkManager);
           console.log("WINDOW: Client-side board add result:", boardAdded);
         } else {
           // Otherwise use regular version for host or singleplayer
