@@ -7,7 +7,7 @@ import { P2PNetwork } from './P2PNetwork.js';
 import { Enemy } from '../objects/Enemy.js';
 import { RunnerZombie } from '../objects/RunnerZombie.js';
 import { SpitterZombie } from '../objects/SpitterZombie.js';
-import { TankZombie } from '../objects/TankZombie.js';
+import { CrawlingZombie } from '../objects/CrawlingZombie.js';
 
 export class NetworkManager {
   constructor(gameEngine) {
@@ -3158,8 +3158,10 @@ export class NetworkManager {
         enemy = new Enemy(null); // No target window yet
       } else if (enemyType === "runner") {
         enemy = new RunnerZombie(null);
-      } else if (enemyType === "tank") {
-        enemy = new TankZombie(null);
+      } else if (enemyType === "crawler") {
+        enemy = new CrawlingZombie(null);
+      } else if (enemyType === "spitter") {
+        enemy = new SpitterZombie(null);
       } else {
         // Fallback to standard enemy
         enemy = new Enemy(null);
