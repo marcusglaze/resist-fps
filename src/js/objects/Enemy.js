@@ -363,6 +363,8 @@ export class Enemy {
         if (this.player.isDead) {
           // Try to find alive remote players
           let foundLivingTarget = false;
+          let closestPlayerPosition = null;
+          let closestPlayerDistance = Infinity;
           
           // Look for network manager to find remote players
           if (this.manager && this.manager.gameEngine && 
@@ -371,26 +373,61 @@ export class Enemy {
             
             const remotePlayers = this.manager.gameEngine.networkManager.remotePlayers;
             
-            // Log only if we have remote players
-            if (remotePlayers.size > 0) {
+            // Only log if we have remote players to reduce spam
+            if (remotePlayers.size > 0 && Math.random() < 0.01) { // 1% chance to log
               console.log(`Zombie ${this.id}: Local player dead, checking ${remotePlayers.size} remote players for targets`);
             }
             
+            // Find the closest living remote player
             remotePlayers.forEach(player => {
               if (!player.isDead && player.position) {
                 foundLivingTarget = true;
-                console.log(`Zombie ${this.id}: Found living remote player to target`);
+                
+                // Calculate distance to this player
+                const distSquared = 
+                  Math.pow(this.instance.position.x - player.position.x, 2) + 
+                  Math.pow(this.instance.position.z - player.position.z, 2);
+                
+                // If this player is closer than our current closest
+                if (distSquared < closestPlayerDistance) {
+                  closestPlayerDistance = distSquared;
+                  closestPlayerPosition = player.position;
+                  
+                  // Log only occasionally to reduce spam
+                  if (Math.random() < 0.005) { // 0.5% chance
+                    console.log(`Zombie ${this.id}: Found living remote player to target`);
+                  }
+                }
               }
             });
           }
           
           // Either chase remote players or move randomly if none alive
-          if (foundLivingTarget || this._forceContinueUpdating) {
-            console.log(`Zombie ${this.id}: Continuing to chase remote players`);
-            this.chasePlayer(deltaTime);
-            this.tryAttackPlayer();
+          if (foundLivingTarget && closestPlayerPosition) {
+            // Only log intermittently to reduce spam
+            if (Math.random() < 0.01) { // 1% chance each frame
+              console.log(`Zombie ${this.id}: Chasing closest remote player`);
+            }
+            
+            // Chase the closest remote player
+            this.chaseRemotePlayer(closestPlayerPosition, deltaTime);
+            
+            // Try attack if we're close enough (using a reasonable attack range)
+            const distanceToPlayer = Math.sqrt(closestPlayerDistance);
+            if (distanceToPlayer < this.attackRange) {
+              // Attempt to attack - this will be broadcast to clients
+              this.attackRemotePlayer();
+            }
+          } else if (this._forceContinueUpdating) {
+            // If forced to continue but no living players, move randomly
+            if (Math.random() < 0.01) { // 1% chance to log
+              console.log(`Zombie ${this.id}: No living targets, but forced to continue - moving randomly`);
+            }
+            this.moveRandomly(deltaTime);
           } else {
-            console.log(`Zombie ${this.id}: No living targets, moving randomly`);
+            if (Math.random() < 0.01) { // 1% chance to log
+              console.log(`Zombie ${this.id}: No living targets, moving randomly`);
+            }
             this.moveRandomly(deltaTime);
           }
         } else {
@@ -1105,5 +1142,77 @@ export class Enemy {
     
     // Return local health for immediate feedback
     return this.health;
+  }
+
+  /**
+   * Chase a remote player
+   * @param {Object} playerPosition - The player position to chase
+   * @param {number} deltaTime - Time elapsed since last update
+   */
+  chaseRemotePlayer(playerPosition, deltaTime) {
+    // Calculate direction to player (only on x and z axes)
+    const direction = new THREE.Vector3(
+      playerPosition.x - this.instance.position.x,
+      0, // Keep y movement flat
+      playerPosition.z - this.instance.position.z
+    ).normalize();
+    
+    // Move towards player
+    const step = this.speed * deltaTime;
+    this.instance.position.x += direction.x * step;
+    this.instance.position.z += direction.z * step;
+    
+    // Ensure y position is at floor level
+    this.instance.position.y = this.floorLevel;
+    
+    // Look at target
+    this.instance.lookAt(new THREE.Vector3(
+      playerPosition.x,
+      this.floorLevel, // Look at player's height
+      playerPosition.z
+    ));
+    
+    // Enforce room boundaries
+    this.enforceRoomBoundaries();
+  }
+
+  /**
+   * Attack a remote player
+   */
+  attackRemotePlayer() {
+    // Only attack at a certain rate
+    const currentTime = performance.now() / 1000;
+    if (currentTime - this.lastAttackTime < 1 / this.attackRate) {
+      return;
+    }
+    
+    // Update last attack time
+    this.lastAttackTime = currentTime;
+    
+    // Play attack animation
+    this.playAttackAnimation();
+    
+    // If we have a network manager, send the attack event
+    if (this.manager && this.manager.gameEngine && 
+        this.manager.gameEngine.networkManager && 
+        this.manager.gameEngine.networkManager.network) {
+      
+      // Prepare attack data
+      const attackData = {
+        enemyId: this.id,
+        position: {
+          x: this.instance.position.x,
+          y: this.instance.position.y,
+          z: this.instance.position.z
+        },
+        timestamp: Date.now()
+      };
+      
+      // Send zombie attack event to all clients
+      this.manager.gameEngine.networkManager.network.broadcastToAll({
+        type: 'zombieAttack',
+        attackData: attackData
+      });
+    }
   }
 } 
