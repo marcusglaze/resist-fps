@@ -381,39 +381,116 @@ export class Window {
    * @returns {boolean} True if board was added, false if window is already fully boarded
    */
   addBoard() {
-    if (this.boardsCount >= this.maxBoards) {
+    if (this.boardsCount >= this.maxBoards || !this.isOpen) {
       return false;
     }
     
-    // Get next board position
-    const boardData = this.boardPositions[this.boardsCount];
-    
-    // Create board geometry
-    const boardGeometry = new THREE.BoxGeometry(
-      boardData.size.width,
-      boardData.size.height,
-      boardData.size.depth
+    // Create a new board
+    const board = new THREE.Mesh(
+      new THREE.BoxGeometry(this.width * 0.9, 0.2, 0.05),
+      this.boardMaterial
     );
     
-    // Create board mesh
-    const board = new THREE.Mesh(boardGeometry, this.boardMaterial);
-    board.position.copy(boardData.position);
-    board.rotation.z = boardData.rotation;
-    board.castShadow = true;
-    board.userData = { window: true, isBoard: true };
+    // Position the board in the window
+    const spacing = this.height / (this.maxBoards + 1);
+    const offset = (this.boardsCount + 1) * spacing - this.height / 2;
     
-    // Add to instance and tracking arrays
+    board.position.set(0, offset, 0);
+    
+    // Add slight rotation for visual interest
+    board.rotation.z = (Math.random() - 0.5) * 0.05;
+    
+    // Add board to container
     this.instance.add(board);
     this.boards.push(board);
-    
-    // Add full health to the board
-    this.boardHealths.push(this.boardMaxHealth);
-    
-    // Increment boards count
     this.boardsCount++;
     
-    // Return success
+    // Initialize board health
+    this.boardHealths.push(this.boardMaxHealth);
+    
     return true;
+  }
+
+  /**
+   * Client-side variant that also notifies host
+   * @param {NetworkManager} networkManager - Reference to the network manager
+   */
+  clientAddBoard(networkManager) {
+    if (!networkManager || !networkManager.network) {
+      console.warn("Cannot add board as client: no network manager");
+      return false;
+    }
+    
+    // First add the board locally
+    const success = this.addBoard();
+    
+    if (success) {
+      // Then send the action to the host
+      console.log("Client adding board to window, notifying host");
+      networkManager.network.sendPlayerAction('addWindowBoard', {
+        windowIndex: this.windowIndex, // Make sure windowIndex is set when creating window
+        boardsCount: this.boardsCount,
+        boardHealths: this.boardHealths
+      });
+      
+      return true;
+    }
+    
+    return false;
+  }
+  
+  /**
+   * Client-side variant for removing a board that also notifies host
+   * @param {NetworkManager} networkManager - Reference to the network manager
+   */
+  clientRemoveBoard(networkManager) {
+    if (!networkManager || !networkManager.network) {
+      console.warn("Cannot remove board as client: no network manager");
+      return false;
+    }
+    
+    // First remove the board locally
+    const success = this.removeBoard();
+    
+    if (success) {
+      // Then send the action to the host
+      console.log("Client removing board from window, notifying host");
+      networkManager.network.sendPlayerAction('removeWindowBoard', {
+        windowIndex: this.windowIndex,
+        boardsCount: this.boardsCount,
+        boardHealths: this.boardHealths
+      });
+      
+      return true;
+    }
+    
+    return false;
+  }
+  
+  /**
+   * Client-side variant for damaging a board that also notifies host
+   * @param {number} damage - Amount of damage to apply
+   * @param {NetworkManager} networkManager - Reference to the network manager
+   */
+  clientDamageBoard(damage, networkManager) {
+    if (!networkManager || !networkManager.network) {
+      console.warn("Cannot damage board as client: no network manager");
+      return false;
+    }
+    
+    // First damage the board locally
+    const result = this.damageBoard(damage);
+    
+    // Then send the action to the host
+    console.log("Client damaging window board, notifying host");
+    networkManager.network.sendPlayerAction('damageWindowBoard', {
+      windowIndex: this.windowIndex,
+      boardsCount: this.boardsCount,
+      boardHealths: this.boardHealths,
+      boardsRemoved: result.boardsRemoved
+    });
+    
+    return result;
   }
 
   /**

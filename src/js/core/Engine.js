@@ -5,6 +5,7 @@ import { PlayerControls } from '../controls/PlayerControls';
 import { StartMenu } from './StartMenu';
 import { EnemyManager } from '../objects/EnemyManager';
 import { NetworkManager } from '../network/NetworkManager.js';
+import { SoundManager } from './SoundManager.js';
 
 /**
  * Main engine class that ties all components together
@@ -46,6 +47,9 @@ export class Engine {
     
     // Create start menu
     this.startMenu = new StartMenu(this);
+    
+    // Create sound manager
+    this.soundManager = new SoundManager(this);
     
     // Animation timing variables
     this.then = performance.now();
@@ -391,6 +395,11 @@ export class Engine {
       this.audioManager.setMusicVolume(settings.musicVolume || 0.5);
       this.audioManager.setSoundVolume(settings.soundVolume || 0.8);
       this.audioManager.playBackgroundMusic();
+    }
+    
+    // Initialize sound manager if needed
+    if (this.soundManager && !this.soundManager.initialized) {
+      this.soundManager.init();
     }
     
     // Set game as active

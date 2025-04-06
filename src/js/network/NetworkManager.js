@@ -132,6 +132,7 @@ export class NetworkManager {
     this.isMultiplayer = true;
     this.isHost = false;
     this.hostId = hostId;
+    this.hostDeclaredGameOver = false; // Track if host considered game over
     
     this.updateConnectionStatus('Connecting...');
     
@@ -145,6 +146,13 @@ export class NetworkManager {
     try {
       await this.network.joinGame(hostId);
       this.isConnected = true;
+      
+      // Pre-initialize sound effects before starting game
+      // This fixes the sound effect bug on client join
+      if (this.gameEngine.soundManager) {
+        console.log("Pre-loading sound effects for client");
+        await this.gameEngine.soundManager.preloadSounds();
+      }
       
       // Start the game on the client side
       console.log("Starting the game as a client");
@@ -1927,44 +1935,47 @@ export class NetworkManager {
         // Reset game state
         this.gameEngine.isGameOver = false;
       } else if (status.isGameOver) {
-        // Host died but client is still alive - don't show game over screen
+        // Host died but client is still alive - store this state but don't show screen yet
         console.log("Host died but client is still alive - continuing play");
-        // Don't set the game over flag for the client
-        // this.gameEngine.isGameOver = false;
+        
+        // We track that the host considers the game over, but we won't show UI yet
+        this.hostDeclaredGameOver = true;
+        
+        // Check if all players besides this client are dead
+        let allOtherPlayersDead = true;
+        Object.entries(status.playerPositions || {}).forEach(([playerId, position]) => {
+          if (playerId !== this.network.clientId && !position.isDead) {
+            allOtherPlayersDead = false;
+          }
+        });
+        
+        if (allOtherPlayersDead) {
+          console.log("All other players are dead, but client is still alive");
+        }
       }
     }
     
     // Handle pause state
     if (status.isPaused !== undefined && status.isPaused !== this.gameEngine.isPaused) {
       if (status.isPaused) {
-        // Host paused the game
-        console.log("Host paused the game, updating client pause state");
-        
-        // Set the pause state first
-        this.gameEngine.isPaused = true;
-        
-        // If we already have a pause menu, don't create another one
-        if (!document.getElementById('pause-menu')) {
-          this.gameEngine.pauseGame();
-        }
+        // Pause the game if the host paused
+        console.log("Host paused the game, pausing client");
+        this.gameEngine.pauseGame();
       } else {
-        // Host resumed the game
-        console.log("Host resumed the game, updating client pause state");
-        
-        // Force update the pause state
-        this.gameEngine.isPaused = false;
-        
-        // If we have a pause menu, remove it
-        const pauseMenu = document.getElementById('pause-menu');
-        if (pauseMenu) {
-          pauseMenu.remove();
-        }
-        
-        // Resume the game engine with a small delay to ensure UI updates first
-        setTimeout(() => {
-          console.log("Executing client resumeGame after host command");
-          this.gameEngine.resumeGame();
-        }, 50);
+        // Resume the game if the host resumed
+        console.log("Host resumed the game, resuming client");
+        this.gameEngine.resumeGame();
+      }
+    }
+    
+    // Handle round status
+    if (status.currentRound !== undefined && this.gameEngine.scene && 
+        this.gameEngine.scene.room && this.gameEngine.scene.room.enemyManager) {
+      this.gameEngine.scene.room.enemyManager.currentRound = status.currentRound;
+      
+      // Show round change notification if applicable
+      if (this.gameEngine.ui && status.roundChanged) {
+        this.gameEngine.ui.showRoundChangeMessage(status.currentRound);
       }
     }
   }

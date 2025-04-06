@@ -466,6 +466,20 @@ export class P2PNetwork {
         }
         break;
         
+      case 'enemyDamageConfirmed':
+        // Host confirmed damage to an enemy
+        if (!this.isHost && this.gameEngine) {
+          this.handleEnemyDamageConfirmation(data);
+        }
+        break;
+        
+      case 'enemyDamageError':
+        // Host reported error with enemy damage
+        if (!this.isHost) {
+          console.warn(`Error damaging enemy: ${data.error} (Enemy ID: ${data.enemyId})`);
+        }
+        break;
+        
       case 'hostDisconnect':
         // Host is disconnecting, clean up
         console.log("Host is disconnecting:", data.message);
@@ -498,6 +512,15 @@ export class P2PNetwork {
     if (action.type === 'damageEnemy' && this.isHost) {
       // Apply damage to the enemy if we're the host
       this.applyEnemyDamage(action.data, playerId);
+    } else if (action.type === 'addWindowBoard' && this.isHost) {
+      // Handle window boarding from client
+      this.applyWindowBoarding(action.data, playerId);
+    } else if (action.type === 'removeWindowBoard' && this.isHost) {
+      // Handle window board removal from client
+      this.applyWindowBoardRemoval(action.data, playerId);
+    } else if (action.type === 'damageWindowBoard' && this.isHost) {
+      // Handle window board damage from client
+      this.applyWindowBoardDamage(action.data, playerId);
     }
     
     // If we're the host, broadcast this to all other clients
@@ -535,6 +558,14 @@ export class P2PNetwork {
         enemy.takeDamage(damage);
         console.log(`Applied ${damage} damage to enemy ${enemyId}, health now: ${enemy.health}`);
         
+        // Send confirmation of damage back to the client who shot
+        this.sendToPlayer(playerId, {
+          type: 'enemyDamageConfirmed',
+          enemyId: enemyId,
+          health: enemy.health,
+          isDead: enemy.health <= 0
+        });
+        
         // Ensure immediate state update to all clients
         if (enemy.health <= 0) {
           console.log(`Enemy ${enemyId} killed by client ${playerId}`);
@@ -544,13 +575,155 @@ export class P2PNetwork {
             if (this.broadcastGameState) {
               this.broadcastGameState(true); // Force immediate update
             }
-          }, 100);
+          }, 50); // Reduced delay for faster feedback
+        } else {
+          // Even if the enemy isn't dead, still update all clients after a hit
+          // This keeps all clients updated with the enemy's current health
+          setTimeout(() => {
+            if (this.broadcastGameState) {
+              this.broadcastGameState(true); // Force update for any damage
+            }
+          }, 50);
         }
       } else {
         console.warn(`Enemy with ID ${enemyId} not found`);
+        // Send error back to client
+        this.sendToPlayer(playerId, {
+          type: 'enemyDamageError',
+          enemyId: enemyId,
+          error: 'Enemy not found'
+        });
       }
     } catch (error) {
       console.error("Error applying enemy damage:", error);
+    }
+  }
+  
+  /**
+   * Apply window boarding action from client (host only)
+   * @param {Object} boardData - The window boarding data
+   * @param {string} playerId - The ID of the player who boarded the window
+   */
+  applyWindowBoarding(boardData, playerId) {
+    if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
+        !this.gameEngine.scene.room) {
+      console.warn("Cannot apply window boarding: not host or game scene not fully initialized");
+      return;
+    }
+    
+    try {
+      const { windowIndex, boardsCount, boardHealths } = boardData;
+      console.log(`Host applying window boarding from client ${playerId}: window ${windowIndex}, boards ${boardsCount}`);
+      
+      // Get the window by index
+      const room = this.gameEngine.scene.room;
+      const window = room.windows[windowIndex];
+      
+      if (window) {
+        // Update the window state by adding a board
+        window.addBoard();
+        
+        // Force a game state update to all clients
+        setTimeout(() => {
+          if (this.broadcastGameState) {
+            this.broadcastGameState(true); // Force immediate update
+          }
+        }, 50);
+      } else {
+        console.warn(`Window with index ${windowIndex} not found`);
+      }
+    } catch (error) {
+      console.error("Error applying window boarding:", error);
+    }
+  }
+  
+  /**
+   * Apply window board removal action from client (host only)
+   * @param {Object} boardData - The window board removal data
+   * @param {string} playerId - The ID of the player who removed the board
+   */
+  applyWindowBoardRemoval(boardData, playerId) {
+    if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
+        !this.gameEngine.scene.room) {
+      console.warn("Cannot apply window board removal: not host or game scene not fully initialized");
+      return;
+    }
+    
+    try {
+      const { windowIndex, boardsCount, boardHealths } = boardData;
+      console.log(`Host applying window board removal from client ${playerId}: window ${windowIndex}, boards ${boardsCount}`);
+      
+      // Get the window by index
+      const room = this.gameEngine.scene.room;
+      const window = room.windows[windowIndex];
+      
+      if (window) {
+        // Update the window state by removing a board
+        window.removeBoard();
+        
+        // Force a game state update to all clients
+        setTimeout(() => {
+          if (this.broadcastGameState) {
+            this.broadcastGameState(true); // Force immediate update
+          }
+        }, 50);
+      } else {
+        console.warn(`Window with index ${windowIndex} not found`);
+      }
+    } catch (error) {
+      console.error("Error applying window board removal:", error);
+    }
+  }
+  
+  /**
+   * Apply window board damage action from client (host only)
+   * @param {Object} boardData - The window board damage data
+   * @param {string} playerId - The ID of the player or entity who damaged the board
+   */
+  applyWindowBoardDamage(boardData, playerId) {
+    if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
+        !this.gameEngine.scene.room) {
+      console.warn("Cannot apply window board damage: not host or game scene not fully initialized");
+      return;
+    }
+    
+    try {
+      const { windowIndex, boardsCount, boardHealths, boardsRemoved } = boardData;
+      console.log(`Host applying window board damage from ${playerId}: window ${windowIndex}, boards ${boardsCount}`);
+      
+      // Get the window by index
+      const room = this.gameEngine.scene.room;
+      const window = room.windows[windowIndex];
+      
+      if (window) {
+        // Update the window state by syncing the health values
+        window.boardHealths = [...boardHealths];
+        
+        // If any boards were removed due to damage, remove them on the host side too
+        if (boardsRemoved && boardsRemoved > 0) {
+          for (let i = 0; i < boardsRemoved; i++) {
+            window.removeBoard();
+          }
+        }
+        
+        // Update board appearances
+        window.boardHealths.forEach((health, boardIndex) => {
+          if (window.updateBoardAppearance) {
+            window.updateBoardAppearance(boardIndex);
+          }
+        });
+        
+        // Force a game state update to all clients
+        setTimeout(() => {
+          if (this.broadcastGameState) {
+            this.broadcastGameState(true); // Force immediate update
+          }
+        }, 50);
+      } else {
+        console.warn(`Window with index ${windowIndex} not found`);
+      }
+    } catch (error) {
+      console.error("Error applying window board damage:", error);
     }
   }
   
@@ -1278,5 +1451,40 @@ export class P2PNetwork {
     }
     
     return broadcastSuccess;
+  }
+  
+  /**
+   * Handle enemy damage confirmation from host (client only)
+   * @param {Object} data - The damage confirmation data
+   */
+  handleEnemyDamageConfirmation(data) {
+    if (this.isHost || !this.gameEngine || !this.gameEngine.scene || 
+        !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
+      return;
+    }
+    
+    try {
+      const { enemyId, health, isDead } = data;
+      console.log(`Client received damage confirmation for enemy ${enemyId}: health=${health}, isDead=${isDead}`);
+      
+      // Find the enemy in the client's game
+      const enemyManager = this.gameEngine.scene.room.enemyManager;
+      const enemy = enemyManager.enemies.find(e => e.id === enemyId);
+      
+      if (enemy) {
+        // Update the enemy's health locally to match the host's value
+        enemy.health = health;
+        
+        // If the enemy is dead according to the host, kill it locally
+        if (isDead && enemy.health > 0) {
+          enemy.health = 0;
+          if (typeof enemy.die === 'function') {
+            enemy.die();
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error handling enemy damage confirmation:", error);
+    }
   }
 } 
