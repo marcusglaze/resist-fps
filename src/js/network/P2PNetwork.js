@@ -19,6 +19,10 @@ export class P2PNetwork {
     this.stateUpdateInterval = 50; // ms between state updates
     this.peerJSLoaded = false;
     
+    // Add debounce mechanism for client actions
+    this.lastClientActionTime = 0;
+    this.clientActionDebounceTime = 150; // ms to wait after client actions before override
+    
     // Add window close handler to ensure proper cleanup
     window.addEventListener('beforeunload', this._handleWindowClose.bind(this));
     
@@ -513,6 +517,12 @@ export class P2PNetwork {
    * @param {string} playerId - The ID of the player who performed the action
    */
   handlePlayerAction(action, playerId) {
+    // Record the time of this client action to prevent immediate state overrides
+    if (this.isHost) {
+      this.lastClientActionTime = Date.now();
+      console.log(`Client action received, debouncing state updates for ${this.clientActionDebounceTime}ms`);
+    }
+    
     // This would be implemented based on the game mechanics
     console.log(`Player ${playerId} performed action:`, action);
     
@@ -552,6 +562,9 @@ export class P2PNetwork {
       console.warn("Cannot apply enemy damage: not host or game scene not fully initialized");
       return;
     }
+    
+    // Record the time of this client action to prevent immediate state overrides
+    this.lastClientActionTime = Date.now();
     
     try {
       const { enemyId, damage, isHeadshot, timestamp } = damageData;
@@ -600,12 +613,12 @@ export class P2PNetwork {
         if (enemy.health <= 0) {
           console.log(`Enemy ${enemyId} killed by client ${playerId}`);
           
-          // Force a game state update after a short delay to ensure death is synchronized
+          // Force a game state update after the debounce period
           setTimeout(() => {
             if (this.broadcastGameState) {
               this.broadcastGameState(true); // Force immediate update
             }
-          }, 50); // Reduced delay for faster feedback
+          }, this.clientActionDebounceTime + 50); // Delayed update
         } else {
           // Even if the enemy isn't dead, still update all clients after a hit
           // This keeps all clients updated with the enemy's current health
@@ -613,7 +626,7 @@ export class P2PNetwork {
             if (this.broadcastGameState) {
               this.broadcastGameState(true); // Force update for any damage
             }
-          }, 50);
+          }, this.clientActionDebounceTime + 50); // Delayed update
         }
       } else {
         console.warn(`Enemy with ID ${enemyId} not found. Available IDs: ${enemyManager.enemies.map(e => e.id).join(', ')}`);
@@ -640,6 +653,9 @@ export class P2PNetwork {
       console.warn("Cannot apply window boarding: not host or game scene not fully initialized");
       return;
     }
+    
+    // Record the time of this client action to prevent immediate state overrides
+    this.lastClientActionTime = Date.now();
     
     try {
       const { windowIndex, boardsCount, boardHealths, timestamp } = boardData;
@@ -680,15 +696,15 @@ export class P2PNetwork {
             console.log(`Updated board health values: ${window.boardHealths.join(', ')}`);
           }
           
-          // Force a game state update to all clients
+          // Force a game state update to all clients AFTER the debounce period
           setTimeout(() => {
             if (this.broadcastGameState) {
-              console.log("Broadcasting updated game state to all clients");
+              console.log("Broadcasting updated game state to all clients (after window boarding)");
               this.broadcastGameState(true); // Force immediate update
             }
-          }, 50);
+          }, this.clientActionDebounceTime + 50);
           
-          // Send a specific window update event
+          // Send a specific window update event immediately
           this.broadcastToAll({
             type: 'windowUpdated',
             windowIndex: windowIndex,
@@ -1578,6 +1594,12 @@ export class P2PNetwork {
     if (!this.isHost || !this.isConnected) return false;
     
     const now = Date.now();
+    
+    // Don't send updates if we recently received a client action (unless forced)
+    if (!force && now - this.lastClientActionTime < this.clientActionDebounceTime) {
+      console.log(`Skipping state broadcast during client action debounce period (${this.clientActionDebounceTime - (now - this.lastClientActionTime)}ms remaining)`);
+      return false;
+    }
     
     // Rate limit state updates unless forced
     if (!force && now - this.lastStateSent < this.stateUpdateInterval) {
