@@ -907,6 +907,12 @@ export class Engine {
     // Add to the document
     document.body.appendChild(spectateContainer);
     
+    // IMPORTANT: Make sure enemies are not paused when in spectator mode
+    if (this.scene && this.scene.room && this.scene.room.enemyManager) {
+      console.log("Explicitly unpausing enemies for spectator mode");
+      this.scene.room.enemyManager.setPaused(false);
+    }
+    
     // Enable spectator camera to follow surviving players
     this.enableSpectatorMode();
   }
@@ -945,6 +951,15 @@ export class Engine {
     
     // Hide UI elements that shouldn't be visible in spectator mode
     this.hidePlayerUI();
+    
+    // Ensure enemies are not paused while spectating
+    if (this.scene && this.scene.room && this.scene.room.enemyManager) {
+      // Double-check that enemies are not paused
+      if (this.scene.room.enemyManager.isPaused) {
+        console.log("Found enemies paused during spectator mode - unpausing");
+        this.scene.room.enemyManager.setPaused(false);
+      }
+    }
     
     // Set up an interval to update the spectator camera position
     this.spectatorInterval = setInterval(() => {
@@ -987,6 +1002,15 @@ export class Engine {
         // Set camera rotation to match player's looking direction
         if (targetPlayer.position.rotationY !== undefined) {
           this.controls.camera.rotation.y = targetPlayer.position.rotationY;
+        }
+      }
+      
+      // Periodically check if enemies are still unpaused (every 2 seconds)
+      if (this.scene && this.scene.room && this.scene.room.enemyManager && 
+          Math.random() < 0.04) { // ~4% chance per frame (roughly every 2-3 seconds)
+        if (this.scene.room.enemyManager.isPaused) {
+          console.log("Enemies became paused during spectator mode - unpausing");
+          this.scene.room.enemyManager.setPaused(false);
         }
       }
     }, 50); // Update 20 times per second
