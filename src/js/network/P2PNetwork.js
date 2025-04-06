@@ -1518,16 +1518,16 @@ export class P2PNetwork {
       
       // Detailed connection debugging
       console.log("NETWORK: Connection details:", {
-        peerConnectionExists: !!this.peerConnection,
+        peerExists: !!this.peer,
         hostConnectionExists: !!this.hostConnection,
         clientId: this.clientId, 
         hostId: this.hostId,
-        connectionState: this.peerConnection ? this.peerConnection.connectionState : 'no peer connection',
+        connectionState: this.peer ? 'exists' : 'no peer connection',
         hostConnectionState: this.hostConnection ? 'exists' : 'missing'
       });
       
       // Send to host
-      if (this.peerConnection && this.hostConnection) {
+      if (this.peer && this.hostConnection) {
         console.log(`NETWORK: Client sending action '${actionType}' to host`);
         this.hostConnection.send(message);
         return actionId;
