@@ -2681,4 +2681,55 @@ export class NetworkManager {
       });
     }
   }
+  
+  /**
+   * Get the host player's current state
+   * @returns {Object|null} The host player's state or null if not found
+   */
+  getHostPlayerState() {
+    if (!this.network || !this.network.hostId) {
+      console.log("Cannot get host player state: network or hostId not available");
+      return null;
+    }
+    
+    // If we are the host, return our own state
+    if (this.isHost) {
+      return {
+        health: this.gameEngine.controls.health,
+        isDead: this.gameEngine.controls.isDead
+      };
+    }
+    
+    // Otherwise look for the host in remotePlayers
+    const hostData = this.remotePlayers.get(this.network.hostId);
+    if (!hostData) {
+      console.log(`Host player data not found for ID: ${this.network.hostId}`);
+      return null;
+    }
+    
+    return hostData;
+  }
+  
+  /**
+   * Check if any remote player (excluding host) is alive
+   * @returns {boolean} True if any remote player is alive
+   */
+  isAnyRemotePlayerAlive() {
+    if (!this.remotePlayers || this.remotePlayers.size === 0) {
+      return false;
+    }
+    
+    let anyAlive = false;
+    const hostId = this.network ? this.network.hostId : null;
+    
+    this.remotePlayers.forEach((player, playerId) => {
+      // Skip the host player in this check
+      if (playerId !== hostId && !player.isDead) {
+        anyAlive = true;
+        console.log(`Found alive remote player: ${playerId}`);
+      }
+    });
+    
+    return anyAlive;
+  }
 } 

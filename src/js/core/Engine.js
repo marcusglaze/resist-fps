@@ -558,6 +558,9 @@ export class Engine {
     if (this.networkManager.isHost) {
       const allPlayersDead = this.checkAllPlayersDead();
       
+      // Log the result of our check with clear visibility
+      console.log(`HOST GAME OVER CHECK: All players dead status: ${allPlayersDead}`);
+      
       // If all players are dead, show game over with host controls
       if (allPlayersDead) {
         console.log("Host: All players are dead, showing game over screen");
@@ -572,7 +575,23 @@ export class Engine {
       const gameState = this.networkManager.network.getGameState();
       const allPlayersDead = gameState.gameStatus?.allPlayersDead || false;
       
-      if (allPlayersDead) {
+      // Log what we received from the host
+      console.log(`CLIENT GAME OVER CHECK: Received allPlayersDead=${allPlayersDead} from host`);
+      
+      // Add a fallback check - if our local player is dead and the host player is dead
+      const localPlayerDead = this.controls && this.controls.isDead;
+      const hostPlayerDead = this.networkManager.getHostPlayerState()?.isDead || false;
+      const otherPlayersAlive = this.networkManager.isAnyRemotePlayerAlive();
+      
+      console.log(`CLIENT GAME OVER CHECK: Local dead=${localPlayerDead}, Host dead=${hostPlayerDead}, Other players alive=${otherPlayersAlive}`);
+      
+      // We can force allPlayersDead=true if: our player is dead AND host is dead AND no other remote players are alive
+      const forcedAllPlayersDead = localPlayerDead && hostPlayerDead && !otherPlayersAlive;
+      if (forcedAllPlayersDead && !allPlayersDead) {
+        console.log("CLIENT GAME OVER CHECK: Forcing all players dead state since all checks indicate no one is alive");
+      }
+      
+      if (allPlayersDead || forcedAllPlayersDead) {
         // All players are dead, show game over screen
         console.log("Client: All players dead, waiting for host to restart");
         this.networkManager.showMultiplayerGameOverScreen(true);

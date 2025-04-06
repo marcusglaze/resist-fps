@@ -348,7 +348,7 @@ export class Enemy {
     this.updateHealthBarRotation();
     
     // Update attack animation if active
-    if (this.attackEffect.material.visible) {
+    if (this.attackEffect && this.attackEffect.material && this.attackEffect.material.visible) {
       this.updateAttackAnimation(deltaTime);
     }
     
@@ -359,29 +359,38 @@ export class Enemy {
     if (this.insideRoom) {
       // Check if we have a player reference before chasing
       if (this.player) {
-        // If player is dead but we're forced to continue, find other targets
-        if (this.player.isDead && !this._forceContinueUpdating) {
+        // If local player is dead, check for remote players to target
+        if (this.player.isDead) {
           // Try to find alive remote players
           let foundLivingTarget = false;
           
+          // Look for network manager to find remote players
           if (this.manager && this.manager.gameEngine && 
               this.manager.gameEngine.networkManager && 
               this.manager.gameEngine.networkManager.remotePlayers) {
             
             const remotePlayers = this.manager.gameEngine.networkManager.remotePlayers;
+            
+            // Log only if we have remote players
+            if (remotePlayers.size > 0) {
+              console.log(`Zombie ${this.id}: Local player dead, checking ${remotePlayers.size} remote players for targets`);
+            }
+            
             remotePlayers.forEach(player => {
               if (!player.isDead && player.position) {
                 foundLivingTarget = true;
+                console.log(`Zombie ${this.id}: Found living remote player to target`);
               }
             });
           }
           
-          if (foundLivingTarget) {
-            // Chase remote players
+          // Either chase remote players or move randomly if none alive
+          if (foundLivingTarget || this._forceContinueUpdating) {
+            console.log(`Zombie ${this.id}: Continuing to chase remote players`);
             this.chasePlayer(deltaTime);
             this.tryAttackPlayer();
           } else {
-            // No living targets, just move randomly
+            console.log(`Zombie ${this.id}: No living targets, moving randomly`);
             this.moveRandomly(deltaTime);
           }
         } else {
@@ -397,9 +406,9 @@ export class Enemy {
     }
     
     // If window is boarded, attack it
-    if (this.targetWindow.boardsCount > 0) {
+    if (this.targetWindow && this.targetWindow.boardsCount > 0) {
       this.attackWindow(deltaTime);
-    } else {
+    } else if (this.targetWindow) {
       // Window has no boards, move inside
       this.moveTowardsWindow(deltaTime);
       
@@ -412,6 +421,9 @@ export class Enemy {
       if (horizDistance < 0.5) {
         this.enterRoom();
       }
+    } else {
+      // No target window, move randomly
+      this.moveRandomly(deltaTime);
     }
   }
 

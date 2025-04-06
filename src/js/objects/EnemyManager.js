@@ -202,41 +202,54 @@ export class EnemyManager {
       }
     }
     
-    // Update all existing enemies
-    this.enemies.forEach(enemy => {
-      // Always update enemies if there are living remote players, even if local player is dead
-      if (enemy._forceContinueUpdating || (enemy.player === this.player && !this.player.isDead)) {
-        // Ensure enemy has correct player reference
-        if (this.player.isDead && enemy.player === this.player) {
-          // For zombies that were tracking the now-dead host player,
-          // explicitly set them to search for remote players
-          enemy.state = 'moving';
-          if (typeof enemy.startMoving === 'function') {
-            enemy.startMoving();
+    // Check if there are living remote players when the host player is dead
+    let hasLivingRemotePlayers = false;
+    
+    if (this.player && this.player.isDead && this.gameEngine && this.gameEngine.networkManager) {
+      const remotePlayers = this.gameEngine.networkManager.remotePlayers;
+      if (remotePlayers && remotePlayers.size > 0) {
+        remotePlayers.forEach(player => {
+          if (!player.isDead) {
+            hasLivingRemotePlayers = true;
           }
-        }
-        
-        // Make sure enemy still updates even if player is dead
-        enemy.update(deltaTime);
-      } else if (this.gameEngine && this.gameEngine.networkManager && this.gameEngine.networkManager.isHost) {
-        // For host with no living players, still update positions to sync with clients
-        // This prevents zombies from appearing frozen on clients
-        enemy.update(deltaTime);
+        });
       }
       
-      // Safety check: ensure enemies with 0 or negative health are marked for removal
-      if (enemy.health <= 0 && !enemy.markedForRemoval && !enemy.isDead) {
-        enemy.die();
+      if (hasLivingRemotePlayers) {
+        console.log("HOST PLAYER DEAD BUT REMOTE PLAYERS ALIVE: CONTINUING ENEMY UPDATES");
+      }
+    }
+    
+    // Flag to force enemies to continue updating
+    const shouldForceUpdate = hasLivingRemotePlayers;
+    
+    // Update all existing enemies
+    this.enemies.forEach(enemy => {
+      // Update if:
+      // 1. Enemy is flagged to force continue
+      // 2. Host player is alive
+      // 3. Host player is dead but there are living remote players
+      if (enemy._forceContinueUpdating || 
+          (enemy.player === this.player && !this.player.isDead) ||
+          shouldForceUpdate) {
+        
+        // Flag the enemy to continue updating regardless of local player state
+        if (shouldForceUpdate) {
+          enemy._forceContinueUpdating = true;
+        }
+        
+        // Ensure enemy has correct player reference
+        if (!enemy.player && this.player) {
+          enemy.setPlayer(this.player);
+        }
+        
+        // Update the enemy
+        enemy.update(deltaTime);
       }
     });
     
-    // Remove dead enemies
+    // Remove dead enemies that have completed their death animation
     this.removeDeadEnemies();
-    
-    // Check if round is complete
-    if (this.roundActive && this.zombiesRemaining <= 0 && this.enemies.length === 0) {
-      this.endRound();
-    }
   }
   
   /**
@@ -323,22 +336,42 @@ export class EnemyManager {
   }
   
   /**
-   * Update the round state
+   * Update round state (handle transitions)
    * @param {number} deltaTime - Time elapsed since last update
    */
   updateRoundState(deltaTime) {
-    // If no round is active, check if we should start a new one
-    if (!this.roundActive) {
-      this.timeSinceLastRound += deltaTime;
+    // Update time since last round
+    this.timeSinceLastRound += deltaTime;
+    
+    // Check if we should start a new round
+    if (!this.roundActive && this.timeSinceLastRound > this.roundChangeDelay) {
+      // Check for living players before starting new round
+      const isHostPlayerDead = this.player && this.player.isDead;
+      let hasLivingRemotePlayers = false;
       
-      // Start a new round after the delay
-      if (this.timeSinceLastRound >= this.roundChangeDelay) {
-        this.startNextRound();
-      } else if (this.currentRound > 0) {
-        // Show countdown to next round if not the first round
-        const timeRemaining = Math.ceil(this.roundChangeDelay - this.timeSinceLastRound);
-        this.updateRoundDisplay(`Next Round in: ${timeRemaining}`);
+      // If host player is dead, check for living remote players
+      if (isHostPlayerDead && this.gameEngine && this.gameEngine.networkManager) {
+        const remotePlayers = this.gameEngine.networkManager.remotePlayers;
+        if (remotePlayers && remotePlayers.size > 0) {
+          remotePlayers.forEach(player => {
+            if (!player.isDead) {
+              hasLivingRemotePlayers = true;
+            }
+          });
+        }
       }
+      
+      // Start next round if host player is alive OR there are living remote players
+      if (!isHostPlayerDead || hasLivingRemotePlayers) {
+        this.startNextRound();
+      } else {
+        console.log("Not starting new round - no living players");
+      }
+    }
+    
+    // Check if round is complete
+    if (this.roundActive && this.zombiesRemaining <= 0 && this.enemies.length === 0) {
+      this.endRound();
     }
   }
   

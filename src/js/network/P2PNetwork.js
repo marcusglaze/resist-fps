@@ -16,7 +16,8 @@ export class P2PNetwork {
     this.onGameStateUpdate = null;
     this.onError = null;
     this.lastStateSent = 0;
-    this.stateUpdateInterval = 50; // ms between state updates
+    this.lastStateSentLog = 0; // For throttling log messages
+    this.stateUpdateInterval = 1000; // Send updates every second
     this.peerJSLoaded = false;
     
     // Direct reference to the host connection (for clients)
@@ -24,7 +25,7 @@ export class P2PNetwork {
     
     // Add debounce mechanism for client actions
     this.lastClientActionTime = 0;
-    this.clientActionDebounceTime = 150; // ms to wait after client actions before override
+    this.clientActionDebounceTime = 500; // ms to wait after client action before broadcasting state
     
     // Tracking for reliable action delivery
     this._pendingActions = {};
@@ -1290,22 +1291,31 @@ export class P2PNetwork {
     // Check local player
     const localPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
     
-    // If the local player (host) is alive, then not all players are dead
-    if (!localPlayerDead) return false;
+    // Log local player state
+    console.log(`DEATH STATE CHECK: Local player (host) is ${localPlayerDead ? 'dead' : 'alive'}`);
     
-    // Check remote players
+    // Always check remote players regardless of local player state
     let allRemotePlayersDead = true;
+    let remotePlayerCount = 0;
     
     if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers.size > 0) {
-      this.gameEngine.networkManager.remotePlayers.forEach(player => {
+      remotePlayerCount = this.gameEngine.networkManager.remotePlayers.size;
+      this.gameEngine.networkManager.remotePlayers.forEach((player, playerId) => {
         if (!player.isDead) {
           allRemotePlayersDead = false;
+          console.log(`DEATH STATE CHECK: Remote player ${playerId} is alive`);
+        } else {
+          console.log(`DEATH STATE CHECK: Remote player ${playerId} is dead`);
         }
       });
     }
     
-    // If host is dead but at least one remote player is alive, return false
-    return allRemotePlayersDead;
+    // Report final conclusion with clear logging
+    const allPlayersDead = localPlayerDead && allRemotePlayersDead;
+    console.log(`DEATH STATE CHECK: ${remotePlayerCount} remote players, all remote players dead: ${allRemotePlayersDead}`);
+    console.log(`DEATH STATE CHECK: Final result - All players dead: ${allPlayersDead}`);
+    
+    return allPlayersDead;
   }
   
   /**
@@ -1810,7 +1820,7 @@ export class P2PNetwork {
   
   /**
    * Broadcast the current game state to all connected clients
-   * @param {boolean} force - Whether to force sending regardless of time since last update
+   * @param {boolean} force - Whether to force a broadcast regardless of timing
    * @returns {boolean} True if broadcast was sent, false otherwise
    */
   broadcastGameState(force = false) {
@@ -1836,6 +1846,9 @@ export class P2PNetwork {
     const isHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
     let hasLivingRemotePlayers = false;
     
+    // Explicitly check the allPlayersDead status
+    const allPlayersDead = gameState.gameStatus?.allPlayersDead || false;
+    
     // If host is dead, explicitly check for living remote players
     if (isHostDead && this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
       this.gameEngine.networkManager.remotePlayers.forEach(player => {
@@ -1844,8 +1857,21 @@ export class P2PNetwork {
         }
       });
       
+      // When host is dead but remote players are alive, force updates to continue
       if (hasLivingRemotePlayers) {
-        console.log("HOST IS DEAD BUT REMOTE PLAYERS ALIVE: FORCING ENEMIES TO CONTINUE FUNCTIONING");
+        console.log("HOST IS DEAD BUT REMOTE PLAYERS ALIVE: FORCING GAME STATE UPDATES");
+        
+        // Increase update frequency when host is dead to ensure smooth experience for clients
+        if (this._stateUpdateInterval) {
+          clearInterval(this._stateUpdateInterval);
+          this._stateUpdateInterval = setInterval(() => {
+            try {
+              this.broadcastGameState(true);
+            } catch (error) {
+              console.error("Error in game state update:", error);
+            }
+          }, this.stateUpdateInterval / 2); // Send updates twice as frequently
+        }
         
         // Force all enemies to be in moving state to ensure they keep functioning
         if (gameState.enemies && gameState.enemies.length > 0) {
@@ -1853,20 +1879,23 @@ export class P2PNetwork {
             if (enemy.state === 'idle') {
               enemy.state = 'moving';
             }
+            
+            // Mark enemies to continue updating
+            enemy._forceContinueUpdating = true;
           });
         }
       }
     }
     
     // Log state updates if forced or significant changes
-    if (force || isHostDead) {
-      console.log(`Game state broadcast [Force:${force}, HostDead:${isHostDead}]:`, {
+    if (force || isHostDead || (now - this.lastStateSentLog > 5000)) {
+      console.log(`Game state broadcast [Force:${force}, HostDead:${isHostDead}, HasLivingRemotes:${hasLivingRemotePlayers}, AllPlayersDead:${allPlayersDead}]:`, {
         playerCount: Object.keys(gameState.playerPositions || {}).length,
         enemyCount: (gameState.enemies || []).length,
         round: gameState.round?.round,
-        windowCount: (gameState.windows || []).length,
-        livingRemotePlayers: hasLivingRemotePlayers
+        windowCount: (gameState.windows || []).length
       });
+      this.lastStateSentLog = now;
     }
     
     // Send to all connected peers
