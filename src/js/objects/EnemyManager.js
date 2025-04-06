@@ -190,34 +190,12 @@ export class EnemyManager {
       }
     }
     
-    // Check if host player is dead but there are remote players
-    let hasLivingRemotePlayers = false;
-    let isLocalPlayerDead = this.player && this.player.isDead;
-    
-    // Only check for remote players if we have access to the network manager
-    if (this.gameEngine && this.gameEngine.networkManager) {
-      const networkManager = this.gameEngine.networkManager;
-      
-      // Check if there are any remote players that are not dead
-      if (networkManager.remotePlayers && networkManager.remotePlayers.size > 0) {
-        networkManager.remotePlayers.forEach(remotePlayer => {
-          if (!remotePlayer.isDead) {
-            hasLivingRemotePlayers = true;
-          }
-        });
-        
-        if (hasLivingRemotePlayers && isLocalPlayerDead) {
-          console.log("Host player is dead, but there are living remote players. Enemies will continue functioning.");
-        }
-      }
-    }
-    
     // Update all existing enemies
     this.enemies.forEach(enemy => {
       // Always update enemies if there are living remote players, even if local player is dead
-      if (hasLivingRemotePlayers || !isLocalPlayerDead) {
+      if (enemy._forceContinueUpdating || (enemy.player === this.player && !this.player.isDead)) {
         // Ensure enemy has correct player reference
-        if (isLocalPlayerDead && enemy.player === this.player) {
+        if (this.player.isDead && enemy.player === this.player) {
           // For zombies that were tracking the now-dead host player,
           // explicitly set them to search for remote players
           enemy.state = 'moving';
@@ -250,7 +228,7 @@ export class EnemyManager {
   }
   
   /**
-   * Check for inconsistent round state and fix if needed
+   * Check round state consistency and check for host death condition
    */
   checkRoundStateConsistency() {
     const currentTime = performance.now() / 1000;
@@ -261,6 +239,47 @@ export class EnemyManager {
     }
     
     this.lastStateCheck = currentTime;
+    
+    // Check if host player is dead but there are living remote players
+    const isHostDead = this.player && this.player.isDead;
+    let hasLivingRemotePlayers = false;
+    
+    // Only check for remote players if we have access to the network manager
+    if (this.gameEngine && this.gameEngine.networkManager) {
+      const networkManager = this.gameEngine.networkManager;
+      
+      // Check if there are any remote players that are not dead
+      if (networkManager.remotePlayers && networkManager.remotePlayers.size > 0) {
+        networkManager.remotePlayers.forEach(remotePlayer => {
+          if (!remotePlayer.isDead) {
+            hasLivingRemotePlayers = true;
+          }
+        });
+        
+        if (hasLivingRemotePlayers && isHostDead) {
+          console.log("CRITICAL: Host player is dead, but there are living remote players. Forcing enemies to continue.");
+          
+          // Force active state on enemies that might be stuck
+          this.enemies.forEach(enemy => {
+            if (enemy.state === 'idle' || !enemy.state) {
+              enemy.state = 'moving';
+              if (typeof enemy.startMoving === 'function') {
+                enemy.startMoving();
+              }
+            }
+            
+            // Make sure enemies are forced to update regardless of player state
+            enemy._forceContinueUpdating = true;
+          });
+          
+          // Also ensure the gameEngine's P2PNetwork knows to keep broadcasting state
+          if (this.gameEngine.networkManager.network) {
+            // Force a broadcast to ensure everyone has the latest state
+            this.gameEngine.networkManager.network.broadcastGameState(true);
+          }
+        }
+      }
+    }
     
     // Detect stuck round (no zombies left but round not ending)
     if (this.roundActive && this.zombiesRemaining <= 0 && this.enemies.length === 0) {

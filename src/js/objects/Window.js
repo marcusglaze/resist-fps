@@ -424,6 +424,15 @@ export class Window {
     // Check if windowIndex is set
     if (this.windowIndex === undefined) {
       console.error("Window missing windowIndex! Cannot sync with host.");
+      console.error("Window details:", {
+        boardsCount: this.boardsCount,
+        isOpen: this.isOpen,
+        position: this.instance ? [
+          this.instance.position.x,
+          this.instance.position.y,
+          this.instance.position.z
+        ] : 'No instance'
+      });
       return false;
     }
     
@@ -433,11 +442,27 @@ export class Window {
     if (success) {
       // Then send the action to the host
       console.log(`Client adding board to window ${this.windowIndex}, current count: ${this.boardsCount}`);
+      
+      // Make sure we have the right action type and data
       networkManager.network.sendPlayerAction('addWindowBoard', {
         windowIndex: this.windowIndex,
         boardsCount: this.boardsCount,
-        boardHealths: this.boardHealths
+        boardHealths: [...this.boardHealths], // Send a copy to avoid reference issues
+        timestamp: Date.now()  // Add timestamp to ensure uniqueness
       });
+      
+      // Force multiple notifications to ensure it gets through
+      setTimeout(() => {
+        if (networkManager && networkManager.network) {
+          console.log(`Sending backup window board notification for window ${this.windowIndex}`);
+          networkManager.network.sendPlayerAction('addWindowBoard', {
+            windowIndex: this.windowIndex,
+            boardsCount: this.boardsCount,
+            boardHealths: [...this.boardHealths],
+            timestamp: Date.now() + 1  // Different timestamp
+          });
+        }
+      }, 100);
       
       return true;
     } else {

@@ -2558,4 +2558,82 @@ export class NetworkManager {
       loadingScreen.parentNode.removeChild(loadingScreen);
     }
   }
+  
+  /**
+   * Handle a specific window update event
+   * @param {Object} windowData - The window update data
+   */
+  handleWindowUpdate(windowData) {
+    if (!this.isConnected || this.isHost || !this.gameEngine || !this.gameEngine.scene || !this.gameEngine.scene.room) {
+      return;
+    }
+    
+    try {
+      const { windowIndex, boardsCount, boardHealths, isOpen } = windowData;
+      const room = this.gameEngine.scene.room;
+      
+      if (!room.windows || !Array.isArray(room.windows) || windowIndex < 0 || windowIndex >= room.windows.length) {
+        console.warn(`Invalid window update data: windowIndex ${windowIndex} out of range`);
+        return;
+      }
+      
+      console.log(`Received direct window update for window ${windowIndex}: boardsCount=${boardsCount}, isOpen=${isOpen}`);
+      
+      const window = room.windows[windowIndex];
+      if (!window) {
+        console.warn(`Window at index ${windowIndex} not found`);
+        return;
+      }
+      
+      // Ensure the windowIndex property is set
+      if (window.windowIndex === undefined) {
+        window.windowIndex = windowIndex;
+      }
+      
+      // Update window state
+      
+      // First handle open/closed state
+      if (isOpen !== undefined && window.isOpen !== isOpen) {
+        if (isOpen && !window.isOpen) {
+          console.log(`Window ${windowIndex} is now open (broken)`);
+          window.breakWindow();
+        }
+      }
+      
+      // Then handle board count
+      if (boardsCount !== undefined && window.boardsCount !== boardsCount) {
+        console.log(`Syncing window ${windowIndex} boards: local=${window.boardsCount}, host=${boardsCount}`);
+        
+        // If we have fewer boards than the host, add boards
+        while (window.boardsCount < boardsCount) {
+          console.log(`Adding board ${window.boardsCount + 1} to window ${windowIndex}`);
+          window.addBoard();
+        }
+        
+        // If we have more boards than the host, remove boards
+        while (window.boardsCount > boardsCount) {
+          console.log(`Removing board ${window.boardsCount} from window ${windowIndex}`);
+          window.removeBoard();
+        }
+      }
+      
+      // Finally update board health values
+      if (Array.isArray(boardHealths) && window.boardHealths) {
+        // Make sure arrays have same length
+        const oldHealths = [...window.boardHealths];
+        window.boardHealths = boardHealths.slice(0, window.boardsCount);
+        
+        console.log(`Updated window ${windowIndex} board health: ${JSON.stringify(oldHealths)} -> ${JSON.stringify(window.boardHealths)}`);
+        
+        // Update board appearance based on health
+        window.boardHealths.forEach((health, boardIndex) => {
+          if (window.updateBoardAppearance) {
+            window.updateBoardAppearance(boardIndex);
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error handling window update:", error);
+    }
+  }
 } 

@@ -480,6 +480,14 @@ export class P2PNetwork {
         }
         break;
         
+      case 'windowUpdated':
+        // Handle window update event
+        if (!this.isHost && this.gameEngine && this.gameEngine.networkManager) {
+          console.log("Received window update event, forwarding to NetworkManager");
+          this.gameEngine.networkManager.handleWindowUpdate(data);
+        }
+        break;
+        
       case 'hostDisconnect':
         // Host is disconnecting, clean up
         console.log("Host is disconnecting:", data.message);
@@ -546,14 +554,14 @@ export class P2PNetwork {
     }
     
     try {
-      const { enemyId, damage, isHeadshot } = damageData;
+      const { enemyId, damage, isHeadshot, timestamp } = damageData;
       
       if (!enemyId) {
         console.error("Invalid enemy damage data: missing enemyId", damageData);
         return;
       }
       
-      console.log(`Host applying damage from client ${playerId}: ${damage} to enemy ${enemyId} (headshot: ${isHeadshot})`);
+      console.log(`Host applying damage from client ${playerId}: ${damage} to enemy ${enemyId} (headshot: ${isHeadshot}, timestamp: ${timestamp})`);
       
       // Find the enemy by ID
       const enemyManager = this.gameEngine.scene.room.enemyManager;
@@ -565,16 +573,27 @@ export class P2PNetwork {
       const enemy = enemyManager.enemies.find(e => e.id === enemyId);
       
       if (enemy) {
+        // Store health before damage for comparison
+        const healthBefore = enemy.health;
+        
         // Apply damage to the enemy
         enemy.takeDamage(damage);
-        console.log(`Applied ${damage} damage to enemy ${enemyId}, health now: ${enemy.health}`);
         
-        // Send confirmation of damage back to the client who shot
-        this.sendToPlayer(playerId, {
+        // Calculate actual damage applied (in case of limits or other factors)
+        const actualDamage = healthBefore - enemy.health;
+        
+        console.log(`Applied ${actualDamage} damage to enemy ${enemyId}, health changed from ${healthBefore} to ${enemy.health}`);
+        
+        // Send confirmation of damage back to ALL clients
+        // This ensures everyone sees consistent enemy health
+        this.broadcastToAll({
           type: 'enemyDamageConfirmed',
           enemyId: enemyId,
+          damage: actualDamage,
           health: enemy.health,
-          isDead: enemy.health <= 0
+          isDead: enemy.health <= 0,
+          isHeadshot: isHeadshot,
+          timestamp: timestamp || Date.now()
         });
         
         // Ensure immediate state update to all clients
@@ -623,8 +642,8 @@ export class P2PNetwork {
     }
     
     try {
-      const { windowIndex, boardsCount, boardHealths } = boardData;
-      console.log(`Host applying window boarding from client ${playerId}: window ${windowIndex}, boards ${boardsCount}`);
+      const { windowIndex, boardsCount, boardHealths, timestamp } = boardData;
+      console.log(`Host applying window boarding from client ${playerId}: window ${windowIndex}, boards ${boardsCount}, timestamp: ${timestamp}`);
       
       // Get the window by index
       const room = this.gameEngine.scene.room;
@@ -636,21 +655,50 @@ export class P2PNetwork {
       
       console.log(`Room has ${room.windows.length} windows, requested window at index ${windowIndex}`);
       
+      // Validate window index
+      if (windowIndex < 0 || windowIndex >= room.windows.length) {
+        console.error(`Invalid window index ${windowIndex}, room has ${room.windows.length} windows`);
+        return;
+      }
+      
       const window = room.windows[windowIndex];
       
       if (window) {
         console.log(`Found window at index ${windowIndex}, current boards: ${window.boardsCount}, adding board...`);
+        
         // Update the window state by adding a board
+        const boardsBeforeAdd = window.boardsCount;
         const result = window.addBoard();
         console.log(`Board add result: ${result ? 'success' : 'failed'}, new count: ${window.boardsCount}`);
         
-        // Force a game state update to all clients
-        setTimeout(() => {
-          if (this.broadcastGameState) {
-            console.log("Broadcasting updated game state to all clients");
-            this.broadcastGameState(true); // Force immediate update
+        // Check if the board was actually added
+        if (result && window.boardsCount > boardsBeforeAdd) {
+          // Update board health values if provided
+          if (Array.isArray(boardHealths) && boardHealths.length > 0) {
+            // Copy health values (slice to match current board count)
+            window.boardHealths = [...boardHealths].slice(0, window.boardsCount);
+            console.log(`Updated board health values: ${window.boardHealths.join(', ')}`);
           }
-        }, 50);
+          
+          // Force a game state update to all clients
+          setTimeout(() => {
+            if (this.broadcastGameState) {
+              console.log("Broadcasting updated game state to all clients");
+              this.broadcastGameState(true); // Force immediate update
+            }
+          }, 50);
+          
+          // Send a specific window update event
+          this.broadcastToAll({
+            type: 'windowUpdated',
+            windowIndex: windowIndex,
+            boardsCount: window.boardsCount,
+            boardHealths: window.boardHealths,
+            isOpen: window.isOpen
+          });
+        } else {
+          console.warn(`Failed to add board to window ${windowIndex}, current count: ${window.boardsCount}, max: ${window.maxBoards}`);
+        }
       } else {
         console.warn(`Window with index ${windowIndex} not found in array of length ${room.windows.length}`);
       }
@@ -1539,13 +1587,40 @@ export class P2PNetwork {
     // Get current game state
     const gameState = this.getGameState();
     
+    // Check if host player is dead but there are living remote players
+    const isHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
+    let hasLivingRemotePlayers = false;
+    
+    // If host is dead, explicitly check for living remote players
+    if (isHostDead && this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
+      this.gameEngine.networkManager.remotePlayers.forEach(player => {
+        if (!player.isDead) {
+          hasLivingRemotePlayers = true;
+        }
+      });
+      
+      if (hasLivingRemotePlayers) {
+        console.log("HOST IS DEAD BUT REMOTE PLAYERS ALIVE: FORCING ENEMIES TO CONTINUE FUNCTIONING");
+        
+        // Force all enemies to be in moving state to ensure they keep functioning
+        if (gameState.enemies && gameState.enemies.length > 0) {
+          gameState.enemies.forEach(enemy => {
+            if (enemy.state === 'idle') {
+              enemy.state = 'moving';
+            }
+          });
+        }
+      }
+    }
+    
     // Log state updates if forced or significant changes
-    if (force) {
-      console.log("Forced game state broadcast:", {
+    if (force || isHostDead) {
+      console.log(`Game state broadcast [Force:${force}, HostDead:${isHostDead}]:`, {
         playerCount: Object.keys(gameState.playerPositions || {}).length,
         enemyCount: (gameState.enemies || []).length,
         round: gameState.round?.round,
-        windowCount: (gameState.windows || []).length
+        windowCount: (gameState.windows || []).length,
+        livingRemotePlayers: hasLivingRemotePlayers
       });
     }
     

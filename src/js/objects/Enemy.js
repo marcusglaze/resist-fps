@@ -346,10 +346,36 @@ export class Enemy {
     if (this.insideRoom) {
       // Check if we have a player reference before chasing
       if (this.player) {
-        this.chasePlayer(deltaTime);
-        
-        // Try to attack player if nearby
-        this.tryAttackPlayer();
+        // If player is dead but we're forced to continue, find other targets
+        if (this.player.isDead && !this._forceContinueUpdating) {
+          // Try to find alive remote players
+          let foundLivingTarget = false;
+          
+          if (this.manager && this.manager.gameEngine && 
+              this.manager.gameEngine.networkManager && 
+              this.manager.gameEngine.networkManager.remotePlayers) {
+            
+            const remotePlayers = this.manager.gameEngine.networkManager.remotePlayers;
+            remotePlayers.forEach(player => {
+              if (!player.isDead && player.position) {
+                foundLivingTarget = true;
+              }
+            });
+          }
+          
+          if (foundLivingTarget) {
+            // Chase remote players
+            this.chasePlayer(deltaTime);
+            this.tryAttackPlayer();
+          } else {
+            // No living targets, just move randomly
+            this.moveRandomly(deltaTime);
+          }
+        } else {
+          // Normal behavior - chase player if we can
+          this.chasePlayer(deltaTime);
+          this.tryAttackPlayer();
+        }
       } else {
         // No player reference, just move randomly
         this.moveRandomly(deltaTime);
@@ -995,14 +1021,25 @@ export class Enemy {
     // First apply damage locally for immediate feedback
     this.takeDamage(damage);
     
-    // Then notify the host
+    // Then notify the host if in multiplayer mode
     if (networkManager && networkManager.network && !networkManager.isHost) {
-      console.log(`Client applying ${damage} damage to enemy ${this.id}, notifying host`);
+      console.log(`Client applying ${damage} damage to enemy ${this.id}, isHeadshot=${isHeadshot}, notifying host`);
+      
+      // Ensure we're actually sending the damage to the host with the correct action type
       networkManager.network.sendPlayerAction('damageEnemy', {
         enemyId: this.id,
         damage: damage,
-        isHeadshot: isHeadshot
+        isHeadshot: isHeadshot,
+        timestamp: Date.now()  // Add timestamp to ensure uniqueness
       });
+      
+      // Log the current health after applying local damage
+      console.log(`Enemy ${this.id} health after local damage: ${this.health}`);
+    } else {
+      console.warn("Not sending damage to host - network not available or client is host");
     }
+    
+    // Return local health for immediate feedback
+    return this.health;
   }
 } 
