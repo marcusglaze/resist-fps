@@ -37,6 +37,8 @@ export class P2PNetwork {
     } else {
       this.peerJSLoaded = true;
     }
+    
+    console.log("NETWORK: P2PNetwork constructor initialized");
   }
   
   /**
@@ -1474,6 +1476,8 @@ export class P2PNetwork {
    * @returns {string} The action ID for tracking purposes
    */
   sendPlayerAction(actionType, actionData) {
+    console.log("NETWORK: *** SENDING PLAYER ACTION ***", actionType, actionData);
+    
     if (!this.isConnected) {
       console.error("Cannot send player action: not connected");
       return null;
