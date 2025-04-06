@@ -1485,36 +1485,1571 @@ export class PlayerControls {
       document.exitPointerLock();
     }
     
-    // If in multiplayer game, immediately notify other players of death state
-    if (this.gameEngine && this.gameEngine.networkManager && this.gameEngine.networkManager.isMultiplayer) {
-      console.log("Sending death state to other players");
-      
-      // Force an immediate position update to broadcast death state
-      if (this.gameEngine.networkManager.network && typeof this.gameEngine.networkManager.network.sendPlayerPosition === 'function') {
-        this.gameEngine.networkManager.network.sendPlayerPosition();
-        
-        // Send multiple updates to ensure it's received
-        setTimeout(() => {
-          if (this.gameEngine && this.gameEngine.networkManager && 
-              this.gameEngine.networkManager.network && 
-              this.gameEngine.networkManager.isConnected) {
-            this.gameEngine.networkManager.network.sendPlayerPosition();
-          }
-        }, 100);
-        
-        setTimeout(() => {
-          if (this.gameEngine && this.gameEngine.networkManager && 
-              this.gameEngine.networkManager.network && 
-              this.gameEngine.networkManager.isConnected) {
-            this.gameEngine.networkManager.network.sendPlayerPosition();
-          }
-        }, 300);
-      }
-    }
-    
     // Signal the engine that the game is over
     if (this.gameEngine) {
       this.gameEngine.endGame();
+    }
+  }
+
+  /**
+   * Set scene reference for raycasting
+   * @param {Scene} scene - Three.js scene
+   */
+  setScene(scene) {
+    this.scene = scene;
+    
+    // Add this camera to the scene if it's not already there
+    if (this.camera && scene && !scene.parent) {
+      scene.add(this.camera);
+    }
+    
+    // Ensure weapon models are visible in the scene
+    if (this.activeWeapon && !this.weaponViewModel) {
+      this.updateWeaponViewModel();
+    }
+  }
+
+  /**
+   * Handle key down events
+   */
+  onKeyDown(event) {
+    // Skip if input is in a text field or player is dead
+    if (document.activeElement.tagName === 'INPUT' || this.isDead) return;
+    
+    switch (event.code) {
+      case 'KeyW':
+        this.moveForward = true;
+        break;
+      case 'KeyA':
+        this.moveLeft = true;
+        break;
+      case 'KeyS':
+        this.moveBackward = true;
+        break;
+      case 'KeyD':
+        this.moveRight = true;
+        break;
+      case 'KeyF':
+        // For single-press interactions like window boarding
+        this.isInteracting = true;
+        
+        // For hold-to-buy interactions
+        if (!this.keys) {
+          this.keys = {};
+        }
+        this.keys.f = true;
+        console.log("F key pressed - keys.f set to true for hold tracking");
+        break;
+      case 'KeyR':
+        // Reload weapon
+        this.reload();
+        break;
+    }
+  }
+
+  /**
+   * Handle key up events
+   */
+  onKeyUp(event) {
+    switch (event.code) {
+      case 'KeyW':
+        this.moveForward = false;
+        break;
+      case 'KeyA':
+        this.moveLeft = false;
+        break;
+      case 'KeyS':
+        this.moveBackward = false;
+        break;
+      case 'KeyD':
+        this.moveRight = false;
+        break;
+      case 'KeyF':
+        // Set interaction key to false on key up
+        if (this.keys) {
+          this.keys.f = false;
+          console.log("F key released - keys.f set to false");
+        }
+        break;
+    }
+  }
+
+  /**
+   * Handle mouse movement
+   */
+  onMouseMove(event) {
+    if (!this.isLocked) return;
+    
+    const movementX = event.movementX || 0;
+    const movementY = event.movementY || 0;
+    
+    // Rotate camera based on mouse movement
+    this.camera.rotation.y -= movementX * this.mouseSensitivity;
+    this.camera.rotation.x -= movementY * this.mouseSensitivity;
+    
+    // Limit vertical look angle
+    this.camera.rotation.x = Math.max(
+      -Math.PI / 2, 
+      Math.min(Math.PI / 2, this.camera.rotation.x)
+    );
+  }
+
+  /**
+   * Handle mouse wheel events for weapon switching
+   */
+  onMouseWheel(event) {
+    if (!this.isLocked || this.isDead) return;
+    
+    // Switch weapon based on scroll direction
+    if (event.deltaY < 0) {
+      // Scroll up, previous weapon
+      this.prevWeapon();
+    } else {
+      // Scroll down, next weapon
+      this.nextWeapon();
+    }
+  }
+
+  /**
+   * Handle mouse clicks for shooting
+   */
+  onMouseClick(event) {
+    // Skip if not locked or if player is dead
+    if (!this.isLocked || this.isDead) return;
+    
+    // Left mouse button for shooting
+    if (event.button === 0) {
+      if (event.type === 'mousedown') {
+        this.shooting = true;
+        this.shoot();
+      } else if (event.type === 'mouseup') {
+        this.shooting = false;
+        // Stop continuous weapon sounds when player releases trigger
+        this.stopWeaponSound();
+      }
+    }
+  }
+
+  /**
+   * Request pointer lock to capture mouse movements
+   */
+  lockPointer(event) {
+    console.log("PlayerControls lockPointer called", event ? "with event" : "without event");
+    
+    // Skip if on mobile - handled by touch controls
+    if (this.mobileControls && this.mobileControls.isMobile) {
+      return;
+    }
+    
+    // Make sure controls are enabled
+    this.enabled = true;
+    
+    // Only lock pointer on non-shooting clicks
+    if (this.isLocked && event && event.button === 0) {
+      console.log("Pointer already locked, skipping");
+      return;
+    }
+    
+    this.domElement.requestPointerLock = (
+      this.domElement.requestPointerLock ||
+      this.domElement.mozRequestPointerLock ||
+      this.domElement.webkitRequestPointerLock
+    );
+    
+    try {
+      // Attempt to lock the pointer
+      console.log("Requesting pointer lock");
+      this.domElement.requestPointerLock();
+      
+      // Unlock audio on user interaction
+      this.unlockAudio();
+    } catch (error) {
+      console.error("Error requesting pointer lock:", error);
+    }
+  }
+
+  /**
+   * Handle pointer lock change
+   */
+  onPointerlockChange() {
+    const isLocked = document.pointerLockElement === this.domElement;
+    
+    console.log("Pointer lock changed, isLocked:", isLocked);
+    
+    if (isLocked) {
+      console.log("Pointer locked, enabling controls and mouse movement");
+      document.addEventListener('mousemove', this.onMouseMove, false);
+      this.isLocked = true;
+      this.enabled = true; // Make sure controls are enabled when pointer is locked
+    } else {
+      console.log("Pointer unlocked, disabling mouse movement");
+      document.removeEventListener('mousemove', this.onMouseMove, false);
+      this.isLocked = false;
+      // Note: we don't disable controls here to allow keyboard movement still
+    }
+  }
+  
+  /**
+   * Release pointer lock to allow cursor movement
+   */
+  unlockPointer() {
+    if (document.exitPointerLock) {
+      document.exitPointerLock();
+    } else if (document.mozExitPointerLock) {
+      document.mozExitPointerLock();
+    } else if (document.webkitExitPointerLock) {
+      document.webkitExitPointerLock();
+    }
+    
+    this.isLocked = false;
+  }
+
+  /**
+   * Add points to the player's score
+   * @param {number} points - Number of points to add
+   * @param {boolean} isKill - Whether points are from a kill
+   * @param {boolean} isHeadshot - Whether points are from a headshot
+   */
+  addPoints(points, isKill = false, isHeadshot = false) {
+    // Add bonus for headshots
+    if (isHeadshot) {
+      points *= 2; // Double points for headshots
+    }
+    
+    // Add kill bonus without combo system
+    if (isKill) {
+      points += isHeadshot ? 100 : 50; // Simple kill bonus
+    }
+    
+    // Add points directly without multiplier
+    this.score += points;
+    
+    // Update display
+    this.updateScoreDisplay();
+    
+    // Show points message if significant amount
+    if (points >= 30 || isHeadshot) {
+      this.showPointsMessage(points, isHeadshot);
+    }
+  }
+  
+  /**
+   * Remove points from the player's score
+   * @param {number} points - Number of points to remove
+   */
+  removePoints(points) {
+    // Subtract points from score
+    this.score -= points;
+    
+    // Ensure score doesn't go negative
+    if (this.score < 0) {
+      this.score = 0;
+    }
+    
+    // Update the display
+    this.updateScoreDisplay();
+  }
+
+  /**
+   * Show points message for significant points
+   * @param {number} points - Points awarded
+   * @param {boolean} isHeadshot - Whether it was a headshot
+   */
+  showPointsMessage(points, isHeadshot) {
+    // Create message element
+    const pointsMessage = document.createElement('div');
+    
+    // Set message text based on action
+    if (isHeadshot) {
+      pointsMessage.textContent = `HEADSHOT! +${points}`;
+      pointsMessage.style.color = '#ff5500';
+    } else if (points >= 100) {
+      pointsMessage.textContent = `EXCELLENT! +${points}`;
+      pointsMessage.style.color = '#00ccff';
+    } else {
+      pointsMessage.textContent = `+${points}`;
+      pointsMessage.style.color = '#ffffff';
+    }
+    
+    // Style the message
+    pointsMessage.style.position = 'absolute';
+    pointsMessage.style.top = '25%';
+    pointsMessage.style.left = '50%';
+    pointsMessage.style.transform = 'translate(-50%, -50%)';
+    pointsMessage.style.fontFamily = 'Impact, fantasy';
+    pointsMessage.style.fontSize = '22px';
+    pointsMessage.style.fontWeight = 'bold';
+    pointsMessage.style.textShadow = '0 0 5px #000000';
+    pointsMessage.style.zIndex = '1000';
+    pointsMessage.style.pointerEvents = 'none';
+    
+    // Add to document
+    document.body.appendChild(pointsMessage);
+    
+    // Animate
+    let opacity = 1;
+    let posY = 0;
+    
+    const animate = () => {
+      opacity -= 0.02;
+      posY -= 1;
+      
+      pointsMessage.style.opacity = opacity;
+      pointsMessage.style.transform = `translate(-50%, -50%) translateY(${posY}px)`;
+      
+      if (opacity > 0) {
+        requestAnimationFrame(animate);
+      } else {
+        document.body.removeChild(pointsMessage);
+      }
+    };
+    
+    requestAnimationFrame(animate);
+  }
+
+  /**
+   * Create ammo display UI
+   */
+  createAmmoDisplay() {
+    // Remove any existing ammo display first
+    const existingAmmoDisplay = document.querySelector('.ammo-display');
+    if (existingAmmoDisplay) {
+      document.body.removeChild(existingAmmoDisplay);
+    }
+
+    // Create ammo container
+    const ammoContainer = document.createElement('div');
+    ammoContainer.className = 'ammo-display';
+    ammoContainer.style.position = 'absolute';
+    ammoContainer.style.bottom = '20px';
+    ammoContainer.style.right = '20px';
+    ammoContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    ammoContainer.style.color = 'white';
+    ammoContainer.style.padding = '10px';
+    ammoContainer.style.borderRadius = '5px';
+    ammoContainer.style.fontFamily = 'Impact, fantasy';
+    ammoContainer.style.fontSize = '24px';
+    ammoContainer.style.textAlign = 'right';
+    ammoContainer.style.minWidth = '120px';
+    ammoContainer.textContent = '0 / 0';
+    
+    // Add weapon name display
+    const weaponNameElement = document.createElement('div');
+    weaponNameElement.className = 'weapon-name';
+    weaponNameElement.style.fontSize = '14px';
+    weaponNameElement.style.marginBottom = '5px';
+    weaponNameElement.style.color = '#aaaaaa';
+    weaponNameElement.textContent = 'No Weapon';
+    
+    // Insert weapon name at top
+    ammoContainer.insertBefore(weaponNameElement, ammoContainer.firstChild);
+    
+    // Add to document
+    document.body.appendChild(ammoContainer);
+    
+    // Store references
+    this.ammoDisplay = ammoContainer;
+    this.weaponNameDisplay = weaponNameElement;
+  }
+
+  /**
+   * Create a container for hands and weapon models
+   */
+  createModelContainer() {
+    // Remove any existing model container first
+    if (this.modelContainer) {
+      this.camera.remove(this.modelContainer);
+      this.modelContainer = null;
+      this.weaponViewModel = null;
+      this.handsModel = null;
+    }
+    
+    // Create a group to hold the hands and weapon models
+    this.modelContainer = new THREE.Group();
+    
+    // Add it to the camera
+    this.camera.add(this.modelContainer);
+    
+    // Create hands model
+    this.createHandsModel();
+    
+    console.log("Model container created and added to camera");
+  }
+
+  /**
+   * Create a simple model for the player's hands
+   */
+  createHandsModel() {
+    // Remove existing hands model if it exists
+    if (this.handsModel) {
+      this.modelContainer.remove(this.handsModel);
+      this.handsModel = null;
+    }
+    
+    // Create hands group
+    const handsGroup = new THREE.Group();
+    
+    // Materials
+    const skinMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffdbac, // Skin tone
+      roughness: 0.8,
+      metalness: 0.1
+    });
+    
+    const sleeveMaterial = new THREE.MeshStandardMaterial({
+      color: 0x333333, // Dark sleeve
+      roughness: 0.9,
+      metalness: 0.1
+    });
+    
+    // Create right hand (trigger hand)
+    const rightHand = this.createHandMesh(skinMaterial, sleeveMaterial);
+    rightHand.position.set(0.05, -0.25, -0.3);
+    rightHand.rotation.set(-0.3, 0.2, 0);
+    handsGroup.add(rightHand);
+    
+    // Create left hand (support hand)
+    const leftHand = this.createHandMesh(skinMaterial, sleeveMaterial);
+    leftHand.position.set(-0.06, -0.25, -0.4);
+    leftHand.rotation.set(-0.2, -0.3, 0.1);
+    handsGroup.add(leftHand);
+    
+    // Store the hands model
+    this.handsModel = handsGroup;
+    
+    // Add to container
+    this.modelContainer.add(handsGroup);
+    
+    console.log("Hand models created and added to model container");
+  }
+  
+  /**
+   * Create a hand mesh with fingers and sleeve
+   * @param {THREE.Material} skinMaterial - Material for the skin
+   * @param {THREE.Material} sleeveMaterial - Material for the sleeve
+   * @returns {THREE.Group} - Hand mesh
+   */
+  createHandMesh(skinMaterial, sleeveMaterial) {
+    const handGroup = new THREE.Group();
+    
+    // Create palm
+    const palmGeometry = new THREE.BoxGeometry(0.08, 0.025, 0.1);
+    const palm = new THREE.Mesh(palmGeometry, skinMaterial);
+    handGroup.add(palm);
+    
+    // Create sleeve/wrist
+    const sleeveGeometry = new THREE.CylinderGeometry(0.05, 0.04, 0.1, 8);
+    const sleeve = new THREE.Mesh(sleeveGeometry, sleeveMaterial);
+    sleeve.position.set(0, 0, 0.08);
+    sleeve.rotation.set(Math.PI / 2, 0, 0);
+    handGroup.add(sleeve);
+    
+    // Create fingers - positioned to look like they're gripping
+    const fingerPositions = [
+      { x: 0.03, y: 0.005, z: -0.04, rotX: -0.2, rotY: 0, rotZ: 0 },  // Index
+      { x: 0.01, y: 0.005, z: -0.05, rotX: -0.3, rotY: 0, rotZ: 0 },  // Middle
+      { x: -0.01, y: 0.005, z: -0.045, rotX: -0.3, rotY: 0, rotZ: 0 }, // Ring
+      { x: -0.03, y: 0.005, z: -0.035, rotX: -0.2, rotY: 0, rotZ: 0 }  // Pinky
+    ];
+    
+    fingerPositions.forEach(pos => {
+      const fingerGeometry = new THREE.BoxGeometry(0.015, 0.015, 0.06);
+      const finger = new THREE.Mesh(fingerGeometry, skinMaterial);
+      finger.position.set(pos.x, pos.y, pos.z);
+      finger.rotation.set(pos.rotX, pos.rotY, pos.rotZ);
+      handGroup.add(finger);
+    });
+    
+    // Create thumb - positioned to wrap around grip
+    const thumbGeometry = new THREE.BoxGeometry(0.02, 0.015, 0.04);
+    const thumb = new THREE.Mesh(thumbGeometry, skinMaterial);
+    thumb.position.set(0.045, 0.01, -0.01);
+    thumb.rotation.set(0.2, Math.PI / 4, 0);
+    handGroup.add(thumb);
+    
+    return handGroup;
+  }
+  
+  /**
+   * Update weapon view model when active weapon changes
+   */
+  updateWeaponViewModel() {
+    // Remove existing weapon model if there is one
+    if (this.weaponViewModel) {
+      this.modelContainer.remove(this.weaponViewModel);
+      this.weaponViewModel = null; // Explicitly set to null to ensure garbage collection
+    }
+    
+    if (!this.activeWeapon) return;
+    
+    // Create a new weapon model based on the active weapon
+    this.weaponViewModel = this.createWeaponViewModel(this.activeWeapon);
+    
+    // Position the weapon model based on type (moved closer to camera)
+    if (this.activeWeapon.name === 'Pistol') {
+      this.weaponViewModel.position.set(0.05, -0.2, -0.3);
+      this.weaponViewModel.rotation.set(0, 0, 0);
+    } else if (this.activeWeapon.name === 'Shotgun') {
+      this.weaponViewModel.position.set(0.02, -0.18, -0.3);
+      this.weaponViewModel.rotation.set(0, -0.05, 0);
+    } else if (this.activeWeapon.name === 'Assault Rifle') {
+      this.weaponViewModel.position.set(0.02, -0.18, -0.3);
+      this.weaponViewModel.rotation.set(0, -0.05, 0);
+    } else {
+      // Default position
+      this.weaponViewModel.position.set(0, -0.2, -0.3);
+    }
+    
+    // Add to container
+    this.modelContainer.add(this.weaponViewModel);
+    
+    // Update hand positions based on current weapon
+    this.updateHandPositions();
+    
+    // Log for debugging
+    console.log(`Updated weapon model to: ${this.activeWeapon.name}`);
+  }
+  
+  /**
+   * Create the weapon view model for first-person display
+   * @param {Weapon} weapon - The weapon to create model for
+   */
+  createWeaponViewModel(weapon) {
+    const weaponGroup = new THREE.Group();
+    
+    // Create different models based on weapon type
+    let model;
+    
+    // Check if it's a mystery weapon (AI generated)
+    if (weapon.isMysteryWeapon) {
+      model = this.createMysteryWeaponModel(weapon);
+    } else {
+      // Regular weapons
+      switch (weapon.name) {
+        case 'Pistol':
+          model = this.createPistolModel();
+          break;
+        case 'Shotgun':
+          model = this.createShotgunModel();
+          break;
+        case 'Assault Rifle':
+          model = this.createAssaultRifleModel();
+          break;
+        default:
+          // Fallback to a generic model
+          model = this.createGenericWeaponModel();
+      }
+    }
+    
+    weaponGroup.add(model);
+    return weaponGroup;
+  }
+  
+  /**
+   * Create a model for a mystery weapon obtained from the mystery box
+   * @param {Weapon} weapon - The mystery weapon to create a model for
+   * @returns {THREE.Group} - The weapon model
+   */
+  createMysteryWeaponModel(weapon) {
+    const weaponGroup = new THREE.Group();
+    
+    // Extract quality from weapon properties
+    // Use spread as an inverse indicator of quality (lower spread = higher quality)
+    const qualityIndicator = 1 - (weapon.spread / 0.1); // 0-1 range
+    
+    // Create base materials with quality-based effects
+    const primaryMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(0.3 + qualityIndicator * 0.7, 0.4, 0.8),
+      roughness: 0.2,
+      metalness: 0.8,
+      emissive: new THREE.Color(0.1, 0.2, qualityIndicator * 0.5),
+      emissiveIntensity: qualityIndicator,
+    });
+    
+    const secondaryMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(0.2, 0.5, 0.7 + qualityIndicator * 0.3),
+      roughness: 0.1,
+      metalness: 0.9,
+      emissive: new THREE.Color(0.0, qualityIndicator * 0.3, qualityIndicator * 0.6),
+      emissiveIntensity: qualityIndicator * 0.8,
+    });
+    
+    const accentMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(qualityIndicator, qualityIndicator * 0.8, 0.2),
+      roughness: 0.05,
+      metalness: 1.0,
+      emissive: new THREE.Color(qualityIndicator * 0.7, qualityIndicator * 0.5, 0.1),
+      emissiveIntensity: qualityIndicator * 1.5,
+    });
+    
+    // Create main body
+    const bodyGeometry = new THREE.BoxGeometry(0.08, 0.1, 0.4);
+    const body = new THREE.Mesh(bodyGeometry, primaryMaterial);
+    body.position.set(0, 0, 0);
+    weaponGroup.add(body);
+    
+    // Create barrel - more complex for higher quality weapons
+    if (qualityIndicator > 0.3) {
+      // High quality has more detailed barrel
+      const barrelGroup = new THREE.Group();
+      
+      const mainBarrelGeometry = new THREE.CylinderGeometry(0.02, 0.025, 0.5, 8);
+      const mainBarrel = new THREE.Mesh(mainBarrelGeometry, secondaryMaterial);
+      mainBarrel.rotation.set(0, 0, Math.PI / 2);
+      mainBarrel.position.set(0, 0, -0.3);
+      barrelGroup.add(mainBarrel);
+      
+      // Add energy coils for high quality weapons
+      if (qualityIndicator > 0.7) {
+        for (let i = 0; i < 3; i++) {
+          const coilGeometry = new THREE.TorusGeometry(0.035, 0.01, 8, 16);
+          const coil = new THREE.Mesh(coilGeometry, accentMaterial);
+          coil.position.set(0, 0, -0.2 - (i * 0.12));
+          coil.rotation.set(Math.PI / 2, 0, 0);
+          barrelGroup.add(coil);
+        }
+      }
+      
+      // Muzzle energy effect for highest quality
+      if (qualityIndicator > 0.85) {
+        const muzzleGeometry = new THREE.SphereGeometry(0.03, 16, 16);
+        const muzzle = new THREE.Mesh(muzzleGeometry, accentMaterial);
+        muzzle.position.set(0, 0, -0.5);
+        muzzle.scale.set(1, 1, 1.5);
+        barrelGroup.add(muzzle);
+        
+        // Add point light at muzzle for glow effect
+        const muzzleLight = new THREE.PointLight(
+          new THREE.Color(qualityIndicator, qualityIndicator * 0.8, 0.2),
+          1.5,
+          0.5
+        );
+        muzzleLight.position.set(0, 0, -0.5);
+        barrelGroup.add(muzzleLight);
+      }
+      
+      weaponGroup.add(barrelGroup);
+    } else {
+      // Simpler barrel for lower quality
+      const barrelGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.3, 8);
+      const barrel = new THREE.Mesh(barrelGeometry, secondaryMaterial);
+      barrel.rotation.set(0, 0, Math.PI / 2);
+      barrel.position.set(0, 0, -0.25);
+      weaponGroup.add(barrel);
+    }
+    
+    // Add handle/grip
+    const gripGeometry = new THREE.BoxGeometry(0.06, 0.15, 0.07);
+    const grip = new THREE.Mesh(gripGeometry, primaryMaterial);
+    grip.position.set(0, -0.12, 0.05);
+    weaponGroup.add(grip);
+    
+    // Add top rail or scope based on quality
+    if (qualityIndicator > 0.5) {
+      // Scope for higher quality
+      const scopeBaseGeometry = new THREE.BoxGeometry(0.06, 0.03, 0.2);
+      const scopeBase = new THREE.Mesh(scopeBaseGeometry, secondaryMaterial);
+      scopeBase.position.set(0, 0.07, 0);
+      weaponGroup.add(scopeBase);
+      
+      const scopeGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.15, 8);
+      const scope = new THREE.Mesh(scopeGeometry, secondaryMaterial);
+      scope.rotation.set(Math.PI / 2, 0, 0);
+      scope.position.set(0, 0.12, 0);
+      weaponGroup.add(scope);
+      
+      // Add lens effect
+      const lensGeometry = new THREE.CircleGeometry(0.025, 16);
+      const lens = new THREE.Mesh(lensGeometry, accentMaterial);
+      lens.position.set(0, 0.12, -0.08);
+      lens.rotation.set(0, 0, 0);
+      weaponGroup.add(lens);
+      
+      // Add scope reticle for highest quality
+      if (qualityIndicator > 0.8) {
+        const reticleGeometry = new THREE.RingGeometry(0.01, 0.015, 16);
+        const reticle = new THREE.Mesh(
+          reticleGeometry,
+          new THREE.MeshBasicMaterial({
+            color: 0xff0000,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.8
+          })
+        );
+        reticle.position.set(0, 0.12, -0.075);
+        weaponGroup.add(reticle);
+      }
+    } else {
+      // Simple rail for lower quality
+      const railGeometry = new THREE.BoxGeometry(0.04, 0.02, 0.2);
+      const rail = new THREE.Mesh(railGeometry, secondaryMaterial);
+      rail.position.set(0, 0.06, 0);
+      weaponGroup.add(rail);
+    }
+    
+    // Add magazine
+    const magGeometry = new THREE.BoxGeometry(0.06, 0.12, 0.08);
+    const mag = new THREE.Mesh(magGeometry, secondaryMaterial);
+    mag.position.set(0, -0.06, 0.1);
+    weaponGroup.add(mag);
+    
+    // Add unique features based on weapon properties
+    
+    // Add multiple barrels for weapons with multiple projectiles
+    if (weapon.projectilesPerShot > 1) {
+      const numExtraBarrels = Math.min(3, Math.floor(weapon.projectilesPerShot / 4)); // Cap at 3 extra barrels
+      
+      for (let i = 0; i < numExtraBarrels; i++) {
+        const offset = 0.03;
+        const extraBarrelGeometry = new THREE.CylinderGeometry(0.01, 0.01, 0.4, 8);
+        const extraBarrel = new THREE.Mesh(extraBarrelGeometry, secondaryMaterial);
+        extraBarrel.rotation.set(0, 0, Math.PI / 2);
+        
+        // Position in a triangular pattern
+        switch (i) {
+          case 0:
+            extraBarrel.position.set(offset, offset, -0.25);
+            break;
+          case 1:
+            extraBarrel.position.set(-offset, offset, -0.25);
+            break;
+          case 2:
+            extraBarrel.position.set(0, -offset, -0.25);
+            break;
+        }
+        
+        weaponGroup.add(extraBarrel);
+      }
+    }
+    
+    // Add rotating core for weapons with high damage
+    if (weapon.bodyDamage > 60) {
+      const coreGeometry = new THREE.SphereGeometry(0.04, 16, 16);
+      const core = new THREE.Mesh(coreGeometry, accentMaterial);
+      core.position.set(0, 0, -0.05);
+      
+      // Create an animation function for the core
+      core.userData.update = (deltaTime) => {
+        core.rotation.y += deltaTime * 2;
+        core.rotation.z += deltaTime * 3;
+      };
+      
+      weaponGroup.add(core);
+    }
+    
+    // Add fins for very fast firing weapons
+    if (weapon.cooldown < 0.1) {
+      for (let i = 0; i < 3; i++) {
+        const finGeometry = new THREE.BoxGeometry(0.02, 0.08, 0.15);
+        const fin = new THREE.Mesh(finGeometry, secondaryMaterial);
+        fin.position.set(0, 0, 0.1);
+        fin.rotation.set(0, 0, i * Math.PI * 2 / 3);
+        fin.translateX(0.06);
+        weaponGroup.add(fin);
+      }
+    }
+    
+    // Store weapon quality for future effects
+    weaponGroup.userData.quality = qualityIndicator;
+    weaponGroup.userData.isMysteryWeapon = true;
+    
+    // Add update function for animated effects
+    weaponGroup.userData.update = (deltaTime) => {
+      // Update any child meshes that have update functions
+      weaponGroup.children.forEach(child => {
+        if (child.userData && typeof child.userData.update === 'function') {
+          child.userData.update(deltaTime);
+        }
+      });
+      
+      // Pulse glow for high quality weapons
+      if (qualityIndicator > 0.7) {
+        const pulseValue = (Math.sin(performance.now() / 500) + 1) / 2;
+        weaponGroup.children.forEach(child => {
+          if (child.material && child.material.emissive) {
+            child.material.emissiveIntensity = qualityIndicator * (0.8 + pulseValue * 0.5);
+          }
+        });
+      }
+    };
+    
+    return weaponGroup;
+  }
+  
+  /**
+   * Create a generic weapon model
+   * @returns {THREE.Mesh} - Generic weapon mesh
+   */
+  createGenericWeaponModel() {
+    const geometry = new THREE.BoxGeometry(0.1, 0.1, 0.3);
+    const material = new THREE.MeshStandardMaterial({ color: 0x333333 });
+    return new THREE.Mesh(geometry, material);
+  }
+  
+  /**
+   * Create a pistol model
+   * @returns {THREE.Group} - Pistol model
+   */
+  createPistolModel() {
+    const pistolGroup = new THREE.Group();
+    
+    // Materials
+    const darkMetalMaterial = new THREE.MeshStandardMaterial({
+      color: 0x111111,
+      roughness: 0.4,
+      metalness: 0.8
+    });
+    
+    const lightMetalMaterial = new THREE.MeshStandardMaterial({
+      color: 0x444444,
+      roughness: 0.3,
+      metalness: 0.9
+    });
+    
+    const gripMaterial = new THREE.MeshStandardMaterial({
+      color: 0x0a0a0a,
+      roughness: 0.9,
+      metalness: 0.1
+    });
+    
+    // Create slide
+    const slideGeometry = new THREE.BoxGeometry(0.06, 0.06, 0.15);
+    const slide = new THREE.Mesh(slideGeometry, lightMetalMaterial);
+    slide.position.set(0, 0.04, -0.05);
+    pistolGroup.add(slide);
+    
+    // Create slide details (serrations)
+    for (let i = 0; i < 5; i++) {
+      const serrationGeometry = new THREE.BoxGeometry(0.062, 0.01, 0.01);
+      const serration = new THREE.Mesh(serrationGeometry, darkMetalMaterial);
+      serration.position.set(0, 0.06, -0.08 + (i * 0.015));
+      pistolGroup.add(serration);
+    }
+    
+    // Create barrel
+    const barrelGeometry = new THREE.CylinderGeometry(0.015, 0.015, 0.2, 16);
+    const barrel = new THREE.Mesh(barrelGeometry, darkMetalMaterial);
+    barrel.rotation.set(0, 0, Math.PI / 2);
+    barrel.position.set(0, 0.04, -0.15);
+    pistolGroup.add(barrel);
+    
+    // Create barrel extension (muzzle)
+    const muzzleGeometry = new THREE.CylinderGeometry(0.017, 0.017, 0.02, 16);
+    const muzzle = new THREE.Mesh(muzzleGeometry, darkMetalMaterial);
+    muzzle.rotation.set(0, 0, Math.PI / 2);
+    muzzle.position.set(0, 0.04, -0.24);
+    pistolGroup.add(muzzle);
+    
+    // Create frame
+    const frameGeometry = new THREE.BoxGeometry(0.056, 0.04, 0.1);
+    const frame = new THREE.Mesh(frameGeometry, darkMetalMaterial);
+    frame.position.set(0, 0.02, -0.02);
+    pistolGroup.add(frame);
+    
+    // Create grip
+    const gripGeometry = new THREE.BoxGeometry(0.06, 0.12, 0.07);
+    const grip = new THREE.Mesh(gripGeometry, gripMaterial);
+    grip.position.set(0, -0.05, 0);
+    pistolGroup.add(grip);
+    
+    // Create grip texture (stippling)
+    for (let i = 0; i < 4; i++) {
+      for (let j = 0; j < 6; j++) {
+        const stippleGeometry = new THREE.BoxGeometry(0.004, 0.004, 0.004);
+        const stipple = new THREE.Mesh(stippleGeometry, darkMetalMaterial);
+        stipple.position.set(
+          -0.025 + (i * 0.017),
+          -0.05 + (j * 0.017),
+          0.036
+        );
+        pistolGroup.add(stipple);
+      }
+    }
+    
+    // Create trigger guard
+    const guardGeometry = new THREE.TorusGeometry(0.022, 0.006, 8, 12, Math.PI);
+    const guard = new THREE.Mesh(guardGeometry, darkMetalMaterial);
+    guard.rotation.set(Math.PI / 2, 0, 0);
+    guard.position.set(0, -0.01, -0.04);
+    pistolGroup.add(guard);
+    
+    // Create trigger
+    const triggerGeometry = new THREE.BoxGeometry(0.01, 0.03, 0.01);
+    const trigger = new THREE.Mesh(triggerGeometry, darkMetalMaterial);
+    trigger.position.set(0, -0.01, -0.01);
+    pistolGroup.add(trigger);
+    
+    // Create sights
+    const frontSightGeometry = new THREE.BoxGeometry(0.01, 0.01, 0.01);
+    const frontSight = new THREE.Mesh(frontSightGeometry, darkMetalMaterial);
+    frontSight.position.set(0, 0.075, -0.14);
+    pistolGroup.add(frontSight);
+    
+    const rearSightGeometry = new THREE.BoxGeometry(0.03, 0.01, 0.01);
+    const rearSight = new THREE.Mesh(rearSightGeometry, darkMetalMaterial);
+    rearSight.position.set(0, 0.075, 0.01);
+    pistolGroup.add(rearSight);
+    
+    // Create magazine release
+    const magReleaseGeometry = new THREE.CylinderGeometry(0.006, 0.006, 0.01, 8);
+    const magRelease = new THREE.Mesh(magReleaseGeometry, darkMetalMaterial);
+    magRelease.rotation.set(Math.PI / 2, 0, 0);
+    magRelease.position.set(-0.031, -0.01, -0.02);
+    pistolGroup.add(magRelease);
+    
+    return pistolGroup;
+  }
+  
+  /**
+   * Create a shotgun model
+   * @returns {THREE.Group} - Shotgun model
+   */
+  createShotgunModel() {
+    const shotgunGroup = new THREE.Group();
+    
+    // Materials
+    const darkMetalMaterial = new THREE.MeshStandardMaterial({
+      color: 0x111111,
+      roughness: 0.4,
+      metalness: 0.8
+    });
+    
+    const barrelMetalMaterial = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      roughness: 0.3,
+      metalness: 0.85
+    });
+    
+    const darkWoodMaterial = new THREE.MeshStandardMaterial({
+      color: 0x3b2504,
+      roughness: 0.9,
+      metalness: 0.1
+    });
+    
+    const lightWoodMaterial = new THREE.MeshStandardMaterial({
+      color: 0x6b4423,
+      roughness: 0.85,
+      metalness: 0.1
+    });
+    
+    // Create main barrel
+    const barrelGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.55, 16);
+    const barrel = new THREE.Mesh(barrelGeometry, barrelMetalMaterial);
+    barrel.rotation.set(0, 0, Math.PI / 2);
+    barrel.position.set(0, 0, -0.22);
+    shotgunGroup.add(barrel);
+    
+    // Create second barrel below
+    const barrel2Geometry = new THREE.CylinderGeometry(0.02, 0.02, 0.55, 16);
+    const barrel2 = new THREE.Mesh(barrel2Geometry, barrelMetalMaterial);
+    barrel2.rotation.set(0, 0, Math.PI / 2);
+    barrel2.position.set(0, -0.04, -0.22);
+    shotgunGroup.add(barrel2);
+    
+    // Create barrel band connecting the barrels
+    const barrelBandGeometry = new THREE.BoxGeometry(0.05, 0.06, 0.03);
+    const barrelBand = new THREE.Mesh(barrelBandGeometry, darkMetalMaterial);
+    barrelBand.position.set(0, -0.02, -0.43);
+    shotgunGroup.add(barrelBand);
+    
+    // Create muzzle
+    const muzzleGeometry = new THREE.CylinderGeometry(0.025, 0.025, 0.03, 16);
+    const muzzle = new THREE.Mesh(muzzleGeometry, darkMetalMaterial);
+    muzzle.rotation.set(0, 0, Math.PI / 2);
+    muzzle.position.set(0, 0, -0.49);
+    shotgunGroup.add(muzzle);
+    
+    // Create second muzzle
+    const muzzle2Geometry = new THREE.CylinderGeometry(0.025, 0.025, 0.03, 16);
+    const muzzle2 = new THREE.Mesh(muzzle2Geometry, darkMetalMaterial);
+    muzzle2.rotation.set(0, 0, Math.PI / 2);
+    muzzle2.position.set(0, -0.04, -0.49);
+    shotgunGroup.add(muzzle2);
+    
+    // Create receiver
+    const receiverGeometry = new THREE.BoxGeometry(0.07, 0.1, 0.2);
+    const receiver = new THREE.Mesh(receiverGeometry, darkMetalMaterial);
+    receiver.position.set(0, 0, 0);
+    shotgunGroup.add(receiver);
+    
+    // Create pump action
+    const pumpGeometry = new THREE.BoxGeometry(0.06, 0.06, 0.12);
+    const pump = new THREE.Mesh(pumpGeometry, darkWoodMaterial);
+    pump.position.set(0, -0.02, -0.3);
+    shotgunGroup.add(pump);
+    
+    // Create pump grip detail
+    for (let i = 0; i < 5; i++) {
+      const gripLineGeometry = new THREE.BoxGeometry(0.062, 0.01, 0.01);
+      const gripLine = new THREE.Mesh(gripLineGeometry, darkMetalMaterial);
+      gripLine.position.set(0, -0.02, -0.34 + (i * 0.02));
+      shotgunGroup.add(gripLine);
+    }
+    
+    // Create stock
+    const stockGeometry = new THREE.BoxGeometry(0.06, 0.08, 0.3);
+    const stock = new THREE.Mesh(stockGeometry, lightWoodMaterial);
+    stock.position.set(0, -0.01, 0.2);
+    shotgunGroup.add(stock);
+    
+    // Create stock grip curve
+    const stockCurveGeometry = new THREE.CylinderGeometry(0.04, 0.04, 0.06, 16, 1, false, 0, Math.PI);
+    const stockCurve = new THREE.Mesh(stockCurveGeometry, lightWoodMaterial);
+    stockCurve.rotation.set(0, Math.PI / 2, Math.PI / 2);
+    stockCurve.position.set(0, -0.05, 0.35);
+    shotgunGroup.add(stockCurve);
+    
+    // Create trigger guard
+    const guardGeometry = new THREE.TorusGeometry(0.025, 0.005, 8, 12, Math.PI);
+    const guard = new THREE.Mesh(guardGeometry, darkMetalMaterial);
+    guard.rotation.set(Math.PI / 2, 0, 0);
+    guard.position.set(0, -0.03, -0.05);
+    shotgunGroup.add(guard);
+    
+    // Create trigger
+    const triggerGeometry = new THREE.BoxGeometry(0.01, 0.03, 0.01);
+    const trigger = new THREE.Mesh(triggerGeometry, darkMetalMaterial);
+    trigger.position.set(0, -0.03, -0.03);
+    shotgunGroup.add(trigger);
+    
+    // Create sight bead at muzzle
+    const beadSightGeometry = new THREE.SphereGeometry(0.005, 8, 8);
+    const beadSight = new THREE.Mesh(beadSightGeometry, new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.2,
+      metalness: 0.9
+    }));
+    beadSight.position.set(0, 0.02, -0.49);
+    shotgunGroup.add(beadSight);
+    
+    return shotgunGroup;
+  }
+  
+  /**
+   * Create an assault rifle model
+   * @returns {THREE.Group} - Assault rifle model
+   */
+  createAssaultRifleModel() {
+    const rifleGroup = new THREE.Group();
+    
+    // Materials
+    const darkMetalMaterial = new THREE.MeshStandardMaterial({
+      color: 0x111111,
+      roughness: 0.4,
+      metalness: 0.8
+    });
+    
+    const mainMetalMaterial = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      roughness: 0.3,
+      metalness: 0.85
+    });
+    
+    const polymerMaterial = new THREE.MeshStandardMaterial({
+      color: 0x222222,
+      roughness: 0.8,
+      metalness: 0.2
+    });
+    
+    const railMaterial = new THREE.MeshStandardMaterial({
+      color: 0x111111,
+      roughness: 0.5,
+      metalness: 0.6
+    });
+    
+    // Create upper receiver
+    const upperReceiverGeometry = new THREE.BoxGeometry(0.06, 0.06, 0.25);
+    const upperReceiver = new THREE.Mesh(upperReceiverGeometry, mainMetalMaterial);
+    upperReceiver.position.set(0, 0.04, 0);
+    rifleGroup.add(upperReceiver);
+    
+    // Create lower receiver
+    const lowerReceiverGeometry = new THREE.BoxGeometry(0.06, 0.08, 0.15);
+    const lowerReceiver = new THREE.Mesh(lowerReceiverGeometry, mainMetalMaterial);
+    lowerReceiver.position.set(0, -0.02, 0.05);
+    rifleGroup.add(lowerReceiver);
+    
+    // Create barrel
+    const barrelGeometry = new THREE.CylinderGeometry(0.015, 0.015, 0.3, 16);
+    const barrel = new THREE.Mesh(barrelGeometry, darkMetalMaterial);
+    barrel.rotation.set(0, 0, Math.PI / 2);
+    barrel.position.set(0, 0.04, -0.27);
+    rifleGroup.add(barrel);
+    
+    // Create barrel shroud/handguard
+    const handguardGeometry = new THREE.CylinderGeometry(0.025, 0.025, 0.2, 16);
+    const handguard = new THREE.Mesh(handguardGeometry, polymerMaterial);
+    handguard.rotation.set(0, 0, Math.PI / 2);
+    handguard.position.set(0, 0.04, -0.22);
+    rifleGroup.add(handguard);
+    
+    // Create muzzle brake
+    const muzzleBrakeGeometry = new THREE.CylinderGeometry(0.02, 0.025, 0.04, 16);
+    const muzzleBrake = new THREE.Mesh(muzzleBrakeGeometry, darkMetalMaterial);
+    muzzleBrake.rotation.set(0, 0, Math.PI / 2);
+    muzzleBrake.position.set(0, 0.04, -0.42);
+    rifleGroup.add(muzzleBrake);
+    
+    // Create top rail
+    const railGeometry = new THREE.BoxGeometry(0.03, 0.01, 0.3);
+    const rail = new THREE.Mesh(railGeometry, railMaterial);
+    rail.position.set(0, 0.075, -0.05);
+    rifleGroup.add(rail);
+    
+    // Create rail detail
+    for (let i = 0; i < 10; i++) {
+      const railNotchGeometry = new THREE.BoxGeometry(0.04, 0.005, 0.01);
+      const railNotch = new THREE.Mesh(railNotchGeometry, darkMetalMaterial);
+      railNotch.position.set(0, 0.08, -0.18 + (i * 0.03));
+      rifleGroup.add(railNotch);
+    }
+    
+    // Create front sight
+    const frontSightBaseGeometry = new THREE.BoxGeometry(0.04, 0.02, 0.02);
+    const frontSightBase = new THREE.Mesh(frontSightBaseGeometry, darkMetalMaterial);
+    frontSightBase.position.set(0, 0.09, -0.3);
+    rifleGroup.add(frontSightBase);
+    
+    const frontSightPostGeometry = new THREE.BoxGeometry(0.01, 0.02, 0.01);
+    const frontSightPost = new THREE.Mesh(frontSightPostGeometry, darkMetalMaterial);
+    frontSightPost.position.set(0, 0.11, -0.3);
+    rifleGroup.add(frontSightPost);
+    
+    // Create charging handle
+    const chargingHandleGeometry = new THREE.BoxGeometry(0.03, 0.02, 0.04);
+    const chargingHandle = new THREE.Mesh(chargingHandleGeometry, darkMetalMaterial);
+    chargingHandle.position.set(0, 0.07, 0.1);
+    rifleGroup.add(chargingHandle);
+    
+    // Create magazine
+    const magGeometry = new THREE.BoxGeometry(0.05, 0.18, 0.05);
+    const magazine = new THREE.Mesh(magGeometry, polymerMaterial);
+    magazine.position.set(0, -0.12, 0.05);
+    rifleGroup.add(magazine);
+    
+    // Create magazine curve
+    const magCurveGeometry = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+    const magCurve = new THREE.Mesh(magCurveGeometry, polymerMaterial);
+    magCurve.position.set(0, -0.21, 0.05);
+    magCurve.rotation.set(0.3, 0, 0);
+    rifleGroup.add(magCurve);
+    
+    // Create magazine base plate
+    const baseGeometry = new THREE.BoxGeometry(0.055, 0.01, 0.055);
+    const basePlate = new THREE.Mesh(baseGeometry, darkMetalMaterial);
+    basePlate.position.set(0, -0.235, 0.05);
+    rifleGroup.add(basePlate);
+    
+    // Create pistol grip
+    const gripGeometry = new THREE.BoxGeometry(0.04, 0.1, 0.05);
+    const grip = new THREE.Mesh(gripGeometry, polymerMaterial);
+    grip.position.set(0, -0.06, 0.12);
+    grip.rotation.set(-0.3, 0, 0);
+    rifleGroup.add(grip);
+    
+    // Create trigger
+    const triggerGeometry = new THREE.BoxGeometry(0.01, 0.03, 0.01);
+    const trigger = new THREE.Mesh(triggerGeometry, darkMetalMaterial);
+    trigger.position.set(0, 0, 0.12);
+    rifleGroup.add(trigger);
+    
+    // Create trigger guard
+    const guardGeometry = new THREE.TorusGeometry(0.02, 0.005, 8, 12, Math.PI);
+    const guard = new THREE.Mesh(guardGeometry, darkMetalMaterial);
+    guard.rotation.set(Math.PI / 2, 0, 0);
+    guard.position.set(0, -0.02, 0.12);
+    rifleGroup.add(guard);
+    
+    // Create stock
+    const stockGeometry = new THREE.BoxGeometry(0.05, 0.07, 0.18);
+    const stock = new THREE.Mesh(stockGeometry, polymerMaterial);
+    stock.position.set(0, 0.01, 0.25);
+    rifleGroup.add(stock);
+    
+    // Create stock plate
+    const stockPlateGeometry = new THREE.BoxGeometry(0.06, 0.08, 0.01);
+    const stockPlate = new THREE.Mesh(stockPlateGeometry, polymerMaterial);
+    stockPlate.position.set(0, 0.01, 0.34);
+    rifleGroup.add(stockPlate);
+    
+    // Create ejection port
+    const ejectionPortGeometry = new THREE.BoxGeometry(0.04, 0.01, 0.08);
+    const ejectionPort = new THREE.Mesh(ejectionPortGeometry, darkMetalMaterial);
+    ejectionPort.position.set(0.03, 0.04, 0.05);
+    rifleGroup.add(ejectionPort);
+    
+    return rifleGroup;
+  }
+
+  /**
+   * Update hand positions based on current weapon
+   */
+  updateHandPositions() {
+    if (!this.handsModel || !this.activeWeapon) return;
+    
+    const rightHand = this.handsModel.children[0];
+    const leftHand = this.handsModel.children[1];
+    
+    // Base position for different weapons (moved closer to camera)
+    if (this.activeWeapon.name === 'Pistol') {
+      // Right hand (trigger hand)
+      rightHand.position.set(0.05, -0.22, -0.3);
+      rightHand.rotation.set(-0.2, 0.2, 0);
+      
+      // Left hand (support hand, optional for pistol)
+      leftHand.position.set(0.02, -0.25, -0.28);
+      leftHand.rotation.set(-0.3, 0, 0.8);
+    } 
+    else if (this.activeWeapon.name === 'Shotgun') {
+      // Right hand (trigger hand)
+      rightHand.position.set(0.05, -0.19, -0.3);
+      rightHand.rotation.set(-0.2, 0.1, 0);
+      
+      // Left hand (pump/foregrip)
+      leftHand.position.set(0.04, -0.19, -0.45);
+      leftHand.rotation.set(-0.1, -0.1, 0);
+    }
+    else if (this.activeWeapon.name === 'Assault Rifle') {
+      // Right hand (trigger hand)
+      rightHand.position.set(0.05, -0.18, -0.3);
+      rightHand.rotation.set(-0.2, 0.1, 0);
+      
+      // Left hand (foregrip support)
+      leftHand.position.set(0.0, -0.2, -0.5);
+      leftHand.rotation.set(-0.1, -0.2, 0.2);
+    }
+    else {
+      // Default positions
+      rightHand.position.set(0.05, -0.22, -0.3);
+      rightHand.rotation.set(-0.3, 0.2, 0);
+      leftHand.position.set(-0.06, -0.22, -0.4);
+      leftHand.rotation.set(-0.2, -0.3, 0.1);
+    }
+  }
+
+  /**
+   * Initialize the default weapon (pistol)
+   */
+  initializeDefaultWeapon() {
+    // Create default pistol
+    const pistol = new Weapon(WeaponTypes.PISTOL);
+    pistol.init();
+    
+    // WeaponTypes.PISTOL already has hasInfiniteAmmo set to true
+    // No need to override these values manually
+    
+    // Add to weapons array
+    this.weapons.push(pistol);
+    
+    // Set as active weapon
+    this.activeWeapon = pistol;
+    this.currentWeaponIndex = 0;
+    
+    // Create the weapon view model
+    this.updateWeaponViewModel();
+    
+    // Update the ammo display
+    this.updateAmmoDisplay();
+    
+    console.log("Initialized default pistol with infinite ammo");
+  }
+
+  /**
+   * Update ammo display
+   */
+  updateAmmoDisplay() {
+    if (this.ammoDisplay && this.activeWeapon) {
+      // Show infinity symbol for weapons with infinite ammo
+      if (this.activeWeapon.hasInfiniteAmmo) {
+        this.ammoDisplay.textContent = `${this.activeWeapon.currentAmmo} / ∞`;
+      } else {
+        this.ammoDisplay.textContent = `${this.activeWeapon.currentAmmo} / ${this.activeWeapon.totalAmmo}`;
+      }
+      
+      this.weaponNameDisplay.textContent = this.activeWeapon.name;
+      
+      // Highlight in red if low ammo
+      if (this.activeWeapon.currentAmmo === 0) {
+        this.ammoDisplay.style.color = '#ff3333';
+      } else if (this.activeWeapon.currentAmmo <= this.activeWeapon.magazineSize * 0.3) {
+        this.ammoDisplay.style.color = '#ffcc00';
+      } else {
+        this.ammoDisplay.style.color = 'white';
+      }
+    }
+  }
+
+  /**
+   * Equip a new weapon purchased from a wall buy
+   * @param {Weapon} weapon - The weapon to equip
+   */
+  equipWeapon(weapon) {
+    // Skip if already reloading or dead
+    if (this.isReloading || this.isDead) {
+      return;
+    }
+    
+    console.log(`Equipping ${weapon.name}`);
+    
+    // Stop any weapon sounds from previous weapon
+    this.stopWeaponSound();
+    
+    // Make sure wall buy weapons have limited ammo (just one extra magazine)
+    if (weapon.name !== 'Pistol') {
+      weapon.hasInfiniteAmmo = false;
+      // Set total ammo to exactly one extra magazine
+      weapon.totalAmmo = weapon.magazineSize;
+      console.log(`Limited ${weapon.name} ammo to one extra magazine (${weapon.totalAmmo})`);
+    } else {
+      // Ensure pistol always has infinite ammo
+      weapon.hasInfiniteAmmo = true;
+      weapon.totalAmmo = Infinity;
+    }
+    
+    // Check if we already have this weapon type by comparing names
+    const existingWeaponIndex = this.weapons.findIndex(w => w.name === weapon.name);
+    
+    if (existingWeaponIndex >= 0) {
+      // If we already have this weapon type, just add ammo
+      const existingWeapon = this.weapons[existingWeaponIndex];
+      
+      if (!existingWeapon.hasInfiniteAmmo) {
+        // Add one magazine of ammo for non-infinite weapons
+        existingWeapon.totalAmmo += weapon.magazineSize;
+        console.log(`Added one magazine (${weapon.magazineSize}) to existing ${existingWeapon.name}`);
+      }
+      
+      // Switch to this weapon if not already active
+      if (this.currentWeaponIndex !== existingWeaponIndex) {
+        this.currentWeaponIndex = existingWeaponIndex;
+        this.activeWeapon = existingWeapon;
+        
+        // Remove existing weapon model first
+        if (this.weaponViewModel) {
+          this.modelContainer.remove(this.weaponViewModel);
+          this.weaponViewModel = null;
+        }
+        
+        // Make sure the weapon view updates
+        this.updateWeaponViewModel();
+        this.updateHandPositions();
+        this.playWeaponSwitchAnimation();
+        
+        console.log("Switched to existing weapon:", this.activeWeapon.name);
+      } else {
+        console.log("Already equipped with this weapon, added ammo only");
+      }
+    } else {
+      // Add new weapon to arsenal
+      this.weapons.push(weapon);
+      
+      // Switch to the new weapon
+      this.currentWeaponIndex = this.weapons.length - 1;
+      this.activeWeapon = weapon;
+      
+      // Remove existing weapon model first
+      if (this.weaponViewModel) {
+        this.modelContainer.remove(this.weaponViewModel);
+        this.weaponViewModel = null;
+      }
+      
+      // Make sure the weapon view updates
+      this.updateWeaponViewModel();
+      this.updateHandPositions();
+      this.playWeaponSwitchAnimation();
+      
+      console.log("Added new weapon:", this.activeWeapon.name);
+    }
+    
+    // Update display
+    this.updateAmmoDisplay();
+  }
+
+  /**
+   * Switch to next weapon
+   */
+  nextWeapon() {
+    // Skip if dead or only one weapon
+    if (this.isDead || this.weapons.length <= 1) {
+      return;
+    }
+    
+    // Stop any continuous weapon sound
+    this.stopWeaponSound();
+    
+    // Cycle to next weapon
+    this.currentWeaponIndex = (this.currentWeaponIndex + 1) % this.weapons.length;
+    this.activeWeapon = this.weapons[this.currentWeaponIndex];
+    
+    // Play weapon switch animation
+    this.playWeaponSwitchAnimation();
+    
+    // Update ammo display for new weapon
+    this.updateAmmoDisplay();
+  }
+
+  /**
+   * Switch to previous weapon
+   */
+  prevWeapon() {
+    // Skip if dead or only one weapon
+    if (this.isDead || this.weapons.length <= 1) {
+      return;
+    }
+    
+    // Stop any continuous weapon sound
+    this.stopWeaponSound();
+    
+    // Cycle to previous weapon
+    this.currentWeaponIndex = (this.currentWeaponIndex - 1 + this.weapons.length) % this.weapons.length;
+    this.activeWeapon = this.weapons[this.currentWeaponIndex];
+    
+    // Play weapon switch animation
+    this.playWeaponSwitchAnimation();
+    
+    // Update ammo display for new weapon
+    this.updateAmmoDisplay();
+  }
+
+  /**
+   * Play weapon switch animation
+   */
+  playWeaponSwitchAnimation() {
+    if (!this.modelContainer) return;
+    
+    // Store original position
+    const originalY = this.modelContainer.position.y;
+    
+    // Move down (out of view)
+    this.modelContainer.position.y = -1;
+    
+    // Animate back up
+    setTimeout(() => {
+      if (this.modelContainer) {
+        this.modelContainer.position.y = originalY;
+        
+        // Ensure hand positions are correctly updated
+        this.updateHandPositions();
+        
+        console.log("Weapon switch animation completed");
+      }
+    }, 200);
+  }
+
+  /**
+   * Reload the current weapon
+   */
+  reload() {
+    // Skip if reloading, no weapon, or player is dead
+    if (this.isReloading || !this.activeWeapon || this.isDead) {
+      return;
+    }
+    
+    // Skip reload if the magazine is already full
+    if (this.activeWeapon.currentAmmo === this.activeWeapon.magazineSize) {
+      console.log(`${this.activeWeapon.name} magazine already full`);
+      return;
+    }
+    
+    // Can't reload if no reserve ammo and weapon doesn't have infinite ammo
+    if (this.activeWeapon.totalAmmo <= 0 && !this.activeWeapon.hasInfiniteAmmo) {
+      console.log(`No ammo left for ${this.activeWeapon.name}`);
+      return;
+    }
+    
+    console.log(`Reloading ${this.activeWeapon.name}...`);
+    
+    // Stop any ongoing weapon sound (for automatic weapons)
+    this.stopWeaponSound();
+    
+    // Set reloading flag
+    this.isReloading = true;
+    
+    // Play reload animation
+    this.playReloadAnimation();
+    
+    // Play reload sound
+    this.playWeaponReloadSound();
+    
+    // Perform the actual reload calculation now (don't rely on the weapon's internal setTimeout)
+    const neededAmmo = this.activeWeapon.magazineSize - this.activeWeapon.currentAmmo;
+    let reloadAmount;
+    
+    if (this.activeWeapon.hasInfiniteAmmo) {
+      reloadAmount = neededAmmo;
+    } else {
+      reloadAmount = Math.min(neededAmmo, this.activeWeapon.totalAmmo);
+      // Immediately update the totalAmmo to prevent double-counting
+      this.activeWeapon.totalAmmo -= reloadAmount;
+    }
+    
+    // Wait for the reload animation to complete
+    setTimeout(() => {
+      // Skip if player died during reload
+      if (this.isDead) {
+        return;
+      }
+      
+      // Add the ammo to the current weapon directly
+      this.activeWeapon.currentAmmo += reloadAmount;
+      
+      // Clear reloading flag
+      this.isReloading = false;
+      
+      // Update ammo display
+      this.updateAmmoDisplay();
+      
+      console.log(`Reload complete: ${this.activeWeapon.currentAmmo}/${this.activeWeapon.totalAmmo}`);
+    }, this.activeWeapon.reloadTime * 1000);
+  }
+  
+  /**
+   * Switch back to the pistol when other weapons are out of ammo
+   */
+  switchToPistol() {
+    // First try to find by type
+    let pistolIndex = this.weapons.findIndex(w => w.type === WeaponTypes.PISTOL);
+    
+    // If not found by type, try by name as fallback
+    if (pistolIndex === -1) {
+      pistolIndex = this.weapons.findIndex(w => w.name === 'Pistol');
+    }
+    
+    // If we have a pistol, switch to it
+    if (pistolIndex !== -1) {
+      // Stop any continuous weapon sound from current weapon
+      this.stopWeaponSound();
+      
+      // Switch to pistol
+      this.currentWeaponIndex = pistolIndex;
+      this.activeWeapon = this.weapons[this.currentWeaponIndex];
+      
+      // Remove existing weapon model first
+      if (this.weaponViewModel) {
+        this.modelContainer.remove(this.weaponViewModel);
+        this.weaponViewModel = null;
+      }
+      
+      // Make sure the weapon view updates
+      this.updateWeaponViewModel();
+      this.updateHandPositions();
+      
+      // Play weapon switch animation
+      this.playWeaponSwitchAnimation();
+      
+      // Update ammo display for pistol
+      this.updateAmmoDisplay();
+      
+      console.log("Switched to pistol due to ammo depletion");
+    } else {
+      console.warn("No pistol found to switch to! This shouldn't happen.");
+      
+      // Last resort: check if we need to initialize a pistol
+      if (this.weapons.length === 0) {
+        console.log("No weapons found, initializing default pistol");
+        this.initializeDefaultWeapon();
+      }
     }
   }
 

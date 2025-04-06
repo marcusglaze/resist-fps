@@ -731,70 +731,32 @@ export class Room {
           
           // Check if hold is complete
           if (holdProgress >= 1.0) {
-            console.log("Hold complete for Mystery Box");
-            
-            // Check if player has enough points
-            if (player.score >= this.mysteryBox.cost) {
-              // Determine if we should use the client or normal method
-              const isMultiplayer = player.gameEngine && 
-                                    player.gameEngine.networkManager && 
-                                    player.gameEngine.networkManager.isMultiplayer;
-              const isHost = player.gameEngine && 
-                             player.gameEngine.networkManager && 
-                             player.gameEngine.networkManager.isHost;
+            // Check if player has enough points and box is not already open
+            if (player.score >= this.mysteryBox.cost && !this.mysteryBox.isOpen) {
+              // Attempt to open the mystery box
+              const result = this.mysteryBox.attemptOpen(player);
               
-              if (isMultiplayer && !isHost) {
-                // Use client-side method to open box
-                const result = this.mysteryBox.clientAttemptOpen(player);
-                
-                if (result) {
-                  // Set a 10-second timer for the weapon to be available
-                  this.mysteryBox.weaponTimeoutId = setTimeout(() => {
-                    if (this.mysteryBox.hasWeaponAvailable) {
-                      this.mysteryBox.hideWeapon();
-                      this.mysteryBox.hasWeaponAvailable = false;
-                      this.mysteryBox.isOpen = false;
+              if (result) {
+                // Set a 10-second timer for the weapon to be available
+                this.mysteryBox.weaponTimeoutId = setTimeout(() => {
+                  if (this.mysteryBox.hasWeaponAvailable) {
+                    this.mysteryBox.hideWeapon();
+                    this.mysteryBox.hasWeaponAvailable = false;
+                    this.mysteryBox.isOpen = false;
+                    
+                    // Update interaction text if player is still nearby
+                    if (this.nearbyMysteryBox && this.uiElements && this.uiElements.interactionText) {
+                      const hasEnoughPoints = player.score >= this.mysteryBox.cost;
+                      this.uiElements.interactionText.textContent = `HOLD F to open Mystery Box (${this.mysteryBox.cost.toLocaleString()} points)`;
                       
-                      // Update interaction text if player is still nearby
-                      if (this.nearbyMysteryBox && this.uiElements && this.uiElements.interactionText) {
-                        const hasEnoughPoints = player.score >= this.mysteryBox.cost;
-                        this.uiElements.interactionText.textContent = `HOLD F to open Mystery Box (${this.mysteryBox.cost.toLocaleString()} points)`;
-                        
-                        if (hasEnoughPoints) {
-                          this.uiElements.interactionText.style.color = '#4FC3F7';
-                        } else {
-                          this.uiElements.interactionText.style.color = '#FF5252';
-                        }
+                      if (hasEnoughPoints) {
+                        this.uiElements.interactionText.style.color = '#4FC3F7';
+                      } else {
+                        this.uiElements.interactionText.style.color = '#FF5252';
                       }
                     }
-                  }, 10000); // 10 seconds
-                }
-              } else {
-                // Use normal method for host or single player
-                const result = this.mysteryBox.attemptOpen(player);
-                
-                if (result) {
-                  // Set a 10-second timer for the weapon to be available
-                  this.mysteryBox.weaponTimeoutId = setTimeout(() => {
-                    if (this.mysteryBox.hasWeaponAvailable) {
-                      this.mysteryBox.hideWeapon();
-                      this.mysteryBox.hasWeaponAvailable = false;
-                      this.mysteryBox.isOpen = false;
-                      
-                      // Update interaction text if player is still nearby
-                      if (this.nearbyMysteryBox && this.uiElements && this.uiElements.interactionText) {
-                        const hasEnoughPoints = player.score >= this.mysteryBox.cost;
-                        this.uiElements.interactionText.textContent = `HOLD F to open Mystery Box (${this.mysteryBox.cost.toLocaleString()} points)`;
-                        
-                        if (hasEnoughPoints) {
-                          this.uiElements.interactionText.style.color = '#4FC3F7';
-                        } else {
-                          this.uiElements.interactionText.style.color = '#FF5252';
-                        }
-                      }
-                    }
-                  }, 10000); // 10 seconds
-                }
+                  }
+                }, 10000); // 10 seconds
               }
             }
             
@@ -816,23 +778,8 @@ export class Room {
         if (isPickingUp) {
           console.log("MYSTERY BOX - Detected F press, attempting to take weapon");
           
-          // Determine if we should use the client or normal method
-          const isMultiplayer = player.gameEngine && 
-                                player.gameEngine.networkManager && 
-                                player.gameEngine.networkManager.isMultiplayer;
-          const isHost = player.gameEngine && 
-                        player.gameEngine.networkManager && 
-                        player.gameEngine.networkManager.isHost;
-          
-          let weaponTaken = false;
-          
-          if (isMultiplayer && !isHost) {
-            // Take the weapon with client method
-            weaponTaken = this.mysteryBox.clientTakeWeapon(player);
-          } else {
-            // Take the weapon with normal method
-            weaponTaken = this.mysteryBox.takeWeapon(player);
-          }
+          // Take the weapon with a simple press
+          const weaponTaken = this.mysteryBox.takeWeapon(player);
           
           if (weaponTaken) {
             console.log("MYSTERY BOX - Weapon successfully taken by player");
@@ -864,6 +811,9 @@ export class Room {
           
           // Reset interaction state
           player.isInteracting = false;
+          if (player.keys) {
+            player.keys.f = false;
+          }
         }
       }
     }

@@ -530,51 +530,43 @@ export class Engine {
   }
   
   /**
-   * Handle the game over state for multiplayer games
+   * Handle multiplayer game over scenarios
    */
   handleMultiplayerGameOver() {
-    // If this is not the host, we never show host controls
-    if (!this.networkManager.p2pNetwork.isHost) {
-      try {
-        // Check if all players are dead according to the game state
-        const allPlayersDead = this.networkManager.p2pNetwork.areAllPlayersDead();
-        const hostHasDeclaredGameOver = this.networkManager.getGameStatus()?.isGameOver === true;
-        
-        console.log(`Client game over check: allPlayersDead=${allPlayersDead}, hostHasDeclaredGameOver=${hostHasDeclaredGameOver}, localPlayerIsDead=${this.controls.isDead}`);
-        
-        // Only show game over if host has declared game over AND local player is dead
-        if ((allPlayersDead || hostHasDeclaredGameOver) && this.controls.isDead) {
-          console.log('Showing client game over screen (all players dead)');
-          // Show client game over screen
-          document.getElementById('gameOverScreen').style.display = 'flex';
-          document.getElementById('hostControls').style.display = 'none';
-          this.isGameOver = true;
-        } 
-        // If host has declared game over but local player is still alive, show spectator message
-        else if (hostHasDeclaredGameOver && !this.controls.isDead) {
-          console.log('Host has ended the game, but local player is still alive - showing spectator screen');
-          document.getElementById('spectateScreen').style.display = 'flex';
-          this.isGameOver = true;
-        }
-      } catch (error) {
-        console.error('Error checking game state for multiplayer game over:', error);
-        // If we can't get the game state (e.g., host disconnected), show the client game over screen
-        if (this.controls.isDead) {
-          console.log('Showing client game over screen (error or host disconnected)');
-          document.getElementById('gameOverScreen').style.display = 'flex';
-          document.getElementById('hostControls').style.display = 'none';
-          this.isGameOver = true;
-        }
+    if (!this.networkManager) return;
+    
+    // Disable any existing spectator mode if active
+    if (this.isSpectatorMode) {
+      this.disableSpectatorMode();
+    }
+    
+    // If we're the host, check if all players are dead
+    if (this.networkManager.isHost) {
+      const allPlayersDead = this.checkAllPlayersDead();
+      
+      // If all players are dead, show game over with host controls
+      if (allPlayersDead) {
+        console.log("Host: All players are dead, showing game over screen");
+        this.showMultiplayerHostGameOverScreen();
+      } else {
+        // Not all players dead - show spectate screen
+        console.log("Host: Not all players dead, showing spectate screen");
+        this.showMultiplayerSpectateScreen();
       }
     } else {
-      // This is the host - show host controls
-      console.log('Showing host game over screen');
-      document.getElementById('gameOverScreen').style.display = 'flex';
-      document.getElementById('hostControls').style.display = 'block';
-      this.isGameOver = true;
+      // For clients, check if all players are dead according to latest game state
+      const gameState = this.networkManager.network.getGameState();
+      const allPlayersDead = gameState.gameStatus?.allPlayersDead || false;
       
-      // Since we're the host, broadcast final game state
-      this.networkManager.p2pNetwork.broadcastGameState(true);
+      if (allPlayersDead) {
+        // All players are dead, show game over screen
+        console.log("Client: All players dead, waiting for host to restart");
+        this.networkManager.showMultiplayerGameOverScreen(true);
+      } else {
+        // Not all players dead - show spectate screen
+        console.log("Client: Not all players dead, showing spectate screen");
+        this.showMultiplayerSpectateScreen();
+      }
     }
   }
   

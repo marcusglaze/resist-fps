@@ -496,28 +496,6 @@ export class NetworkManager {
         room: !!(this.gameEngine.scene && this.gameEngine.scene.room)
       });
     }
-    
-    // Update mystery box states if necessary
-    if (state.mysteryBoxes && this.gameEngine.scene && this.gameEngine.scene.room) {
-      const room = this.gameEngine.scene.room;
-      
-      // Handle single mystery box
-      if (room.mysteryBox && state.mysteryBoxes.length > 0) {
-        console.log('Syncing mystery box state from host');
-        room.mysteryBox.syncFromHost(state.mysteryBoxes[0]);
-      }
-      
-      // Handle multiple mystery boxes if implemented
-      if (Array.isArray(room.mysteryBoxes) && Array.isArray(state.mysteryBoxes)) {
-        console.log(`Syncing ${state.mysteryBoxes.length} mystery boxes from host`);
-        
-        state.mysteryBoxes.forEach((boxData, index) => {
-          if (room.mysteryBoxes[index]) {
-            room.mysteryBoxes[index].syncFromHost(boxData);
-          }
-        });
-      }
-    }
   }
   
   /**
