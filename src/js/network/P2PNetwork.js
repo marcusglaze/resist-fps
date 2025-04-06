@@ -23,6 +23,11 @@ export class P2PNetwork {
     this.lastClientActionTime = 0;
     this.clientActionDebounceTime = 150; // ms to wait after client actions before override
     
+    // Tracking for reliable action delivery
+    this._pendingActions = {};
+    this._maxActionRetries = 5;
+    this._actionRetryInterval = 150; // ms
+    
     // Add window close handler to ensure proper cleanup
     window.addEventListener('beforeunload', this._handleWindowClose.bind(this));
     
@@ -442,7 +447,53 @@ export class P2PNetwork {
         
       case 'playerAction':
         // Handle a player action (shooting, movement, etc.)
-        this.handlePlayerAction(data.action, conn.peer);
+        if (this.isHost && data.action && data.action.id) {
+          console.log(`NETWORK: Host received action ${data.action.type} with ID ${data.action.id} from ${conn.peer}`);
+          
+          // Process the action
+          this.handlePlayerAction(data.action, conn.peer);
+          
+          // Send acknowledgment back to the client if requested
+          if (data.requiresAck) {
+            this.sendToPlayer(conn.peer, {
+              type: 'actionAck',
+              actionId: data.action.id,
+              status: 'received'
+            });
+          }
+        } else {
+          console.log('Received player action without host or without action ID');
+          this.handlePlayerAction(data.action, conn.peer);
+        }
+        break;
+        
+      case 'actionAck':
+        // Handle acknowledgment for a player action
+        if (!this.isHost && data.actionId) {
+          console.log(`NETWORK: Received acknowledgment for action ${data.actionId}`);
+          this.confirmAction(data.actionId);
+        }
+        break;
+        
+      case 'actionResult':
+        // Handle the result of an action (success/failure)
+        if (!this.isHost && data.actionId) {
+          console.log(`NETWORK: Received result for action ${data.actionId}: ${data.result}`);
+          
+          // Confirm the action was processed
+          this.confirmAction(data.actionId);
+          
+          // Process any specific result data
+          if (data.actionType === 'damageEnemy') {
+            // Handle enemy damage result
+            this.handleEnemyDamageConfirmation(data.resultData);
+          } else if (data.actionType === 'addWindowBoard') {
+            // Handle window boarding result
+            if (this.gameEngine && this.gameEngine.networkManager) {
+              this.gameEngine.networkManager.handleWindowUpdate(data.resultData);
+            }
+          }
+        }
         break;
         
       case 'playerPosition':
@@ -520,28 +571,103 @@ export class P2PNetwork {
     // Record the time of this client action to prevent immediate state overrides
     if (this.isHost) {
       this.lastClientActionTime = Date.now();
-      console.log(`Client action received, debouncing state updates for ${this.clientActionDebounceTime}ms`);
+      console.log(`NETWORK: Client action received (${action.type}), debouncing state updates for ${this.clientActionDebounceTime}ms`);
     }
     
-    // This would be implemented based on the game mechanics
-    console.log(`Player ${playerId} performed action:`, action);
-    
-    // Handle specific action types
-    if (action.type === 'damageEnemy' && this.isHost) {
-      // Apply damage to the enemy if we're the host
-      this.applyEnemyDamage(action.data, playerId);
-    } else if (action.type === 'addWindowBoard' && this.isHost) {
-      // Handle window boarding from client
-      this.applyWindowBoarding(action.data, playerId);
-    } else if (action.type === 'removeWindowBoard' && this.isHost) {
-      // Handle window board removal from client
-      this.applyWindowBoardRemoval(action.data, playerId);
-    } else if (action.type === 'damageWindowBoard' && this.isHost) {
-      // Handle window board damage from client
-      this.applyWindowBoardDamage(action.data, playerId);
+    // Handler for specific action types (for host only)
+    if (this.isHost) {
+      console.log(`NETWORK: Host processing action from player ${playerId}:`, action);
+      
+      try {
+        let result = null;
+        let resultData = null;
+        
+        // Handle specific action types
+        switch (action.type) {
+          case 'damageEnemy':
+            // Apply damage to the enemy
+            result = this.applyEnemyDamage(action.data, playerId);
+            
+            // Send the result back specifically to the client who sent the action
+            if (action.id) {
+              this.sendToPlayer(playerId, {
+                type: 'actionResult',
+                actionId: action.id,
+                actionType: 'damageEnemy',
+                result: result ? 'success' : 'failure',
+                resultData: result
+              });
+            }
+            break;
+            
+          case 'addWindowBoard':
+            // Handle window boarding
+            resultData = this.applyWindowBoarding(action.data, playerId);
+            
+            // Send the result back specifically to the client who sent the action
+            if (action.id) {
+              this.sendToPlayer(playerId, {
+                type: 'actionResult',
+                actionId: action.id,
+                actionType: 'addWindowBoard',
+                result: resultData ? 'success' : 'failure',
+                resultData: resultData
+              });
+            }
+            break;
+            
+          case 'removeWindowBoard':
+            // Handle window board removal
+            result = this.applyWindowBoardRemoval(action.data, playerId);
+            
+            // Send the result back specifically to the client who sent the action
+            if (action.id) {
+              this.sendToPlayer(playerId, {
+                type: 'actionResult',
+                actionId: action.id,
+                actionType: 'removeWindowBoard',
+                result: result ? 'success' : 'failure',
+                resultData: result
+              });
+            }
+            break;
+            
+          case 'damageWindowBoard':
+            // Handle window board damage
+            result = this.applyWindowBoardDamage(action.data, playerId);
+            
+            // Send the result back specifically to the client who sent the action
+            if (action.id) {
+              this.sendToPlayer(playerId, {
+                type: 'actionResult',
+                actionId: action.id,
+                actionType: 'damageWindowBoard',
+                result: result ? 'success' : 'failure',
+                resultData: result
+              });
+            }
+            break;
+            
+          default:
+            console.warn(`Unhandled action type: ${action.type}`);
+        }
+      } catch (error) {
+        console.error(`Error handling player action (${action.type}):`, error);
+        
+        // Send error response back to client if we have an action ID
+        if (action.id) {
+          this.sendToPlayer(playerId, {
+            type: 'actionResult',
+            actionId: action.id,
+            actionType: action.type,
+            result: 'error',
+            error: error.message || 'Unknown error'
+          });
+        }
+      }
     }
     
-    // If we're the host, broadcast this to all other clients
+    // Broadcast this to all other clients (if we're the host)
     if (this.isHost) {
       this.broadcastToOthers({
         type: 'playerAction',
@@ -555,12 +681,13 @@ export class P2PNetwork {
    * Apply damage to an enemy from a client request (host only)
    * @param {Object} damageData - The damage data
    * @param {string} playerId - The ID of the player who did the damage
+   * @returns {Object|null} Result data for the action, or null if failed
    */
   applyEnemyDamage(damageData, playerId) {
     if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
         !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
       console.warn("Cannot apply enemy damage: not host or game scene not fully initialized");
-      return;
+      return null;
     }
     
     // Record the time of this client action to prevent immediate state overrides
@@ -571,10 +698,10 @@ export class P2PNetwork {
       
       if (!enemyId) {
         console.error("Invalid enemy damage data: missing enemyId", damageData);
-        return;
+        return null;
       }
       
-      console.log(`Host applying damage from client ${playerId}: ${damage} to enemy ${enemyId} (headshot: ${isHeadshot}, timestamp: ${timestamp})`);
+      console.log(`NETWORK: Host applying damage from client ${playerId}: ${damage} to enemy ${enemyId} (headshot: ${isHeadshot}, timestamp: ${timestamp})`);
       
       // Find the enemy by ID
       const enemyManager = this.gameEngine.scene.room.enemyManager;
@@ -595,23 +722,28 @@ export class P2PNetwork {
         // Calculate actual damage applied (in case of limits or other factors)
         const actualDamage = healthBefore - enemy.health;
         
-        console.log(`Applied ${actualDamage} damage to enemy ${enemyId}, health changed from ${healthBefore} to ${enemy.health}`);
+        console.log(`NETWORK: Applied ${actualDamage} damage to enemy ${enemyId}, health changed from ${healthBefore} to ${enemy.health}`);
         
-        // Send confirmation of damage back to ALL clients
-        // This ensures everyone sees consistent enemy health
-        this.broadcastToAll({
-          type: 'enemyDamageConfirmed',
+        // Create result data
+        const resultData = {
           enemyId: enemyId,
           damage: actualDamage,
           health: enemy.health,
           isDead: enemy.health <= 0,
           isHeadshot: isHeadshot,
           timestamp: timestamp || Date.now()
+        };
+        
+        // Send confirmation of damage back to ALL clients
+        // This ensures everyone sees consistent enemy health
+        this.broadcastToAll({
+          type: 'enemyDamageConfirmed',
+          ...resultData
         });
         
         // Ensure immediate state update to all clients
         if (enemy.health <= 0) {
-          console.log(`Enemy ${enemyId} killed by client ${playerId}`);
+          console.log(`NETWORK: Enemy ${enemyId} killed by client ${playerId}`);
           
           // Force a game state update after the debounce period
           setTimeout(() => {
@@ -628,17 +760,21 @@ export class P2PNetwork {
             }
           }, this.clientActionDebounceTime + 50); // Delayed update
         }
+        
+        return resultData;
       } else {
-        console.warn(`Enemy with ID ${enemyId} not found. Available IDs: ${enemyManager.enemies.map(e => e.id).join(', ')}`);
+        console.warn(`NETWORK: Enemy with ID ${enemyId} not found. Available IDs: ${enemyManager.enemies.map(e => e.id).join(', ')}`);
         // Send error back to client
         this.sendToPlayer(playerId, {
           type: 'enemyDamageError',
           enemyId: enemyId,
           error: 'Enemy not found'
         });
+        return null;
       }
     } catch (error) {
       console.error("Error applying enemy damage:", error);
+      return null;
     }
   }
   
@@ -646,12 +782,13 @@ export class P2PNetwork {
    * Apply window boarding action from client (host only)
    * @param {Object} boardData - The window boarding data
    * @param {string} playerId - The ID of the player who boarded the window
+   * @returns {Object|null} Result data for the action, or null if failed
    */
   applyWindowBoarding(boardData, playerId) {
     if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
         !this.gameEngine.scene.room) {
       console.warn("Cannot apply window boarding: not host or game scene not fully initialized");
-      return;
+      return null;
     }
     
     // Record the time of this client action to prevent immediate state overrides
@@ -659,33 +796,33 @@ export class P2PNetwork {
     
     try {
       const { windowIndex, boardsCount, boardHealths, timestamp } = boardData;
-      console.log(`Host applying window boarding from client ${playerId}: window ${windowIndex}, boards ${boardsCount}, timestamp: ${timestamp}`);
+      console.log(`NETWORK: Host applying window boarding from client ${playerId}: window ${windowIndex}, boards ${boardsCount}, timestamp: ${timestamp}`);
       
       // Get the window by index
       const room = this.gameEngine.scene.room;
       
       if (!room.windows || !Array.isArray(room.windows)) {
         console.error("No windows array found in room:", room);
-        return;
+        return null;
       }
       
-      console.log(`Room has ${room.windows.length} windows, requested window at index ${windowIndex}`);
+      console.log(`NETWORK: Room has ${room.windows.length} windows, requested window at index ${windowIndex}`);
       
       // Validate window index
       if (windowIndex < 0 || windowIndex >= room.windows.length) {
         console.error(`Invalid window index ${windowIndex}, room has ${room.windows.length} windows`);
-        return;
+        return null;
       }
       
       const window = room.windows[windowIndex];
       
       if (window) {
-        console.log(`Found window at index ${windowIndex}, current boards: ${window.boardsCount}, adding board...`);
+        console.log(`NETWORK: Found window at index ${windowIndex}, current boards: ${window.boardsCount}, adding board...`);
         
         // Update the window state by adding a board
         const boardsBeforeAdd = window.boardsCount;
         const result = window.addBoard();
-        console.log(`Board add result: ${result ? 'success' : 'failed'}, new count: ${window.boardsCount}`);
+        console.log(`NETWORK: Board add result: ${result ? 'success' : 'failed'}, new count: ${window.boardsCount}`);
         
         // Check if the board was actually added
         if (result && window.boardsCount > boardsBeforeAdd) {
@@ -693,13 +830,22 @@ export class P2PNetwork {
           if (Array.isArray(boardHealths) && boardHealths.length > 0) {
             // Copy health values (slice to match current board count)
             window.boardHealths = [...boardHealths].slice(0, window.boardsCount);
-            console.log(`Updated board health values: ${window.boardHealths.join(', ')}`);
+            console.log(`NETWORK: Updated board health values: ${window.boardHealths.join(', ')}`);
           }
+          
+          // Create result data
+          const resultData = {
+            windowIndex: windowIndex,
+            boardsCount: window.boardsCount,
+            boardHealths: [...window.boardHealths],
+            isOpen: window.isOpen,
+            timestamp: timestamp || Date.now()
+          };
           
           // Force a game state update to all clients AFTER the debounce period
           setTimeout(() => {
             if (this.broadcastGameState) {
-              console.log("Broadcasting updated game state to all clients (after window boarding)");
+              console.log("NETWORK: Broadcasting updated game state to all clients (after window boarding)");
               this.broadcastGameState(true); // Force immediate update
             }
           }, this.clientActionDebounceTime + 50);
@@ -707,19 +853,21 @@ export class P2PNetwork {
           // Send a specific window update event immediately
           this.broadcastToAll({
             type: 'windowUpdated',
-            windowIndex: windowIndex,
-            boardsCount: window.boardsCount,
-            boardHealths: window.boardHealths,
-            isOpen: window.isOpen
+            ...resultData
           });
+          
+          return resultData;
         } else {
-          console.warn(`Failed to add board to window ${windowIndex}, current count: ${window.boardsCount}, max: ${window.maxBoards}`);
+          console.warn(`NETWORK: Failed to add board to window ${windowIndex}, current count: ${window.boardsCount}, max: ${window.maxBoards}`);
+          return null;
         }
       } else {
-        console.warn(`Window with index ${windowIndex} not found in array of length ${room.windows.length}`);
+        console.warn(`NETWORK: Window with index ${windowIndex} not found in array of length ${room.windows.length}`);
+        return null;
       }
     } catch (error) {
       console.error("Error applying window boarding:", error);
+      return null;
     }
   }
   
@@ -1320,24 +1468,125 @@ export class P2PNetwork {
   }
   
   /**
-   * Send a player action (shooting, reloading, etc.)
-   * @param {string} actionType - The type of action
-   * @param {Object} actionData - Additional data for the action
+   * Send player action to host with reliable delivery
+   * @param {string} actionType - Type of action (e.g., 'damageEnemy')
+   * @param {Object} actionData - Data for the action
+   * @returns {string} The action ID for tracking purposes
    */
   sendPlayerAction(actionType, actionData) {
-    if (!this.isConnected) return;
+    if (!this.isConnected) {
+      console.error("Cannot send player action: not connected");
+      return null;
+    }
     
+    // Generate a unique ID for this action
+    const actionId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    
+    // Create the action object
     const action = {
+      id: actionId,
       type: actionType,
       data: actionData,
       timestamp: Date.now()
     };
     
-    this.broadcastToAll({
-      type: 'playerAction',
+    console.log(`NETWORK: Sending player action ${actionType} with ID ${actionId}`, actionData);
+    
+    // If we're the host, process locally
+    if (this.isHost) {
+      this.handlePlayerAction(action, this.hostId);
+      return actionId;
+    }
+    
+    // Store as pending action waiting for confirmation
+    this._pendingActions[actionId] = {
       action: action,
-      playerId: this.isHost ? this.hostId : this.clientId
-    });
+      retries: 0,
+      sentTime: Date.now()
+    };
+    
+    // Send to host
+    if (this.connections.length > 0) {
+      try {
+        // Send only to the host (first connection for clients)
+        const hostConn = this.connections[0];
+        hostConn.send({
+          type: 'playerAction',
+          action: action,
+          requiresAck: true,
+          playerId: this.clientId
+        });
+        
+        // Set up retry mechanism
+        setTimeout(() => this._checkActionConfirmation(actionId), this._actionRetryInterval);
+        
+        return actionId;
+      } catch (error) {
+        console.error("Error sending player action:", error);
+        delete this._pendingActions[actionId];
+        return null;
+      }
+    } else {
+      console.error("Cannot send player action: no active connections");
+      delete this._pendingActions[actionId];
+      return null;
+    }
+  }
+  
+  /**
+   * Check if an action has been confirmed and retry if needed
+   * @param {string} actionId - The ID of the action to check
+   * @private
+   */
+  _checkActionConfirmation(actionId) {
+    const pendingAction = this._pendingActions[actionId];
+    
+    if (!pendingAction) {
+      // Action already confirmed or expired
+      return;
+    }
+    
+    // Check if we should retry
+    if (pendingAction.retries < this._maxActionRetries) {
+      pendingAction.retries++;
+      console.log(`NETWORK: Retrying action ${actionId} (attempt ${pendingAction.retries}/${this._maxActionRetries})`);
+      
+      // Retry sending the action
+      if (this.connections.length > 0) {
+        try {
+          // Send only to the host (first connection for clients)
+          const hostConn = this.connections[0];
+          hostConn.send({
+            type: 'playerAction',
+            action: pendingAction.action,
+            requiresAck: true,
+            playerId: this.clientId,
+            isRetry: true,
+            retryCount: pendingAction.retries
+          });
+          
+          // Check again after the retry interval
+          setTimeout(() => this._checkActionConfirmation(actionId), this._actionRetryInterval);
+        } catch (error) {
+          console.error("Error retrying player action:", error);
+        }
+      }
+    } else {
+      // Max retries reached, action failed
+      console.error(`NETWORK: Action ${actionId} failed after ${this._maxActionRetries} retries`);
+      delete this._pendingActions[actionId];
+    }
+  }
+  
+  /**
+   * Confirm that an action was received and processed
+   * @param {string} actionId - The ID of the action to confirm
+   */
+  confirmAction(actionId) {
+    if (this._pendingActions[actionId]) {
+      console.log(`NETWORK: Action ${actionId} confirmed`);
+      delete this._pendingActions[actionId];
+    }
   }
   
   /**

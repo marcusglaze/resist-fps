@@ -1023,18 +1023,25 @@ export class Enemy {
     
     // Then notify the host if in multiplayer mode
     if (networkManager && networkManager.network && !networkManager.isHost) {
-      console.log(`Client applying ${damage} damage to enemy ${this.id}, isHeadshot=${isHeadshot}, notifying host`);
+      console.log(`NETWORK: Client applying ${damage} damage to enemy ${this.id}, isHeadshot=${isHeadshot}, notifying host`);
       
       // Ensure we're actually sending the damage to the host with the correct action type
-      networkManager.network.sendPlayerAction('damageEnemy', {
+      const actionData = {
         enemyId: this.id,
         damage: damage,
         isHeadshot: isHeadshot,
-        timestamp: Date.now()  // Add timestamp to ensure uniqueness
-      });
+        timestamp: Date.now()
+      };
       
-      // Log the current health after applying local damage
-      console.log(`Enemy ${this.id} health after local damage: ${this.health}`);
+      // Send with reliable delivery
+      const actionId = networkManager.network.sendPlayerAction('damageEnemy', actionData);
+      
+      // Log the action ID and current health after applying local damage
+      if (actionId) {
+        console.log(`NETWORK: Sent damage action ${actionId} for enemy ${this.id}, local health now: ${this.health}`);
+      } else {
+        console.warn(`NETWORK: Failed to send damage action for enemy ${this.id}`);
+      }
     } else {
       console.warn("Not sending damage to host - network not available or client is host");
     }

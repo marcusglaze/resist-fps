@@ -441,28 +441,25 @@ export class Window {
     
     if (success) {
       // Then send the action to the host
-      console.log(`Client adding board to window ${this.windowIndex}, current count: ${this.boardsCount}`);
+      console.log(`NETWORK: Client adding board to window ${this.windowIndex}, current count: ${this.boardsCount}`);
       
-      // Make sure we have the right action type and data
-      networkManager.network.sendPlayerAction('addWindowBoard', {
+      // Create the action data
+      const actionData = {
         windowIndex: this.windowIndex,
         boardsCount: this.boardsCount,
         boardHealths: [...this.boardHealths], // Send a copy to avoid reference issues
-        timestamp: Date.now()  // Add timestamp to ensure uniqueness
-      });
+        timestamp: Date.now()
+      };
       
-      // Force multiple notifications to ensure it gets through
-      setTimeout(() => {
-        if (networkManager && networkManager.network) {
-          console.log(`Sending backup window board notification for window ${this.windowIndex}`);
-          networkManager.network.sendPlayerAction('addWindowBoard', {
-            windowIndex: this.windowIndex,
-            boardsCount: this.boardsCount,
-            boardHealths: [...this.boardHealths],
-            timestamp: Date.now() + 1  // Different timestamp
-          });
-        }
-      }, 100);
+      // Send with reliable delivery
+      const actionId = networkManager.network.sendPlayerAction('addWindowBoard', actionData);
+      
+      // Log the action ID
+      if (actionId) {
+        console.log(`NETWORK: Sent window board action ${actionId} for window ${this.windowIndex}`);
+      } else {
+        console.warn(`NETWORK: Failed to send window board action for window ${this.windowIndex}`);
+      }
       
       return true;
     } else {
