@@ -912,7 +912,6 @@ export class PlayerControls {
   }
 
   /**
-   * Shoot the current weapon
    */
   shoot() {
     try {
@@ -961,82 +960,181 @@ export class PlayerControls {
       // If we hit a zombie, damage it
       if (this.hitResult && this.hitResult.object && this.hitResult.object.userData && this.hitResult.object.userData.type === 'zombie') {
         console.log("SHOOTING: Hit a zombie, about to apply damage");
-        const enemy = this.hitResult.object.userData;
         
-        // Check if headshot
-        const isHeadshot = this.isHeadshot(this.hitResult);
-        console.log("SHOOTING: Headshot check:", isHeadshot);
+        // Debug the userData thoroughly
+        console.log("SHOOTING: Object userData:", this.hitResult.object.userData);
         
-        // Fix: Get networkManager from this.gameEngine (more reliable reference)
-        let networkManager = null;
-        if (this.gameEngine && this.gameEngine.networkManager) {
-          networkManager = this.gameEngine.networkManager;
+        // Get the actual enemy instance, not just the userData reference
+        let enemy = null;
+        
+        // Try direct reference first
+        if (this.hitResult.object.userData.enemy) {
+          enemy = this.hitResult.object.userData.enemy;
+          console.log("SHOOTING: Found enemy reference in direct userData");
+        } 
+        // Then check if the object itself is the enemy
+        else if (this.hitResult.object.userData.clientTakeDamage) {
+          enemy = this.hitResult.object.userData;
+          console.log("SHOOTING: Object userData itself has clientTakeDamage method");
         }
-        
-        console.log("SHOOTING: Network manager found?", !!networkManager);
-        if (networkManager) {
-          console.log("SHOOTING: Network details:", {
-            isHost: networkManager.isHost,
-            isMultiplayer: networkManager.isMultiplayer,
-            isConnected: networkManager.isConnected,
-            gameMode: networkManager.gameMode
-          });
-        }
-        
-        // Apply damage based on headshot or body shot
-        const isClient = networkManager && !networkManager.isHost && networkManager.isMultiplayer;
-        
-        console.log("SHOOTING: Player is a client?", isClient);
-        
-        if (isClient) {
-          console.log("SHOOTING: Client applying damage using clientTakeDamage");
+        // Then try finding it in the parent chain
+        else {
+          console.log("SHOOTING: No direct enemy reference, searching parent chain");
           
-          // Client-side damage with host notification
-          if (isHeadshot) {
-            enemy.clientTakeDamage(this.headshotDamage, true, networkManager);
-            console.log("SHOOTING: Applied headshot damage:", this.headshotDamage);
-          } else {
-            enemy.clientTakeDamage(this.damage, false, networkManager);
-            console.log("SHOOTING: Applied body shot damage:", this.damage);
+          // Start with the current object
+          let currentObject = this.hitResult.object;
+          
+          // Traverse up the parent chain looking for an enemy reference
+          while (currentObject && !enemy) {
+            // Check if this object has a parent with userData containing an enemy
+            if (currentObject.parent && currentObject.parent.userData) {
+              console.log("SHOOTING: Checking parent userData:", currentObject.parent.userData);
+              
+              if (currentObject.parent.userData.enemy) {
+                enemy = currentObject.parent.userData.enemy;
+                console.log("SHOOTING: Found enemy reference in parent userData");
+                break;
+              } else if (currentObject.parent.userData.type === 'zombie' && 
+                        typeof currentObject.parent.userData.clientTakeDamage === 'function') {
+                enemy = currentObject.parent.userData;
+                console.log("SHOOTING: Found enemy in parent userData with clientTakeDamage");
+                break;
+              }
+            }
+            
+            // Move up to the parent
+            currentObject = currentObject.parent;
           }
+        }
+        
+        if (!enemy) {
+          console.error("SHOOTING: Enemy reference is missing in userData", this.hitResult.object.userData);
+          // Continue to fire the weapon even if we can't damage the enemy
         } else {
-          console.log("SHOOTING: Host/singleplayer applying damage directly");
+          console.log("SHOOTING: Enemy instance found:", !!enemy, 
+                    "Has clientTakeDamage:", typeof enemy.clientTakeDamage === 'function',
+                    "Has takeDamage:", typeof enemy.takeDamage === 'function');
           
-          // Server-side or singleplayer damage
-          if (isHeadshot) {
-            enemy.takeDamage(this.headshotDamage);
-            this.displayDamageNumber(this.hitResult.point, this.headshotDamage, true);
-            
-            // Award extra points for headshot kills
-            if (enemy.health <= 0) {
-              this.addPoints(this.headshotKillPoints, true);
+          // Check if headshot
+          const isHeadshot = this.isHeadshot(this.hitResult);
+          console.log("SHOOTING: Headshot check:", isHeadshot);
+        
+          // Fix: Get networkManager from this.gameEngine (more reliable reference)
+          let networkManager = null;
+          if (this.gameEngine && this.gameEngine.networkManager) {
+            networkManager = this.gameEngine.networkManager;
+          }
+          
+          console.log("SHOOTING: Network manager found?", !!networkManager);
+          if (networkManager) {
+            console.log("SHOOTING: Network details:", {
+              isHost: networkManager.isHost,
+              isMultiplayer: networkManager.isMultiplayer,
+              isConnected: networkManager.isConnected,
+              gameMode: networkManager.gameMode
+            });
+          }
+          
+          // Apply damage based on headshot or body shot
+          const isClient = networkManager && !networkManager.isHost && networkManager.isMultiplayer;
+          
+          console.log("SHOOTING: Player is a client?", isClient);
+          
+          try {
+            if (isClient) {
+              console.log("SHOOTING: Client applying damage using clientTakeDamage");
+              
+              if (typeof enemy.clientTakeDamage !== 'function') {
+                console.error("SHOOTING: clientTakeDamage method not available on enemy, falling back to takeDamage");
+                
+                // Fallback to direct takeDamage with network notification
+                if (isHeadshot) {
+                  enemy.takeDamage(this.headshotDamage);
+                  console.log("SHOOTING: Applied headshot damage (fallback):", this.headshotDamage);
+                  // Manually send damage to host
+                  if (networkManager && networkManager.network) {
+                    networkManager.network.sendPlayerAction('damageEnemy', {
+                      enemyId: enemy.id || 'unknown',
+                      damage: this.headshotDamage,
+                      isHeadshot: true,
+                      timestamp: Date.now()
+                    });
+                  }
+                } else {
+                  enemy.takeDamage(this.damage);
+                  console.log("SHOOTING: Applied body shot damage (fallback):", this.damage);
+                  // Manually send damage to host
+                  if (networkManager && networkManager.network) {
+                    networkManager.network.sendPlayerAction('damageEnemy', {
+                      enemyId: enemy.id || 'unknown',
+                      damage: this.damage,
+                      isHeadshot: false,
+                      timestamp: Date.now()
+                    });
+                  }
+                }
+                
+                // Display damage numbers for feedback
+                this.displayDamageNumber(this.hitResult.point, isHeadshot ? this.headshotDamage : this.damage, isHeadshot);
+              } else {
+                // Client-side damage with host notification
+                if (isHeadshot) {
+                  enemy.clientTakeDamage(this.headshotDamage, true, networkManager);
+                  console.log("SHOOTING: Applied headshot damage:", this.headshotDamage);
+                  this.displayDamageNumber(this.hitResult.point, this.headshotDamage, true);
+                } else {
+                  enemy.clientTakeDamage(this.damage, false, networkManager);
+                  console.log("SHOOTING: Applied body shot damage:", this.damage);
+                  this.displayDamageNumber(this.hitResult.point, this.damage, false);
+                }
+              }
             } else {
-              this.addPoints(this.headshotPoints);
+              console.log("SHOOTING: Host/singleplayer applying damage directly");
+              
+              // Server-side or singleplayer damage
+              if (isHeadshot) {
+                enemy.takeDamage(this.headshotDamage);
+                this.displayDamageNumber(this.hitResult.point, this.headshotDamage, true);
+                
+                // Award extra points for headshot kills
+                if (enemy.health <= 0) {
+                  this.addPoints(this.headshotKillPoints, true);
+                } else {
+                  this.addPoints(this.headshotPoints);
+                }
+              } else {
+                enemy.takeDamage(this.damage);
+                this.displayDamageNumber(this.hitResult.point, this.damage, false);
+                
+                // Award points for regular kills
+                if (enemy.health <= 0) {
+                  this.addPoints(this.killPoints);
+                } else {
+                  this.addPoints(this.hitPoints);
+                }
+              }
             }
-          } else {
-            enemy.takeDamage(this.damage);
-            this.displayDamageNumber(this.hitResult.point, this.damage, false);
-            
-            // Award points for regular kills
-            if (enemy.health <= 0) {
-              this.addPoints(this.killPoints);
-            } else {
-              this.addPoints(this.hitPoints);
-            }
+          } catch (error) {
+            console.error("Error applying damage to enemy:", error);
           }
         }
       } else if (this.hitResult) {
         console.log("SHOOTING: Hit something else:", this.hitResult.object ? this.hitResult.object.name || "unnamed object" : "no object");
       }
-      
-      // Play weapon firing effects
-      this.activeWeapon.fire();
-      
-      // Update UI elements
-      this.updateAmmoDisplay();
-      
     } catch (error) {
       console.error("Error during shooting:", error);
+    }
+    
+    // Always fire the weapon regardless of any errors in the rest of the shoot method
+    // This ensures sound effects, ammo counts, etc. are handled properly
+    try {
+      console.log("SHOOTING: Firing weapon");
+      if (this.activeWeapon) {
+        this.activeWeapon.fire();
+        this.updateAmmoDisplay();
+      }
+    } catch (weaponError) {
+      console.error("Error firing weapon:", weaponError);
     }
   }
 
