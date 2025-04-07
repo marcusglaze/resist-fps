@@ -520,11 +520,36 @@ export class Engine {
   }
 
   /**
-   * End the game (called when player dies)
+   * End the game when the player dies
    */
   endGame() {
     console.log("Game over!");
-    this.isGameOver = true;
+    
+    // In multiplayer mode, only set isGameOver if all players are dead
+    if (this.networkManager && this.networkManager.isMultiplayer) {
+      // Check if any remote players are still alive
+      let hasLivingRemotePlayers = false;
+      this.networkManager.remotePlayers.forEach(player => {
+        if (!player.isDead) {
+          hasLivingRemotePlayers = true;
+        }
+      });
+      
+      // Set a separate flag for local player death
+      this.isLocalPlayerDead = true;
+      
+      // Only set isGameOver if no remote players are alive
+      if (!hasLivingRemotePlayers) {
+        console.log("All players dead - setting full game over");
+        this.isGameOver = true;
+      } else {
+        console.log("Local player dead but remote players alive - NOT setting isGameOver");
+        // We don't set isGameOver here, so the game loop continues
+      }
+    } else {
+      // Single player - always set isGameOver
+      this.isGameOver = true;
+    }
     
     // Unlock pointer
     this.unlockPointer();
@@ -631,16 +656,20 @@ export class Engine {
     if (!this.networkManager) return true;
     
     // The local player is dead (since endGame was called)
+    const localPlayerDead = true; // We can safely assume this since endGame was called
     let anyPlayersAlive = false;
     
     // Check remote players
     this.networkManager.remotePlayers.forEach(player => {
       if (!player.isDead) {
         anyPlayersAlive = true;
+        console.log("Found living remote player:", player.id);
       }
     });
     
-    return !anyPlayersAlive;
+    const allPlayersDead = !anyPlayersAlive;
+    console.log(`All players dead check result: ${allPlayersDead} (found living players: ${!allPlayersDead})`);
+    return allPlayersDead;
   }
   
   /**
@@ -1089,77 +1118,56 @@ export class Engine {
     // Skip if game is paused
     if (this.isPaused) return;
     
-    // Check for special case in multiplayer:
-    // If game is over for the host but there are living remote players, we should still process updates
-    let forceUpdateForRemotePlayers = false;
-    
-    if (this.isGameOver && this.networkManager && this.networkManager.isMultiplayer && 
-        this.networkManager.isHost) {
-      
-      // Check if any remote players are still alive
-      let hasLivingRemotePlayers = false;
-      if (this.networkManager.remotePlayers) {
-        this.networkManager.remotePlayers.forEach(player => {
-          if (!player.isDead) {
-            hasLivingRemotePlayers = true;
-          }
-        });
-      }
-      
-      if (hasLivingRemotePlayers) {
-        console.log("ENGINE: Continuing updates despite game over because remote players are still alive");
-        forceUpdateForRemotePlayers = true;
-      }
+    // Skip if game is over (important: in multiplayer this is only true when ALL players are dead)
+    if (this.isGameOver) {
+      // Even when game is over, still render the scene
+      this.render();
+      return;
     }
     
-    // Continue updates if not game over OR if we need to force updates for remote players
-    if (!this.isGameOver || forceUpdateForRemotePlayers) {
-      // Update UI manager
-      if (this.uiManager) {
-        this.uiManager.update(deltaTime);
+    // Special handling when local player is dead but remote players are alive
+    const localPlayerDeadButGameContinues = this.isLocalPlayerDead && !this.isGameOver;
+    
+    // Update UI manager
+    if (this.uiManager) {
+      this.uiManager.update(deltaTime);
+    }
+    
+    // Update controls if available (only if local player is not dead)
+    if (this.controls && !this.isLocalPlayerDead) {
+      this.controls.update(deltaTime);
+    } else if (this.controls && this.isLocalPlayerDead && this.isSpectatorMode) {
+      // When in spectator mode, we may still need to update camera for spectating
+      // This is handled by the spectator system separately
+    }
+    
+    // Update weapon manager (only if local player is not dead)
+    if (this.weaponManager && !this.isLocalPlayerDead) {
+      this.weaponManager.update(deltaTime);
+    }
+    
+    // Always update scene (for enemies, etc.) unless the game is fully over (all players dead)
+    if (this.scene) {
+      // If local player is dead but game continues, flag the scene to continue updates
+      if (localPlayerDeadButGameContinues) {
+        // Set flag down the chain to ensure enemies continue updating
+        this.scene.forceContinueUpdates = true;
       }
-      
-      // Update controls if available (skip player controls if game over)
-      if (this.controls && (!this.isGameOver || forceUpdateForRemotePlayers)) {
-        // Only update player controls if not game over, otherwise just update spectator camera
-        if (forceUpdateForRemotePlayers && this.isSpectatorMode) {
-          // Special handling for spectator mode when game over
-          // We may need to update camera position but not player controls
-          // (This is handled by the spectator interval)
-        } else if (!this.isGameOver) {
-          this.controls.update(deltaTime);
-        }
-      }
-      
-      // Update weapon manager (if not game over)
-      if (this.weaponManager && !this.isGameOver) {
-        this.weaponManager.update(deltaTime);
-      }
-      
-      // Always update scene (for enemies, etc.)
-      if (this.scene) {
-        // Pass information about force updating for remote players
-        this.scene.forceContinueUpdates = forceUpdateForRemotePlayers;
-        this.scene.update(deltaTime);
-      }
-      
-      // Always update physics world
-      if (this.physicsWorld) {
-        this.physicsWorld.step(deltaTime);
-      }
-      
-      // Always update renderer
-      this.render();
-      
-      // Check for multiplayer round end conditions (even when forcing updates)
-      if (this.networkManager && this.networkManager.isMultiplayer && 
-          this.networkManager.isHost) {
-        this.checkMultiplayerRoundEnd();
-      }
-    } else {
-      // Even when game is over, still render the scene
-      // This ensures the game continues to display visually
-      this.render();
+      this.scene.update(deltaTime);
+    }
+    
+    // Always update physics world unless game is fully over
+    if (this.physicsWorld) {
+      this.physicsWorld.step(deltaTime);
+    }
+    
+    // Always update renderer
+    this.render();
+    
+    // Check for multiplayer round end conditions
+    if (this.networkManager && this.networkManager.isMultiplayer && 
+        this.networkManager.isHost) {
+      this.checkMultiplayerRoundEnd();
     }
   }
 

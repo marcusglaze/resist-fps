@@ -456,24 +456,49 @@ export class P2PNetwork {
     try {
       switch(data.type) {
         case 'gameState':
-          // Update the game state with data from host
-          if (!this.isHost) {
-            this.handleGameState(data.state);
+          // Received a game state update from the host
+          if (!this.isHost && this.gameEngine && this.onGameStateUpdate) {
+            this.onGameStateUpdate(data.state);
           }
           break;
-        
+          
         case 'playerAction':
-          // Handle player actions (host only)
-          if (this.isHost) {
-            this.handlePlayerAction(conn.peer, data);
+          // Handle a player action (host only)
+          if (this.isHost && data.clientId && data.actionType && data.actionData) {
+            this.handlePlayerAction(data.clientId, data);
           }
           break;
           
         case 'actionResult':
-          // Handle result of an action we sent to the host
+          // Handle the result of an action (success/failure)
           if (!this.isHost && data.actionId) {
-            console.log(`NETWORK: Received action result for ${data.actionId}: ${data.result}`);
-            this.handleActionResult(data);
+            console.log(`NETWORK: Received result for action ${data.actionId}: ${data.result}`);
+            
+            // Process any specific result data
+            if (data.actionType === 'damageEnemy') {
+              // Handle enemy damage result
+              this.handleEnemyDamageConfirmation(data.resultData);
+            } else if (data.actionType === 'addWindowBoard') {
+              // Handle window boarding result
+              console.log("NETWORK: Received window boarding result", data.resultData);
+              if (this.gameEngine && this.gameEngine.scene && this.gameEngine.scene.room) {
+                const room = this.gameEngine.scene.room;
+                
+                // Find the window and update it with result data
+                if (data.resultData && data.resultData.windowIndex !== undefined) {
+                  const windowIndex = data.resultData.windowIndex;
+                  if (room.windows && room.windows[windowIndex]) {
+                    console.log(`NETWORK: Updating window ${windowIndex} with result data`);
+                    const window = room.windows[windowIndex];
+                    if (typeof window.handleActionResult === 'function') {
+                      window.handleActionResult(data.resultData);
+                    } else {
+                      console.warn("NETWORK: Window doesn't have handleActionResult method");
+                    }
+                  }
+                }
+              }
+            }
           }
           break;
           
@@ -529,22 +554,6 @@ export class P2PNetwork {
           if (!this.isHost && this.gameEngine && this.gameEngine.networkManager) {
             console.log("Received window update event, forwarding to NetworkManager");
             this.gameEngine.networkManager.handleWindowUpdate(data);
-          }
-          break;
-        
-        case 'assumeEnemyControl':
-          // Host is dead and we're being asked to help control enemies
-          if (!this.isHost && this.gameEngine) {
-            console.log("TAKEOVER: Received request to assume enemy control while host is dead");
-            this.handleAssumeEnemyControl(data);
-          }
-          break;
-          
-        case 'relinquishEnemyControl':
-          // Host is alive again, relinquish enemy control
-          if (!this.isHost && this.gameEngine) {
-            console.log("TAKEOVER: Received request to relinquish enemy control");
-            this.handleRelinquishEnemyControl(data);
           }
           break;
         
@@ -1076,711 +1085,559 @@ export class P2PNetwork {
   }
   
   /**
-   * Get current game state for broadcasting to clients
-   * @returns {Object} The current game state
+   * Get the current game state
+   * @returns {Object} The game state object
    */
   getGameState() {
-    if (!this.isHost || !this.gameEngine) {
-      return {};
+    // This would be implemented to extract the relevant game state
+    // from the game engine for synchronization
+    
+    if (!this.gameEngine) return {};
+    
+    return {
+      playerPositions: this.getPlayerPositions(),
+      enemies: this.getEnemiesState(),
+      round: this.getRoundInfo(),
+      windows: this.getWindowsState(),
+      gameStatus: this.getGameStatus(),
+      // Add other relevant game state data
+    };
+  }
+  
+  /**
+   * Get all player positions
+   * @returns {Object} Map of player IDs to positions
+   */
+  getPlayerPositions() {
+    const positions = {};
+    
+    // Add host's position if available
+    if (this.gameEngine && this.gameEngine.controls) {
+      positions[this.isHost ? this.hostId : this.clientId] = {
+        x: this.gameEngine.controls.camera.position.x,
+        y: this.gameEngine.controls.camera.position.y,
+        z: this.gameEngine.controls.camera.position.z,
+        rotationY: this.gameEngine.controls.camera.rotation.y,
+        health: this.gameEngine.controls.health || 100,
+        isDead: this.gameEngine.controls.isDead || false
+      };
     }
-
-    try {
-      const state = {
-        timestamp: Date.now()
-      };
-
-      // Get player positions
-      state.playerPositions = this.getAllPlayerPositions();
+    
+    // Add known remote player positions
+    if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
+      this.gameEngine.networkManager.remotePlayers.forEach((player, id) => {
+        if (player.position && id !== (this.isHost ? this.hostId : this.clientId)) {
+          positions[id] = {
+            ...player.position,
+            health: player.health || 100,
+            isDead: player.isDead || false
+          };
+        }
+      });
+    }
+    
+    return positions;
+  }
+  
+  /**
+   * Get the current state of all enemies for networking
+   * @returns {Array} Array of enemy state objects
+   */
+  getEnemiesState() {
+    if (!this.gameEngine || !this.gameEngine.scene || !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
+      return [];
+    }
+    
+    const enemies = this.gameEngine.scene.room.enemyManager.enemies;
+    const isLocalPlayerDead = this.gameEngine.isLocalPlayerDead;
+    
+    // Check if there are living remote players when local player is dead
+    let hasLivingRemotePlayers = false;
+    if (isLocalPlayerDead && this.remotePlayers) {
+      this.remotePlayers.forEach(player => {
+        if (!player.isDead) {
+          hasLivingRemotePlayers = true;
+        }
+      });
+    }
+    
+    // Capture enemy positions and states
+    const enemiesState = [];
+    
+    enemies.forEach((enemy) => {
+      if (!enemy || !enemy.mesh) return;
       
-      // Get enemy positions if available
-      if (this.gameEngine.scene && this.gameEngine.scene.room && 
-          this.gameEngine.scene.room.enemyManager) {
-        const enemyManager = this.gameEngine.scene.room.enemyManager;
-        state.enemies = enemyManager.enemies.map(enemy => ({
-          id: enemy.id,
-          position: {
-            x: enemy.instance.position.x,
-            y: enemy.instance.position.y,
-            z: enemy.instance.position.z
-          },
-          rotation: {
-            y: enemy.instance.rotation.y
-          },
-          state: enemy.state,
-          health: enemy.health,
-          maxHealth: enemy.maxHealth,
-          isDead: enemy.isDead || enemy.markedForRemoval,
-          type: enemy.type || 'standard'
-        }));
+      // Get enemy position and rotation
+      const position = enemy.mesh.position.clone();
+      const rotation = enemy.mesh.rotation.clone();
+      
+      // Get current state
+      let state = enemy.state;
+      
+      // If the local player is dead but there are living remote players,
+      // make sure enemies are still in a valid state for targeting
+      if (isLocalPlayerDead && hasLivingRemotePlayers && state === 'idle') {
+        // Force enemies to be in moving state so they'll target remote players
+        state = 'moving';
         
-        // Include round information
-        state.round = {
-          round: enemyManager.currentRound,
-          zombiesRemaining: enemyManager.zombiesRemaining,
-          roundActive: enemyManager.roundActive,
-          timeSinceLastRound: enemyManager.timeSinceLastRound
-        };
+        // Also update the actual enemy object to ensure consistent state
+        if (enemy.state === 'idle') {
+          enemy.state = 'moving';
+          enemy._forceContinueUpdating = true;
+          console.log(`NETWORK: Forcing enemy ${enemy.id} to 'moving' state for remote players`);
+        }
       }
       
-      // Include window states
-      if (this.gameEngine.scene && this.gameEngine.scene.room && 
-          this.gameEngine.scene.room.windows) {
-        state.windows = this.gameEngine.scene.room.windows.map((window, index) => ({
-          index: index,
-          boardsCount: window.boardsCount,
-          maxBoards: window.maxBoards,
-          isBreaking: window.isBreaking,
-          health: window.health
-        }));
+      // Create enemy state object with all needed data for clients
+      enemiesState.push({
+        id: enemy.id,
+        position: {
+          x: position.x,
+          y: position.y,
+          z: position.z
+        },
+        rotation: {
+          x: rotation.x,
+          y: rotation.y,
+          z: rotation.z
+        },
+        state: state,
+        health: enemy.health,
+        speed: enemy.speed,
+        isAttacking: enemy.isAttacking,
+        target: enemy.target ? {
+          x: enemy.target.x,
+          y: enemy.target.y,
+          z: enemy.target.z
+        } : null,
+        attackCooldown: enemy.attackCooldown,
+        attackDistance: enemy.attackDistance
+      });
+    });
+    
+    return enemiesState;
+  }
+  
+  /**
+   * Get information about the current round
+   * @returns {Object} Round information
+   */
+  getRoundInfo() {
+    if (!this.gameEngine.scene || !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
+      return { round: 0 };
+    }
+    
+    return {
+      round: this.gameEngine.scene.room.enemyManager.currentRound,
+      zombiesRemaining: this.gameEngine.scene.room.enemyManager.zombiesRemaining,
+      roundActive: this.gameEngine.scene.room.enemyManager.roundActive
+    };
+  }
+  
+  /**
+   * Get the current state of all windows
+   * @returns {Array} Array of window state objects
+   */
+  getWindowsState() {
+    if (!this.gameEngine.scene || !this.gameEngine.scene.room) {
+      console.warn("Cannot get window states: scene or room not available");
+      return [];
+    }
+    
+    const windows = this.gameEngine.scene.room.windows;
+    if (!windows || !Array.isArray(windows) || windows.length === 0) {
+      console.warn("No windows array found in room");
+      return [];
+    }
+    
+    console.log(`Getting state of ${windows.length} windows`);
+    
+    // Prepare window states
+    const windowStates = windows.map((window, index) => {
+      // Check if windowIndex is set, if not set it now
+      if (window.windowIndex === undefined) {
+        console.log(`Setting missing windowIndex ${index} on window before sending state`);
+        window.windowIndex = index;
       }
       
-      // Include game status information
-      state.gameStatus = {
-        isGameOver: this.gameEngine.isGameOver,
-        isPaused: this.gameEngine.isPaused,
-        allPlayersDead: this.allPlayersAreDead()
+      const state = {
+        windowIndex: window.windowIndex,
+        position: {
+          x: window.instance.position.x,
+          y: window.instance.position.y,
+          z: window.instance.position.z
+        },
+        boardsCount: window.boardsCount,
+        isOpen: window.isOpen,
+        health: window.boardHealths // Array of health values for each board
       };
+      
+      console.log(`Window ${index} state: ${window.boardsCount} boards, isOpen=${window.isOpen}`);
       
       return state;
-    } catch (error) {
-      console.error("Error generating game state:", error);
-      return {};
-    }
+    });
+    
+    return windowStates;
+  }
+  
+  /**
+   * Get game status information like paused state, game over state, etc.
+   * @returns {Object} Game status information
+   */
+  getGameStatus() {
+    if (!this.gameEngine) return {};
+    
+    return {
+      isPaused: this.gameEngine.isPaused || false,
+      isGameOver: this.gameEngine.isGameOver || false,
+      allPlayersDead: this.areAllPlayersDead()
+    };
   }
   
   /**
    * Check if all players in the game are dead
    * @returns {boolean} True if all players are dead
    */
-  allPlayersAreDead() {
-    // Start with checking the host
-    let allDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
+  areAllPlayersDead() {
+    if (!this.gameEngine) return false;
     
-    // If host is alive, we can return false immediately
-    if (!allDead) {
+    // Use the new flag instead of checking controls directly
+    const isLocalPlayerDead = this.gameEngine.isLocalPlayerDead;
+    
+    console.log(`NETWORK: Checking if all players are dead. Local player dead: ${isLocalPlayerDead}`);
+    
+    // If local player is alive, we know not all players are dead
+    if (!isLocalPlayerDead) {
+      console.log("NETWORK: Local player is alive, not all players are dead");
       return false;
     }
     
-    // Check remote players
-    if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
-      const remotePlayers = this.gameEngine.networkManager.remotePlayers;
-      if (remotePlayers.size > 0) {
-        let anyAlive = false;
-        remotePlayers.forEach(player => {
-          if (!player.isDead) {
-            anyAlive = true;
-          }
-        });
-        
-        // If any remote player is alive, not all are dead
-        return !anyAlive;
-      }
+    // Check if there are any living remote players
+    let hasLivingRemotePlayers = false;
+    
+    // Count how many players we check
+    let remotePlayerCount = 0;
+    
+    // Check all remote players
+    if (this.remotePlayers) {
+      this.remotePlayers.forEach(player => {
+        remotePlayerCount++;
+        if (!player.isDead) {
+          hasLivingRemotePlayers = true;
+          console.log(`NETWORK: Remote player ${player.id} is still alive`);
+        } else {
+          console.log(`NETWORK: Remote player ${player.id} is dead`);
+        }
+      });
     }
     
-    // Default to host state if no remote players
+    console.log(`NETWORK: Checked ${remotePlayerCount} remote players. Living remote players found: ${hasLivingRemotePlayers}`);
+    
+    // All players are dead if the local player is dead AND there are no living remote players
+    const allDead = isLocalPlayerDead && !hasLivingRemotePlayers;
+    
+    console.log(`NETWORK: All players dead check result: ${allDead}`);
+    
     return allDead;
   }
   
   /**
-   * Handle relinquishing enemy control
-   * @param {Object} data - Control data
+   * Handle host actions like pause, restart, etc.
+   * @param {Object} action - The action data
    */
-  handleRelinquishEnemyControl(data) {
-    if (this.isHost || !this._hasEnemyControlAuthority) {
-      return;
-    }
+  handleHostAction(action) {
+    if (!this.gameEngine || this.isHost) return;
     
-    console.log("CLIENT TAKEOVER DEACTIVATED: Relinquishing control of enemies");
+    console.log('Received host action:', action.type);
     
-    // Clear takeover flag
-    this._hasEnemyControlAuthority = false;
-    
-    // Clear interval if it exists
-    if (this._enemyTakeoverInterval) {
-      clearInterval(this._enemyTakeoverInterval);
-      this._enemyTakeoverInterval = null;
-    }
-    
-    // Remove client-controlled flags from enemies
-    if (this.gameEngine && this.gameEngine.scene && 
-        this.gameEngine.scene.room && this.gameEngine.scene.room.enemyManager) {
-      const enemyManager = this.gameEngine.scene.room.enemyManager;
-      
-      if (enemyManager.enemies && enemyManager.enemies.length > 0) {
-        enemyManager.enemies.forEach(enemy => {
-          enemy._clientControlled = false;
-        });
-      }
-    }
-    
-    // Notify the player
-    if (this.gameEngine.controls) {
-      this.gameEngine.controls.showNotification("Host has resumed control of enemies", 3000);
+    switch (action.type) {
+      case 'pause':
+        // Set pause state before showing UI
+        this.gameEngine.isPaused = true;
+        this.gameEngine.pauseGame();
+        break;
+        
+      case 'resume':
+        console.log('Processing resume command from host');
+        // Set unpause state immediately
+        this.gameEngine.isPaused = false;
+        
+        // Remove pause UI if it exists
+        const pauseMenu = document.getElementById('pause-menu');
+        if (pauseMenu) {
+          console.log('Removing pause menu from host resume command');
+          pauseMenu.remove();
+        }
+        
+        // Resume game
+        this.gameEngine.resumeGame();
+        break;
+        
+      case 'restart':
+        this.gameEngine.restartGame();
+        break;
+        
+      case 'endGame':
+        this.gameEngine.endGame();
+        break;
     }
   }
   
   /**
-   * Handle data received from a peer
-   * @param {any} data - Data received
-   * @param {Peer.DataConnection} conn - The connection that sent the data
+   * Handle player respawn command from host
    */
-  receiveData(data, conn) {
-    try {
-      // Log incoming data with some basic info
-      if (data.type !== 'gameState' && data.type !== 'ping') { // Don't log game state or ping, too noisy
-        console.log(`Received ${data.type} from ${conn.peer}`);
+  handleRespawn() {
+    if (!this.gameEngine || !this.gameEngine.controls) return;
+    
+    console.log('Host commanded player respawn');
+    
+    // Only respawn if player is dead
+    if (this.gameEngine.controls.isDead) {
+      // Reset player state
+      this.gameEngine.controls.resetHealth();
+      this.gameEngine.controls.isDead = false;
+      
+      // Re-lock pointer
+      document.body.requestPointerLock();
+      
+      // Hide game over screen if visible
+      const gameOverMenu = document.getElementById('game-over-menu');
+      if (gameOverMenu) {
+        gameOverMenu.remove();
       }
       
-      // Process data based on type
-      switch (data.type) {
-        case 'gameState':
-          // Update the game state with data from host
-          if (!this.isHost) {
-            this.handleGameState(data.state);
-          }
-          break;
-        
-        case 'ping':
-          // Heartbeat ping, respond with pong to confirm connection is alive
-          conn.send({ type: 'pong', timestamp: Date.now(), echo: data.timestamp });
-          break;
-        
-        case 'pong':
-          // Heartbeat response, could track latency if needed
-          // const latency = Date.now() - data.echo;
-          // console.log(`Connection latency to ${conn.peer}: ${latency}ms`);
-          break;
-        
-        case 'playerAction':
-          // Handle player actions (host only)
-          if (this.isHost) {
-            this.handlePlayerAction(conn.peer, data);
-          }
-          break;
-          
-        case 'actionResult':
-          // Handle result of an action we sent to the host
-          if (!this.isHost && data.actionId) {
-            console.log(`NETWORK: Received action result for ${data.actionId}: ${data.result}`);
-            this.handleActionResult(data);
-          }
-          break;
-          
-        case 'actionAck':
-          // Handle acknowledgment for a player action
-          if (!this.isHost && data.actionId) {
-            console.log(`NETWORK: Received acknowledgment for action ${data.actionId}`);
-            this.confirmAction(data.actionId);
-          }
-          break;
-        
-        case 'playerPosition':
-          // Update a remote player's position
-          this.updatePlayerPosition(data.position, conn.peer);
-          break;
-          
-        case 'clientEnemyUpdates':
-          // Handle enemy updates from a client with takeover authority
-          if (this.isHost && this._deadHostClientTakeover === conn.peer) {
-            console.log("TAKEOVER: Received enemy updates from authorized client");
-            this.handleClientEnemyUpdates(data, conn.peer);
-          }
-          break;
-        
-        case 'clientDisconnect':
-          // Handle client disconnection gracefully (host only)
-          if (this.isHost && data.clientId) {
-            console.log(`Client ${data.clientId} is disconnecting gracefully`);
-            
-            // Remove the connection from our list
-            this.connections = this.connections.filter(c => c.peer !== conn.peer);
-            
-            // Notify that a player has left
-            if (this.onPlayerLeft) {
-              this.onPlayerLeft(conn.peer);
-            }
-          }
-          break;
-        
-        case 'chat':
-          // Handle chat messages
-          if (data.message && data.sender) {
-            this.handleChatMessage(data.message, data.sender);
-          }
-          break;
-        
-        case 'hostAction':
-          // Host is performing an action like pausing or restarting
-          this.handleHostAction(data.action);
-          break;
-        
-        case 'respawnPlayer':
-          // Host is respawning a player
-          if (data.playerId && this.isConnected && !this.isHost && 
-              data.playerId === this.clientId) {
-            this.handleRespawn();
-          }
-          break;
-        
-        case 'enemyDamageConfirmed':
-          // Host confirmed damage to an enemy
-          if (!this.isHost && this.gameEngine) {
-            this.handleEnemyDamageConfirmation(data);
-          }
-          break;
-        
-        case 'enemyDamageError':
-          // Host reported error with enemy damage
-          if (!this.isHost) {
-            console.warn(`Error damaging enemy: ${data.error} (Enemy ID: ${data.enemyId})`);
-          }
-          break;
-        
-        case 'windowUpdated':
-          // Handle window update event
-          if (!this.isHost && this.gameEngine && this.gameEngine.networkManager) {
-            console.log("Received window update event, forwarding to NetworkManager");
-            this.gameEngine.networkManager.handleWindowUpdate(data);
-          }
-          break;
-        
-        case 'assumeEnemyControl':
-          // Host is dead and we're being asked to help control enemies
-          if (!this.isHost && this.gameEngine) {
-            console.log("TAKEOVER: Received request to assume enemy control while host is dead");
-            this.handleAssumeEnemyControl(data);
-          }
-          break;
-          
-        case 'relinquishEnemyControl':
-          // Host is alive again, relinquish enemy control
-          if (!this.isHost && this.gameEngine) {
-            console.log("TAKEOVER: Received request to relinquish enemy control");
-            this.handleRelinquishEnemyControl(data);
-          }
-          break;
-        
-        case 'hostDisconnect':
-          // Host is disconnecting, clean up
-          console.log("Host is disconnecting:", data.message);
-          if (!this.isHost) {
-            // If we're a client and the host is disconnecting, we should disconnect too
-            this.disconnect();
-            
-            // Show a message to the player
-            if (this.gameEngine && this.gameEngine.ui) {
-              this.gameEngine.ui.showMessage("Host disconnected", "The game host has left the game.");
-            }
-          }
-          break;
-        
-        default:
-          console.warn('Unknown data type received:', data.type);
+      // Unpause game if it was paused
+      if (this.gameEngine.isPaused) {
+        this.gameEngine.resumeGame();
       }
-    } catch (error) {
-      console.error('Error handling received data:', error);
+      
+      // Send an immediate position update to broadcast the new death state
+      // This ensures that other clients update the visual state correctly
+      this.sendPlayerPosition();
+      
+      // Force multiple position updates to ensure the update propagates
+      const sendAdditionalUpdates = () => {
+        if (!this.isConnected || !this.gameEngine || !this.gameEngine.controls) return;
+        this.sendPlayerPosition();
+      };
+      
+      // Send additional updates over the next second to ensure sync
+      setTimeout(sendAdditionalUpdates, 100);
+      setTimeout(sendAdditionalUpdates, 300);
+      setTimeout(sendAdditionalUpdates, 600);
+      setTimeout(sendAdditionalUpdates, 1000);
+      
+      console.log('Player respawned successfully');
     }
   }
   
   /**
-   * Handle enemy updates from a client with takeover authority
-   * @param {Object} data - Enemy update data
-   * @param {string} clientId - Client ID that sent the updates
+   * Send player position update
+   * @param {Object} weaponInfo - Optional information about the player's current weapon
    */
-  handleClientEnemyUpdates(data, clientId) {
-    if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
-        !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
-      return;
+  sendPlayerPosition(weaponInfo = null) {
+    if (!this.isConnected || !this.gameEngine || !this.gameEngine.controls) return;
+    
+    // Get current position and orientation
+    const position = {
+      x: this.gameEngine.controls.camera.position.x,
+      y: this.gameEngine.controls.camera.position.y,
+      z: this.gameEngine.controls.camera.position.z,
+      rotationY: this.gameEngine.controls.camera.rotation.y,
+      weapon: weaponInfo // Include weapon information if provided
+    };
+    
+    // Always include critical state information
+    position.health = this.gameEngine.controls.health || 100;
+    position.isDead = this.gameEngine.controls.isDead || false;
+    
+    // Special logging for death state changes
+    const prevIsDead = this._lastSentDeathState || false;
+    if (prevIsDead !== position.isDead) {
+      console.log(`Sending player death state change: isDead=${position.isDead}, health=${position.health}`);
+      this._lastSentDeathState = position.isDead;
     }
     
-    // Ignore if this client doesn't have takeover authority
-    if (this._deadHostClientTakeover !== clientId) {
-      console.warn(`Ignoring enemy updates from unauthorized client ${clientId}`);
-      return;
-    }
-    
-    try {
-      const { enemyUpdates, timestamp } = data;
-      
-      if (!enemyUpdates || !Array.isArray(enemyUpdates)) {
-        console.warn("Invalid enemy updates received:", data);
-        return;
-      }
-      
-      // Get enemy manager
-      const enemyManager = this.gameEngine.scene.room.enemyManager;
-      
-      // Update each enemy
-      enemyUpdates.forEach(update => {
-        if (!update.id) return;
-        
-        // Find the enemy in our list
-        const enemy = enemyManager.enemies.find(e => e.id === update.id);
-        
-        if (enemy) {
-          // Update position and state
-          if (update.position) {
-            enemy.instance.position.set(
-              update.position.x,
-              update.position.y,
-              update.position.z
-            );
-          }
-          
-          // Update rotation if provided
-          if (update.rotation) {
-            if (update.rotation.y !== undefined) {
-              enemy.instance.rotation.y = update.rotation.y;
-            }
-          }
-          
-          // Update state
-          if (update.state) {
-            enemy.state = update.state;
-          }
-          
-          // Update health if significantly different
-          if (update.health !== undefined && Math.abs(enemy.health - update.health) > 10) {
-            enemy.health = update.health;
-            if (typeof enemy.updateHealthBar === 'function') {
-              enemy.updateHealthBar();
-            }
-          }
-          
-          // Handle death state if needed
-          if (update.isDead && !enemy.isDead && enemy.health > 0) {
-            enemy.health = 0;
-            if (typeof enemy.die === 'function') {
-              enemy.die();
-            }
-          }
-          
-          // Mark as client controlled
-          enemy._clientControlled = true;
-        }
-      });
-      
-      // Broadcast these updates to all other clients
-      this.connections.forEach(conn => {
-        // Don't send back to the client who sent the updates
-        if (conn.peer !== clientId && conn.open) {
-          try {
-            conn.send({
-              type: 'gameState',
-              state: this.getGameState() // Include the updated enemy positions
-            });
-          } catch (error) {
-            console.error(`Error broadcasting client-sourced enemy updates to ${conn.peer}:`, error);
-          }
-        }
-      });
-    } catch (error) {
-      console.error("Error handling client enemy updates:", error);
-    }
-  }
-  
-  /**
-   * Handle game state received from host
-   * @param {Object} state - The game state data
-   */
-  handleGameState(state) {
-    if (this.isHost || !this.gameEngine) {
-      return;
-    }
-    
-    try {
-      // Update player positions
-      if (state.playerPositions) {
-        this.updatePlayerPositions(state.playerPositions);
-      }
-      
-      // Update windows state
-      if (state.windows && this.gameEngine.scene && this.gameEngine.scene.room) {
-        this.updateWindowsState(state.windows);
-      }
-      
-      // Special handling for dead host scenario
-      if (state.hostState && state.hostState.isDead && state.hostState.hasLivingRemotePlayers) {
-        console.log("Client received game state with dead host flag");
-        
-        // Check if we are the designated takeover client
-        const isTakeoverClient = state.hostState.takeoverClientId === this.clientId;
-        
-        if (isTakeoverClient && !this._hasEnemyControlAuthority) {
-          console.log("Client detected it should have takeover authority but doesn't yet");
-          // Assume control if we haven't already
-          this.handleAssumeEnemyControl({
-            reason: 'hostDead',
-            scope: 'enemies'
-          });
-        }
-      }
-      
-      // Update enemies - special handling for client-controlled enemies
-      if (state.enemies && this.gameEngine.scene && this.gameEngine.scene.room && 
-          this.gameEngine.scene.room.enemyManager) {
-        
-        const enemyManager = this.gameEngine.scene.room.enemyManager;
-        
-        // When we have enemy control authority, don't let the host positions override our control
-        const hasControlAuthority = this._hasEnemyControlAuthority === true;
-        
-        // Normal update for enemy positions
-        this.updateEnemiesState(state.enemies, hasControlAuthority);
-        
-        // Special update for round state
-        if (state.round) {
-          this.updateRoundState(state.round);
-        }
-      }
-      
-      // Update game status
-      if (state.gameStatus) {
-        this.updateGameStatus(state.gameStatus);
-      }
-    } catch (error) {
-      console.error("Error handling game state update:", error);
-    }
-  }
-  
-  /**
-   * Update enemies state with data from host
-   * @param {Array} enemiesData - Enemy state data
-   * @param {boolean} hasControlAuthority - Whether this client has control authority
-   */
-  updateEnemiesState(enemiesData, hasControlAuthority) {
-    if (!this.gameEngine || !this.gameEngine.scene || !this.gameEngine.scene.room || 
-        !this.gameEngine.scene.room.enemyManager) {
-      return;
-    }
-    
-    const enemyManager = this.gameEngine.scene.room.enemyManager;
-    
-    // Process each enemy update
-    enemiesData.forEach(enemyData => {
-      if (!enemyData.id) return;
-      
-      // Find existing enemy with this ID
-      let enemy = enemyManager.enemies.find(e => e.id === enemyData.id);
-      
-      if (enemy) {
-        // For client-controlled enemies, only update certain properties
-        if (hasControlAuthority && enemy._clientControlled) {
-          // Only update health and damage state, not position
-          if (enemyData.health !== undefined && Math.abs(enemy.health - enemyData.health) > 5) {
-            enemy.health = enemyData.health;
-            if (typeof enemy.updateHealthBar === 'function') {
-              enemy.updateHealthBar();
-            }
-          }
-          
-          // If the host thinks the enemy is dead but we don't, kill it locally
-          if (enemyData.isDead && !enemy.isDead) {
-            enemy.health = 0;
-            if (typeof enemy.die === 'function') {
-              enemy.die();
-            }
-          }
-        } else {
-          // For normal enemies, update all properties
-          
-          // Update position if needed
-          if (enemyData.position && !enemy.isDead) {
-            enemy.instance.position.set(
-              enemyData.position.x,
-              enemyData.position.y,
-              enemyData.position.z
-            );
-          }
-          
-          // Update rotation if provided
-          if (enemyData.rotation && !enemy.isDead) {
-            if (enemyData.rotation.y !== undefined) {
-              enemy.instance.rotation.y = enemyData.rotation.y;
-            }
-          }
-          
-          // Update state
-          if (enemyData.state) {
-            enemy.state = enemyData.state;
-          }
-          
-          // Update health
-          if (enemyData.health !== undefined) {
-            enemy.health = enemyData.health;
-            if (typeof enemy.updateHealthBar === 'function') {
-              enemy.updateHealthBar();
-            }
-          }
-          
-          // Handle death state
-          if (enemyData.isDead && !enemy.isDead) {
-            enemy.health = 0;
-            if (typeof enemy.die === 'function') {
-              enemy.die();
-            }
-          }
-        }
-      } else {
-        // This is a new enemy we don't have locally - spawn it
-        if (enemyManager && typeof enemyManager.spawnEnemy === 'function') {
-          // Extract position
-          let x, y, z;
-          if (enemyData.position) {
-            x = enemyData.position.x;
-            y = enemyData.position.y;
-            z = enemyData.position.z;
-          }
-          
-          // Spawn with the same ID
-          const newEnemy = enemyManager.spawnEnemy(x, y, z, enemyData.id);
-          
-          // Set additional properties if spawned successfully
-          if (newEnemy) {
-            if (enemyData.state) {
-              newEnemy.state = enemyData.state;
-            }
-            
-            if (enemyData.health !== undefined) {
-              newEnemy.health = enemyData.health;
-              newEnemy.maxHealth = enemyData.maxHealth || enemyData.health;
-              if (typeof newEnemy.updateHealthBar === 'function') {
-                newEnemy.updateHealthBar();
-              }
-            }
-            
-            // Handle rotation
-            if (enemyData.rotation && enemyData.rotation.y !== undefined) {
-              newEnemy.instance.rotation.y = enemyData.rotation.y;
-            }
-            
-            // If it's supposed to be dead, kill it
-            if (enemyData.isDead) {
-              newEnemy.health = 0;
-              if (typeof newEnemy.die === 'function') {
-                newEnemy.die();
-              }
-            }
-          }
-        }
-      }
+    // Send position update to all connected peers
+    this.broadcastToAll({
+      type: 'playerPosition',
+      position: position,
+      playerId: this.isHost ? this.hostId : this.clientId
     });
   }
   
   /**
-   * Update the round state based on host data
-   * @param {Object} roundData - Round state data
+   * Send a player action to the host (client -> host)
+   * @param {string} actionType - The type of action
+   * @param {Object} actionData - The action data
+   * @returns {string|null} The action ID if sent, null if error
    */
-  updateRoundState(roundData) {
-    if (!this.gameEngine || !this.gameEngine.scene || !this.gameEngine.scene.room || 
-        !this.gameEngine.scene.room.enemyManager) {
+  sendPlayerAction(actionType, actionData) {
+    console.log("NETWORK: *** SENDING PLAYER ACTION ***", actionType, actionData);
+    // Add a more visible console log with large stars at beginning and end
+    console.log("********************************************************************************");
+    console.log(`* NETWORK DEBUG: Sending action ${actionType} with data:`, actionData);
+    console.log("********************************************************************************");
+    
+    if (!this.isConnected) {
+      console.error("Cannot send player action: not connected (isConnected is false)");
+      return null;
+    }
+    
+    try {
+      // Generate a unique action ID for tracking
+      const actionId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      
+      // Create the message with a timestamp for debouncing
+      const message = {
+        type: 'playerAction',
+        actionType: actionType,
+        actionData: actionData,
+        timestamp: Date.now(),
+        actionId: actionId,
+        clientId: this.clientId
+      };
+      
+      // If we're the host, process locally
+      if (this.isHost) {
+        console.log("NETWORK: Host processing own action locally:", actionType);
+        this.handlePlayerAction(this.clientId, message);
+        return actionId;
+      }
+      
+      // Detailed connection debugging
+      console.log("NETWORK: Connection details:", {
+        peerExists: !!this.peer,
+        hostConnectionExists: !!this.hostConnection,
+        clientId: this.clientId, 
+        hostId: this.hostId,
+        connectionState: this.peer ? 'exists' : 'no peer connection',
+        hostConnectionState: this.hostConnection ? 'exists' : 'missing'
+      });
+      
+      // Send to host
+      if (this.peer && this.hostConnection) {
+        console.log(`NETWORK: Client sending action '${actionType}' to host`);
+        this.hostConnection.send(message);
+        return actionId;
+      } else {
+        console.error("No connection to host to send action - check if hostConnection is properly established");
+        return null;
+      }
+    } catch (error) {
+      console.error("Error sending player action:", error);
+      return null;
+    }
+  }
+  
+  /**
+   * Check if an action has been confirmed and retry if needed
+   * @param {string} actionId - The ID of the action to check
+   * @private
+   */
+  _checkActionConfirmation(actionId) {
+    const pendingAction = this._pendingActions[actionId];
+    
+    if (!pendingAction) {
+      // Action already confirmed or expired
       return;
     }
     
-    const enemyManager = this.gameEngine.scene.room.enemyManager;
-    
-    // Update round properties
-    if (roundData.round !== undefined) {
-      enemyManager.currentRound = roundData.round;
-    }
-    
-    if (roundData.zombiesRemaining !== undefined) {
-      enemyManager.zombiesRemaining = roundData.zombiesRemaining;
-    }
-    
-    if (roundData.roundActive !== undefined) {
-      enemyManager.roundActive = roundData.roundActive;
-    }
-    
-    if (roundData.timeSinceLastRound !== undefined) {
-      enemyManager.timeSinceLastRound = roundData.timeSinceLastRound;
-    }
-    
-    // Update UI elements if they exist
-    enemyManager.updateRoundDisplay(`Round: ${enemyManager.currentRound}`);
-  }
-  
-  /**
-   * Update game status based on host data
-   * @param {Object} statusData - Game status data
-   */
-  updateGameStatus(statusData) {
-    if (!this.gameEngine) return;
-    
-    // Update appropriate game engine properties based on status
-    if (statusData.isGameOver !== undefined) {
-      this.gameEngine.isGameOver = statusData.isGameOver;
-    }
-    
-    if (statusData.isPaused !== undefined) {
-      // Only update if different to avoid triggering unnecessary UI updates
-      if (this.gameEngine.isPaused !== statusData.isPaused) {
-        this.gameEngine.isPaused = statusData.isPaused;
-        
-        // Handle UI updates
-        if (statusData.isPaused) {
-          if (typeof this.gameEngine.pauseGame === 'function') {
-            this.gameEngine.pauseGame();
-          }
-        } else {
-          if (typeof this.gameEngine.resumeGame === 'function') {
-            this.gameEngine.resumeGame();
-          }
-        }
-      }
-    }
-    
-    // Handle "all players dead" state if reported
-    if (statusData.allPlayersDead) {
-      if (!this.gameEngine.isGameOver) {
-        this.gameEngine.endGame();
-      }
-    }
-  }
-  
-  /**
-   * Start a heartbeat interval to keep the connection alive
-   */
-  startHeartbeat() {
-    console.log("Starting connection heartbeat");
-    
-    // Clear any existing heartbeat
-    this.stopHeartbeat();
-    
-    // Start a new heartbeat interval
-    this._heartbeatInterval = setInterval(() => {
-      try {
-        // Send a ping to all connections
-        if (this.isHost && this.connections.length > 0) {
-          // For host, ping all clients
-          this.connections.forEach(conn => {
-            if (conn.open) {
-              conn.send({ type: 'ping', timestamp: Date.now() });
-            }
+    // Check if we should retry
+    if (pendingAction.retries < this._maxActionRetries) {
+      pendingAction.retries++;
+      console.log(`NETWORK: Retrying action ${actionId} (attempt ${pendingAction.retries}/${this._maxActionRetries})`);
+      
+      // Retry sending the action
+      if (this.connections.length > 0) {
+        try {
+          // Send only to the host (first connection for clients)
+          const hostConn = this.connections[0];
+          hostConn.send({
+            type: 'playerAction',
+            action: pendingAction.action,
+            requiresAck: true,
+            playerId: this.clientId,
+            isRetry: true,
+            retryCount: pendingAction.retries
           });
-        } else if (!this.isHost && this.hostConnection && this.hostConnection.open) {
-          // For clients, ping the host
-          this.hostConnection.send({ type: 'ping', timestamp: Date.now() });
+          
+          // Check again after the retry interval
+          setTimeout(() => this._checkActionConfirmation(actionId), this._actionRetryInterval);
+        } catch (error) {
+          console.error("Error retrying player action:", error);
         }
-        
-        // Also check if peer connection is alive, reconnect if needed
-        if (this.peer && this.peer.disconnected) {
-          console.log("Heartbeat detected disconnected peer, attempting to reconnect...");
-          this.peer.reconnect();
-        }
-      } catch (error) {
-        console.error("Error in heartbeat:", error);
       }
-    }, 30000); // Ping every 30 seconds
+    } else {
+      // Max retries reached, action failed
+      console.error(`NETWORK: Action ${actionId} failed after ${this._maxActionRetries} retries`);
+      delete this._pendingActions[actionId];
+    }
   }
   
   /**
-   * Stop the heartbeat interval
+   * Confirm that an action was received and processed
+   * @param {string} actionId - The ID of the action to confirm
    */
-  stopHeartbeat() {
-    if (this._heartbeatInterval) {
-      clearInterval(this._heartbeatInterval);
-      this._heartbeatInterval = null;
+  confirmAction(actionId) {
+    if (this._pendingActions[actionId]) {
+      console.log(`NETWORK: Action ${actionId} confirmed`);
+      delete this._pendingActions[actionId];
+    }
+  }
+  
+  /**
+   * Send a chat message
+   * @param {string} message - The message to send
+   */
+  sendChatMessage(message) {
+    if (!this.isConnected) return;
+    
+    this.broadcastToAll({
+      type: 'chat',
+      message: message,
+      sender: this.isHost ? this.hostId : this.clientId
+    });
+    
+    // Also display the message locally
+    this.handleChatMessage(message, 'You');
+  }
+  
+  /**
+   * Start sending game state updates to clients
+   */
+  startGameStateUpdates() {
+    if (!this.isHost) return;
+    
+    // Clear any existing update interval
+    if (this._stateUpdateInterval) {
+      clearInterval(this._stateUpdateInterval);
+    }
+    
+    console.log("Starting game state update broadcasts");
+    
+    // Start periodic game state updates
+    this._stateUpdateInterval = setInterval(() => {
+      try {
+        // Use our improved broadcastGameState method
+        this.broadcastGameState();
+      } catch (error) {
+        console.error("Error in game state update:", error);
+      }
+    }, this.stateUpdateInterval);
+    
+    // Send an immediate update to initialize clients
+    setTimeout(() => {
+      this.broadcastGameState(true);
+    }, 200);
+  }
+  
+  /**
+   * Stop regular game state updates
+   */
+  stopStateUpdates() {
+    if (this.stateUpdateInterval) {
+      clearInterval(this.stateUpdateInterval);
     }
   }
   
@@ -1793,56 +1650,323 @@ export class P2PNetwork {
     // Stop heartbeat
     this.stopHeartbeat();
     
-    try {
-      // First emit a disconnect event to notify others that we're leaving
-      if (this.isConnected) {
-        if (this.isHost && this.connections.length > 0) {
-          // Let clients know we're disconnecting
-          this.broadcastToAll({
-            type: 'hostDisconnect',
-            message: 'Host is disconnecting'
-          });
-        } else if (!this.isHost && this.hostConnection && this.hostConnection.open) {
-          // Let host know we're leaving
-          this.hostConnection.send({
-            type: 'clientDisconnect',
-            clientId: this.clientId,
-            message: 'Client disconnecting'
-          });
-        }
-      }
-    } catch (e) {
-      console.error("Error sending disconnect message:", e);
-    }
+    // Stop state updates if hosting
+    this.stopStateUpdates();
     
     // Close all connections
-    this.connections.forEach(conn => {
+    for (const conn of this.connections) {
       try {
-        if (conn.open) {
-          conn.close();
-        }
-      } catch (error) {
-        console.warn(`Error closing connection to ${conn.peer}:`, error);
+        conn.close();
+      } catch (err) {
+        console.error("Error closing connection:", err);
       }
-    });
+    }
     
-    // Clear connection list
-    this.connections = [];
-    this.hostConnection = null;
+    // Close the host connection specifically
+    if (this.hostConnection) {
+      try {
+        this.hostConnection.close();
+      } catch (err) {
+        console.error("Error closing host connection:", err);
+      }
+      this.hostConnection = null;
+    }
     
-    // Destroy the peer object
+    // Close the peer connection
     if (this.peer) {
       try {
+        // First emit a disconnect event to notify others that we're leaving
+        if (this.isHost && this.peer.socket && typeof this.peer.socket.send === 'function') {
+          try {
+            // Send a final message to all connected peers that we're leaving
+            this.broadcastToAll({
+              type: 'hostDisconnect',
+              message: 'Host is disconnecting'
+            });
+          } catch (e) {
+            console.error("Error sending disconnect message:", e);
+          }
+        }
+        
+        // Properly destroy the peer
         this.peer.destroy();
-      } catch (error) {
-        console.warn("Error destroying peer:", error);
+      } catch (err) {
+        console.error("Error destroying peer:", err);
       }
       this.peer = null;
     }
     
-    // Reset connection state
+    // Reset state
+    this.connections = [];
+    this.isHost = false;
     this.isConnected = false;
+    this.clientId = null;
+    this.hostId = null;
     
     console.log("P2P network disconnected");
+    
+    // Notify the game that we've disconnected
+    if (this.onPlayerLeft && this.hostId) {
+      this.onPlayerLeft(this.hostId);
+    }
+  }
+  
+  /**
+   * Start a heartbeat to keep the WebSocket connection alive
+   */
+  startHeartbeat() {
+    // Clear any existing heartbeat
+    this.stopHeartbeat();
+    
+    // Create a new heartbeat interval
+    this.heartbeatInterval = setInterval(() => {
+      // Send a ping to the server endpoint to keep connections alive
+      fetch('/ping')
+        .then(() => console.log('Heartbeat sent'))
+        .catch(err => console.error('Heartbeat error:', err));
+      
+      // Remove the custom WebSocket ping as it's causing "Invalid message" errors
+      // PeerJS already has its own internal ping mechanism
+    }, 15000); // Every 15 seconds
+  }
+  
+  /**
+   * Stop the heartbeat
+   */
+  stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+  
+  /**
+   * Host control: Pause game for all players
+   */
+  hostPauseGame() {
+    if (!this.isHost || !this.isConnected) return;
+    
+    console.log("Host sending pause command to all clients");
+    
+    this.broadcastToAll({
+      type: 'hostAction',
+      action: {
+        type: 'pause'
+      }
+    });
+  }
+  
+  /**
+   * Host control: Resume game for all players
+   */
+  hostResumeGame() {
+    if (!this.isHost || !this.isConnected) return;
+    
+    console.log("Host sending resume command to all clients");
+    
+    // First update the gameStatus to reflect the new unpaused state
+    if (this.gameEngine) {
+      this.gameEngine.isPaused = false;
+    }
+    
+    // Send a specific resume command
+    this.broadcastToAll({
+      type: 'hostAction',
+      action: {
+        type: 'resume'
+      }
+    });
+    
+    // Also immediately send the updated game state to ensure synchronization
+    setTimeout(() => {
+      this.broadcastToAll({
+        type: 'gameState',
+        state: this.getGameState()
+      });
+    }, 100); // Small delay to ensure clients process the resume command first
+  }
+  
+  /**
+   * Host control: Restart game for all players
+   */
+  hostRestartGame() {
+    if (!this.isHost || !this.isConnected) return;
+    
+    console.log("Host sending restart command to all clients");
+    
+    this.broadcastToAll({
+      type: 'hostAction',
+      action: {
+        type: 'restart'
+      }
+    });
+  }
+  
+  /**
+   * Host control: Respawn a specific player
+   * @param {string} playerId - The ID of the player to respawn
+   */
+  hostRespawnPlayer(playerId) {
+    if (!this.isHost || !this.isConnected) {
+      console.warn("Cannot respawn player: not host or not connected");
+      return;
+    }
+    
+    console.log(`Host sending respawn command to player: ${playerId}`);
+    
+    // Find the connection for this player
+    const playerConn = this.connections.find(conn => conn.peer === playerId);
+    
+    if (playerConn && playerConn.open) {
+      try {
+        // Send respawn command to the specific player
+        playerConn.send({
+          type: 'respawnPlayer',
+          playerId: playerId
+        });
+        
+        console.log(`Respawn command sent to player: ${playerId}`);
+        
+        // Force a game state update to all clients to ensure synchronization
+        this.broadcastGameState(true);
+        
+        return true;
+      } catch (error) {
+        console.error(`Error sending respawn command to player ${playerId}:`, error);
+        return false;
+      }
+    } else {
+      console.warn(`Failed to send respawn command: Connection to player ${playerId} not found or not open`);
+      return false;
+    }
+  }
+  
+  /**
+   * Broadcast current game state to all clients
+   * @param {boolean} force - Whether to force sending the state regardless of debounce time
+   * @returns {boolean} Whether the broadcast was performed
+   */
+  broadcastGameState(force = false) {
+    if (!this.gameEngine || !this.isHost) return false;
+    
+    const now = Date.now();
+    
+    // Don't send updates if we recently received a client action (unless forced)
+    if (!force && now - this.lastClientActionTime < this.clientActionDebounceTime) {
+      console.log(`NETWORK: Skipping state broadcast during client action debounce period...`);
+      return false;
+    }
+    
+    // Even if the local player is dead, we should continue broadcasting game state 
+    // as long as there are living remote players
+    let shouldBroadcast = true;
+    
+    if (this.gameEngine.isLocalPlayerDead) {
+      // Check if any remote players are still alive
+      let hasLivingRemotePlayers = false;
+      this.remotePlayers.forEach(player => {
+        if (!player.isDead) {
+          hasLivingRemotePlayers = true;
+        }
+      });
+      
+      // If local player is dead and there are living remote players, increase broadcast frequency
+      if (hasLivingRemotePlayers) {
+        console.log("NETWORK: Local player dead but remote players alive - continuing game state broadcasts");
+        
+        // Check if we're broadcasting too frequently - throttle to avoid network saturation
+        if (!force && now - this.lastGameStateBroadcastTime < 100) { // 100ms = 10 broadcasts per second max
+          shouldBroadcast = false;
+        }
+      } else if (this.gameEngine.isGameOver) {
+        // If all players are dead (game is truly over), reduce broadcast frequency
+        if (!force && now - this.lastGameStateBroadcastTime < 1000) { // Once per second is enough
+          shouldBroadcast = false;
+        }
+      }
+    }
+    
+    // Only proceed if we should broadcast
+    if (!shouldBroadcast) {
+      return false;
+    }
+    
+    // Get current game state with all entities
+    const gameState = this.getGameState();
+    
+    // Broadcast to all connected clients
+    const broadcastData = {
+      type: 'gameState',
+      data: gameState
+    };
+    
+    // Send using unreliable transport for regular updates (more frequent)
+    // but use reliable transport for forced updates (important state changes)
+    if (force) {
+      this.broadcast(broadcastData);
+    } else {
+      this.broadcastUnreliable(broadcastData);
+    }
+    
+    // Update last broadcast time
+    this.lastGameStateBroadcastTime = now;
+    
+    return true;
+  }
+  
+  /**
+   * Handle enemy damage confirmation from host (client only)
+   * @param {Object} data - The damage confirmation data
+   */
+  handleEnemyDamageConfirmation(data) {
+    if (this.isHost || !this.gameEngine || !this.gameEngine.scene || 
+        !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
+      return;
+    }
+    
+    try {
+      const { enemyId, health, isDead, timestamp } = data;
+      console.log(`Client received damage confirmation for enemy ${enemyId}: health=${health}, isDead=${isDead}, timestamp=${timestamp}`);
+      
+      // Find the enemy in the client's game
+      const enemyManager = this.gameEngine.scene.room.enemyManager;
+      
+      // Log info about available enemies to help with debugging
+      console.log(`Client has ${enemyManager.enemies.length} enemies with IDs: ${enemyManager.enemies.map(e => e.id).join(', ')}`);
+      
+      const enemy = enemyManager.enemies.find(e => e.id === enemyId);
+      
+      if (enemy) {
+        // Check if this is a stale update (happened before our most recent local action)
+        const now = Date.now();
+        if (enemy.lastDamageTime && (now - enemy.lastDamageTime < this.clientActionDebounceTime)) {
+          console.log(`Skipping enemy health update because local damage was applied recently (${now - enemy.lastDamageTime}ms ago)`);
+          return;
+        }
+        
+        // Update the enemy's health locally to match the host's value
+        const oldHealth = enemy.health;
+        enemy.health = health;
+        console.log(`Updated enemy ${enemyId} health from ${oldHealth} to ${health}`);
+        
+        // Update health bar if it exists
+        if (typeof enemy.updateHealthBar === 'function') {
+          enemy.updateHealthBar();
+        }
+        
+        // If the enemy is dead according to the host, kill it locally
+        if (isDead && enemy.health > 0) {
+          console.log(`Enemy ${enemyId} was killed by host, forcing death locally`);
+          enemy.health = 0;
+          if (typeof enemy.die === 'function') {
+            enemy.die();
+          }
+        }
+      } else {
+        console.warn(`Client could not find enemy with ID ${enemyId} to apply damage confirmation`);
+      }
+    } catch (error) {
+      console.error("Error handling enemy damage confirmation:", error);
+    }
   }
 } 
