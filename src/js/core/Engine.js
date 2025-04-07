@@ -629,9 +629,9 @@ export class Engine {
     
     // Check if there are any living remote players
     if (this.networkManager && this.networkManager.remotePlayers) {
-      for (const player of this.networkManager.remotePlayers) {
+      for (const [playerId, player] of this.networkManager.remotePlayers) {
         if (!player.isDead) {
-          console.log(`Remote player ${player.id} is still alive`);
+          console.log(`Remote player ${playerId} is still alive`);
           return false; // Found a living remote player
         }
       }
@@ -975,19 +975,34 @@ export class Engine {
       
       // Update camera position to match the spectated player's position
       if (this.controls && this.controls.camera && targetPlayer.position) {
-        // Position camera at player position
-        this.controls.camera.position.set(
+        // Smoothly interpolate camera position
+        const targetPos = new THREE.Vector3(
           targetPlayer.position.x,
           targetPlayer.position.y,
           targetPlayer.position.z
         );
         
-        // Set camera rotation to match player's looking direction
+        // Add a small offset to be slightly behind the player
+        const offset = new THREE.Vector3(0, 0, 2);
+        offset.applyQuaternion(new THREE.Quaternion().setFromEuler(
+          new THREE.Euler(0, targetPlayer.position.rotationY, 0)
+        ));
+        targetPos.add(offset);
+        
+        // Smoothly move camera to target position
+        this.controls.camera.position.lerp(targetPos, 0.1);
+        
+        // Smoothly rotate camera to match player's looking direction
         if (targetPlayer.position.rotationY !== undefined) {
-          this.controls.camera.rotation.y = targetPlayer.position.rotationY;
+          const targetRotation = targetPlayer.position.rotationY;
+          this.controls.camera.rotation.y = THREE.MathUtils.lerp(
+            this.controls.camera.rotation.y,
+            targetRotation,
+            0.1
+          );
         }
       }
-    }, 50); // Update 20 times per second
+    }, 16); // Update ~60 times per second for smoother motion
   }
   
   /**

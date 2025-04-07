@@ -1057,17 +1057,24 @@ export class NetworkManager {
     console.log(`Updating player ${playerId} death state: ${isDead}`);
     
     if (isDead) {
-      console.log(`Player ${playerId} died - removing player model`);
+      console.log(`Player ${playerId} died - playing death animation`);
       
-      // Remove existing player model from scene
+      // Get the player model
       const model = this.playerModels.get(playerId);
-      if (model && this.gameEngine.scene && this.gameEngine.scene.instance) {
-        this.gameEngine.scene.instance.remove(model);
-        this.playerModels.delete(playerId);
+      if (model) {
+        // Play death animation
+        if (model.userData && model.userData.animations) {
+          const deathAnim = model.userData.animations.find(anim => anim.name === 'death');
+          if (deathAnim) {
+            deathAnim.reset();
+            deathAnim.play();
+            deathAnim.clampWhenFinished = true;
+          }
+        }
+        
+        // Create a dead player marker
+        this.createDeadPlayerMarker(playerId, playerData?.position);
       }
-      
-      // If needed, create a dead player indicator or temporary marker
-      this.createDeadPlayerMarker(playerId, playerData?.position);
       
     } else {
       // Player has been respawned
