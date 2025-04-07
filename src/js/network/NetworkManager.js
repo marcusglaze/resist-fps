@@ -2732,4 +2732,206 @@ export class NetworkManager {
     
     return anyAlive;
   }
+  
+  /**
+   * Force an immediate player state update to all clients
+   * @param {boolean} force - Whether to force an update even if it would otherwise be rate-limited
+   */
+  sendPlayerUpdate(force = false) {
+    if (!this.isConnected || !this.network) {
+      console.log("Cannot send player update - not connected to network");
+      return;
+    }
+    
+    // Get weapon information if available
+    let weaponInfo = null;
+    if (this.gameEngine && this.gameEngine.weaponManager && this.gameEngine.weaponManager.currentWeapon) {
+      weaponInfo = {
+        type: this.gameEngine.weaponManager.currentWeapon.type || 'PISTOL',
+        isReloading: this.gameEngine.weaponManager.isReloading || false,
+        isFiring: this.gameEngine.weaponManager.isFiring || false
+      };
+    }
+    
+    console.log("Forcing immediate player state update to all clients");
+    
+    // Send the update immediately
+    this.network.sendPlayerPosition(weaponInfo);
+    
+    // For critically important updates (like death), send multiple times to ensure delivery
+    if (force && this.gameEngine && this.gameEngine.controls && this.gameEngine.controls.isDead) {
+      console.log("Critical state update (player death) - sending multiple times for reliability");
+      
+      // Send death state updates several times with slight delays to ensure delivery
+      setTimeout(() => this.network.sendPlayerPosition(weaponInfo), 100);
+      setTimeout(() => this.network.sendPlayerPosition(weaponInfo), 300);
+      setTimeout(() => this.network.sendPlayerPosition(weaponInfo), 600);
+      
+      // If we're the host, also force a full game state broadcast
+      if (this.isHost && this.network.broadcastGameState) {
+        console.log("Host forcing immediate game state broadcast due to death");
+        
+        // Immediate broadcast
+        this.network.broadcastGameState(true);
+        
+        // Additional delayed broadcasts to ensure clients receive the update
+        setTimeout(() => this.network.broadcastGameState(true), 200);
+        setTimeout(() => this.network.broadcastGameState(true), 500);
+      }
+    }
+  }
+  
+  /**
+   * Enter spectator mode when the local player has died
+   */
+  enterSpectatorMode() {
+    console.log("Entering spectator mode");
+    
+    // Mark spectator mode active
+    this.isSpectatorMode = true;
+    
+    // Show spectator UI
+    this.showSpectatorUI();
+    
+    // If we're the host, ensure game state updates continue for clients
+    if (this.isHost && this.network && this.network.broadcastGameState) {
+      console.log("Host is dead but continuing game state broadcasts for clients");
+      this.network.broadcastGameState(true); // Force immediate update
+    }
+  }
+  
+  /**
+   * Show the spectator UI overlay
+   */
+  showSpectatorUI() {
+    // Remove any existing spectator UI
+    const existingUI = document.getElementById('spectator-overlay');
+    if (existingUI) {
+      existingUI.remove();
+    }
+    
+    // Create overlay container
+    const overlay = document.createElement('div');
+    overlay.id = 'spectator-overlay';
+    overlay.style.position = 'absolute';
+    overlay.style.top = '20px';
+    overlay.style.left = '50%';
+    overlay.style.transform = 'translateX(-50%)';
+    overlay.style.padding = '10px 20px';
+    overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    overlay.style.color = '#fff';
+    overlay.style.borderRadius = '5px';
+    overlay.style.zIndex = '1000';
+    overlay.style.textAlign = 'center';
+    overlay.style.fontFamily = 'Arial, sans-serif';
+    
+    // Add text
+    overlay.textContent = 'SPECTATOR MODE - Waiting for round to end';
+    
+    // Add to DOM
+    document.body.appendChild(overlay);
+  }
+  
+  /**
+   * Show the multiplayer game over screen
+   */
+  showMultiplayerGameOverScreen() {
+    console.log("Showing multiplayer game over screen");
+    
+    // Set game over state
+    if (this.gameEngine) {
+      this.gameEngine.isGameOver = true;
+    }
+    
+    // Remove any existing game over UI
+    const existingUI = document.getElementById('game-over-screen');
+    if (existingUI) {
+      existingUI.remove();
+    }
+    
+    // Remove spectator UI if present
+    const spectatorUI = document.getElementById('spectator-overlay');
+    if (spectatorUI) {
+      spectatorUI.remove();
+    }
+    
+    // Create game over container
+    const container = document.createElement('div');
+    container.id = 'game-over-screen';
+    container.style.position = 'absolute';
+    container.style.top = '0';
+    container.style.left = '0';
+    container.style.width = '100%';
+    container.style.height = '100%';
+    container.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+    container.style.color = '#fff';
+    container.style.display = 'flex';
+    container.style.flexDirection = 'column';
+    container.style.justifyContent = 'center';
+    container.style.alignItems = 'center';
+    container.style.zIndex = '2000';
+    container.style.fontFamily = 'Arial, sans-serif';
+    
+    // Add title
+    const title = document.createElement('h1');
+    title.textContent = 'GAME OVER';
+    title.style.fontSize = '48px';
+    title.style.marginBottom = '20px';
+    title.style.color = '#ff0000';
+    container.appendChild(title);
+    
+    // Add message
+    const message = document.createElement('p');
+    message.textContent = 'All players have died';
+    message.style.fontSize = '24px';
+    message.style.marginBottom = '40px';
+    container.appendChild(message);
+    
+    // Add restart button (only visible to host)
+    const restartBtn = document.createElement('button');
+    restartBtn.textContent = this.isHost ? 'Restart Game' : 'Waiting for host to restart...';
+    restartBtn.style.padding = '12px 24px';
+    restartBtn.style.fontSize = '18px';
+    restartBtn.style.backgroundColor = this.isHost ? '#4CAF50' : '#555';
+    restartBtn.style.color = '#fff';
+    restartBtn.style.border = 'none';
+    restartBtn.style.borderRadius = '4px';
+    restartBtn.style.cursor = this.isHost ? 'pointer' : 'default';
+    restartBtn.disabled = !this.isHost;
+    
+    // Add restart functionality (host only)
+    if (this.isHost) {
+      restartBtn.addEventListener('click', () => {
+        console.log("Host restarting multiplayer game");
+        if (this.gameEngine) {
+          this.gameEngine.restartGame();
+        }
+      });
+    }
+    
+    container.appendChild(restartBtn);
+    
+    // Add to DOM
+    document.body.appendChild(container);
+  }
+  
+  /**
+   * Notify other players that the game is restarting
+   */
+  notifyGameRestart() {
+    if (!this.isConnected || !this.network) {
+      console.log("Cannot notify game restart - not connected to network");
+      return;
+    }
+    
+    console.log("Notifying all players of game restart");
+    
+    // Send game restart notification
+    if (this.network.broadcastToAll) {
+      this.network.broadcastToAll({
+        type: 'gameRestart',
+        timestamp: Date.now()
+      });
+    }
+  }
 } 

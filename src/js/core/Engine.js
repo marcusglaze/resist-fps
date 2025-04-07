@@ -520,131 +520,100 @@ export class Engine {
   }
 
   /**
-   * End the game when the player dies
+   * End the game, either when player dies or when game is successfully completed
    */
   endGame() {
-    console.log("Game over!");
+    // If game is already over, don't process again
+    if (this.isGameOver) {
+      console.log("Game is already over, ignoring additional endGame call");
+      return;
+    }
     
-    // In multiplayer mode, only set isGameOver if all players are dead
-    if (this.networkManager && this.networkManager.isMultiplayer) {
-      // Check if any remote players are still alive
-      let hasLivingRemotePlayers = false;
-      this.networkManager.remotePlayers.forEach(player => {
-        if (!player.isDead) {
-          hasLivingRemotePlayers = true;
-        }
-      });
+    console.log("endGame called - handling player death");
+    
+    // Track local player death separately from global game over
+    this.isLocalPlayerDead = true;
+    
+    // In multiplayer, check if there are still living remote players
+    if (this.networkManager && this.networkManager.isConnected) {
+      const allPlayersDead = this.areAllPlayersDead();
       
-      // Set a separate flag for local player death
-      this.isLocalPlayerDead = true;
+      console.log(`Multiplayer endGame - allPlayersDead: ${allPlayersDead}`);
       
-      // Only set isGameOver if no remote players are alive
-      if (!hasLivingRemotePlayers) {
-        console.log("All players dead - setting full game over");
+      if (allPlayersDead) {
+        // All players are dead - real game over
+        console.log("All players are dead - setting global game over state");
         this.isGameOver = true;
-      } else {
-        console.log("Local player dead but remote players alive - NOT setting isGameOver");
-        // We don't set isGameOver here, so the game loop continues
-      }
-    } else {
-      // Single player - always set isGameOver
-      this.isGameOver = true;
-    }
-    
-    // Unlock pointer
-    this.unlockPointer();
-    
-    // In multiplayer mode, check if there are living remote players before pausing enemies
-    let shouldPauseEnemies = true;
-    
-    if (this.networkManager && this.networkManager.isMultiplayer) {
-      // Check if any remote players are still alive
-      let hasLivingRemotePlayers = false;
-      this.networkManager.remotePlayers.forEach(player => {
-        if (!player.isDead) {
-          hasLivingRemotePlayers = true;
+        
+        // Pause all enemies when all players are dead
+        if (this.scene && this.scene.room && this.scene.room.enemyManager) {
+          console.log("Pausing all enemies - all players are dead");
+          this.scene.room.enemyManager.pauseAllEnemies();
         }
-      });
-      
-      // Only pause enemies if all players are dead
-      if (hasLivingRemotePlayers) {
-        console.log("Not pausing enemies because there are still living remote players");
-        shouldPauseEnemies = false;
+        
+        // Show multiplayer game over screen
+        this.handleMultiplayerGameOver();
+      } else {
+        // Local player is dead but some remote players are still alive
+        console.log("Local player is dead but remote players are still alive - continuing game");
+        
+        // Handle local player death ui but don't end the game completely
+        this.unlockControls();
+        
+        // Enter spectator mode for the local player
+        this.networkManager.enterSpectatorMode();
+        
+        // If we're the host, make sure the game state continues updating
+        if (this.networkManager.isHost) {
+          console.log("Host player dead - ensuring game state continues updating for clients");
+          // Force immediate game state broadcast to notify clients
+          if (this.networkManager.network && this.networkManager.network.broadcastGameState) {
+            this.networkManager.network.broadcastGameState(true);
+          }
+        }
       }
-    }
-    
-    // Pause all enemies if needed
-    if (shouldPauseEnemies && this.scene.room && this.scene.room.enemyManager) {
-      console.log("Pausing all enemies - no living players remaining");
-      this.scene.room.enemyManager.setPaused(true);
-    }
-    
-    // Check if we're in multiplayer mode
-    if (this.networkManager && this.networkManager.isMultiplayer) {
-      this.handleMultiplayerGameOver();
     } else {
-      // Single player - show regular game over screen
+      // Single player - game over
+      console.log("Single player game over");
+      this.isGameOver = true;
+      
+      // Pause all enemies
+      if (this.scene && this.scene.room && this.scene.room.enemyManager) {
+        this.scene.room.enemyManager.pauseAllEnemies();
+      }
+      
+      // Display game over UI
       this.showGameOverScreen();
     }
   }
   
   /**
-   * Handle multiplayer game over scenarios
+   * Handle game over state for multiplayer
    */
   handleMultiplayerGameOver() {
-    if (!this.networkManager) return;
+    console.log("Handling multiplayer game over state");
     
-    // Disable any existing spectator mode if active
-    if (this.isSpectatorMode) {
-      this.disableSpectatorMode();
+    // If we're in spectator mode but the game isn't fully over, don't show game over screen yet
+    if (this.isLocalPlayerDead && !this.isGameOver) {
+      console.log("Local player is dead but game continues - entering spectator mode");
+      
+      // Enter spectator mode - we're dead but others might be alive
+      if (this.networkManager) {
+        this.networkManager.enterSpectatorMode();
+      }
+      
+      return;
     }
     
-    // If we're the host, check if all players are dead
-    if (this.networkManager.isHost) {
-      const allPlayersDead = this.checkAllPlayersDead();
-      
-      // Log the result of our check with clear visibility
-      console.log(`HOST GAME OVER CHECK: All players dead status: ${allPlayersDead}`);
-      
-      // If all players are dead, show game over with host controls
-      if (allPlayersDead) {
-        console.log("Host: All players are dead, showing game over screen");
-        this.showMultiplayerHostGameOverScreen();
-      } else {
-        // Not all players dead - show spectate screen
-        console.log("Host: Not all players dead, showing spectate screen");
-        this.showMultiplayerSpectateScreen();
-      }
+    // If all players are confirmed dead, show the game over screen
+    console.log("All players dead - showing multiplayer game over screen");
+    
+    // Show multiplayer game over
+    if (this.networkManager) {
+      this.networkManager.showMultiplayerGameOverScreen();
     } else {
-      // For clients, check if all players are dead according to latest game state
-      const gameState = this.networkManager.network.getGameState();
-      const allPlayersDead = gameState.gameStatus?.allPlayersDead || false;
-      
-      // Log what we received from the host
-      console.log(`CLIENT GAME OVER CHECK: Received allPlayersDead=${allPlayersDead} from host`);
-      
-      // Add a fallback check - if our local player is dead and the host player is dead
-      const localPlayerDead = this.controls && this.controls.isDead;
-      const hostPlayerDead = this.networkManager.getHostPlayerState()?.isDead || false;
-      const otherPlayersAlive = this.networkManager.isAnyRemotePlayerAlive();
-      
-      console.log(`CLIENT GAME OVER CHECK: Local dead=${localPlayerDead}, Host dead=${hostPlayerDead}, Other players alive=${otherPlayersAlive}`);
-      
-      // We can force allPlayersDead=true if: our player is dead AND host is dead AND no other remote players are alive
-      const forcedAllPlayersDead = localPlayerDead && hostPlayerDead && !otherPlayersAlive;
-      if (forcedAllPlayersDead && !allPlayersDead) {
-        console.log("CLIENT GAME OVER CHECK: Forcing all players dead state since all checks indicate no one is alive");
-      }
-      
-      if (allPlayersDead || forcedAllPlayersDead) {
-        // All players are dead, show game over screen
-        console.log("Client: All players dead, waiting for host to restart");
-        this.networkManager.showMultiplayerGameOverScreen(true);
-      } else {
-        // Not all players dead - show spectate screen
-        console.log("Client: Not all players dead, showing spectate screen");
-        this.showMultiplayerSpectateScreen();
-      }
+      // Fallback to standard game over if network manager isn't available
+      this.showGameOverScreen();
     }
   }
   
@@ -652,24 +621,24 @@ export class Engine {
    * Check if all players in the game are dead
    * @returns {boolean} True if all players are dead
    */
-  checkAllPlayersDead() {
-    if (!this.networkManager) return true;
+  areAllPlayersDead() {
+    // Check if local player is dead
+    if (!this.isLocalPlayerDead) {
+      return false; // Local player is alive
+    }
     
-    // The local player is dead (since endGame was called)
-    const localPlayerDead = true; // We can safely assume this since endGame was called
-    let anyPlayersAlive = false;
-    
-    // Check remote players
-    this.networkManager.remotePlayers.forEach(player => {
-      if (!player.isDead) {
-        anyPlayersAlive = true;
-        console.log("Found living remote player:", player.id);
+    // Check if there are any living remote players
+    if (this.networkManager && this.networkManager.remotePlayers) {
+      for (const player of this.networkManager.remotePlayers) {
+        if (!player.isDead) {
+          console.log(`Remote player ${player.id} is still alive`);
+          return false; // Found a living remote player
+        }
       }
-    });
+    }
     
-    const allPlayersDead = !anyPlayersAlive;
-    console.log(`All players dead check result: ${allPlayersDead} (found living players: ${!allPlayersDead})`);
-    return allPlayersDead;
+    console.log("All players are confirmed dead");
+    return true; // No living players found
   }
   
   /**
@@ -1118,55 +1087,37 @@ export class Engine {
     // Skip if game is paused
     if (this.isPaused) return;
     
-    // Skip if game is over (important: in multiplayer this is only true when ALL players are dead)
-    if (this.isGameOver) {
-      // Even when game is over, still render the scene
-      this.render();
-      return;
-    }
-    
-    // Special handling when local player is dead but remote players are alive
-    const localPlayerDeadButGameContinues = this.isLocalPlayerDead && !this.isGameOver;
-    
     // Update UI manager
     if (this.uiManager) {
       this.uiManager.update(deltaTime);
     }
     
-    // Update controls if available (only if local player is not dead)
-    if (this.controls && !this.isLocalPlayerDead) {
+    // Update controls if available
+    if (this.controls) {
       this.controls.update(deltaTime);
-    } else if (this.controls && this.isLocalPlayerDead && this.isSpectatorMode) {
-      // When in spectator mode, we may still need to update camera for spectating
-      // This is handled by the spectator system separately
     }
     
-    // Update weapon manager (only if local player is not dead)
-    if (this.weaponManager && !this.isLocalPlayerDead) {
+    // Update weapon manager
+    if (this.weaponManager) {
       this.weaponManager.update(deltaTime);
     }
     
-    // Always update scene (for enemies, etc.) unless the game is fully over (all players dead)
+    // Update scene
     if (this.scene) {
-      // If local player is dead but game continues, flag the scene to continue updates
-      if (localPlayerDeadButGameContinues) {
-        // Set flag down the chain to ensure enemies continue updating
-        this.scene.forceContinueUpdates = true;
-      }
       this.scene.update(deltaTime);
     }
     
-    // Always update physics world unless game is fully over
+    // Update physics world
     if (this.physicsWorld) {
       this.physicsWorld.step(deltaTime);
     }
     
-    // Always update renderer
+    // Update renderer
     this.render();
     
     // Check for multiplayer round end conditions
     if (this.networkManager && this.networkManager.isMultiplayer && 
-        this.networkManager.isHost) {
+        this.networkManager.isHost && !this.isGameOver) {
       this.checkMultiplayerRoundEnd();
     }
   }
@@ -1398,116 +1349,36 @@ export class Engine {
    * Restart the game
    */
   restartGame() {
-    console.log("Restarting game...");
+    console.log("Restarting game after game over");
     
-    // Disable spectator mode if active
-    if (this.isSpectatorMode) {
-      this.disableSpectatorMode();
-    }
+    // Reset game state
+    this.resetGameState();
     
-    // Hide game over screen
-    const gameOverMenu = document.getElementById('game-over-menu');
-    if (gameOverMenu) {
-      document.body.removeChild(gameOverMenu);
-    }
-    
-    // Remove spectate overlay if it exists
-    const spectateOverlay = document.getElementById('spectate-overlay');
-    if (spectateOverlay) {
-      document.body.removeChild(spectateOverlay);
-    }
-    
-    // Remove pause menu if it exists
-    const pauseMenu = document.getElementById('pause-menu');
-    if (pauseMenu) {
-      document.body.removeChild(pauseMenu);
-    }
-    
-    // Reset game state flags
-    this.isGameOver = false;
-    this.isGameStarted = true;
-    this.isPaused = false;
-    
-    // Reset player if it exists
+    // Reset player
     if (this.controls) {
-      console.log("Resetting player state and controls");
+      this.controls.reset();
+    }
+    
+    // Respawn player
+    if (this.scene && this.scene.room) {
+      // Reset room and enemy manager
+      this.scene.room.reset();
       
-      // Reset player position
-      if (typeof this.controls.resetPosition === 'function') {
-        this.controls.resetPosition();
-      }
-      
-      // Reset player health
-      if (typeof this.controls.resetHealth === 'function') {
-        this.controls.resetHealth();
-      }
-      
-      // Reset player score
-      if (typeof this.controls.resetScore === 'function') {
-        this.controls.resetScore();
-      }
-      
-      // Reset player weapons
-      if (typeof this.controls.resetWeapons === 'function') {
-        this.controls.resetWeapons();
-      }
-      
-      // Explicitly enable the controls to ensure player can move
-      this.controls.enabled = true;
-      console.log("Player controls enabled:", this.controls.enabled);
-      
-      // Ensure player UI is visible
-      this.showPlayerUI();
-      
-      // Make sure player model is visible
-      if (this.controls.modelContainer) {
-        this.controls.modelContainer.visible = true;
+      // Respawn player at starting position
+      if (this.controls) {
+        this.controls.respawn();
       }
     }
     
-    // Reset enemies if in a room
-    if (this.scene && this.scene.room && this.scene.room.enemyManager) {
-      console.log("Resetting enemy manager state");
-      
-      // Clear any existing enemies
-      this.scene.room.enemyManager.despawnAllEnemies();
-      
-      // Reset the round counter
-      this.scene.room.enemyManager.currentRound = 0;
-      
-      // Reset zombies remaining
-      this.scene.room.enemyManager.zombiesRemaining = 0;
-      
-      // Unpause if paused
-      this.scene.room.enemyManager.setPaused(false);
-      
-      // Start a new round
-      this.scene.room.enemyManager.startNextRound();
+    // Restart UI
+    if (this.ui) {
+      this.ui.reset();
     }
     
-    // Re-lock pointer to regain control - with a small delay to ensure UI is cleared
-    setTimeout(() => {
-      if (this.isGameStarted && !this.isGameOver && !this.isPaused) {
-        console.log("Locking pointer after game restart");
-        
-        // Force pointer lock to regain control
-        if (this.controls) {
-          console.log("Enabling controls and requesting pointer lock");
-          this.controls.enabled = true;
-          
-          if (typeof this.controls.lockPointer === 'function') {
-            console.log("Using controls.lockPointer()");
-            this.controls.lockPointer();
-          } else {
-            console.log("Fallback to document.body.requestPointerLock()");
-            document.body.requestPointerLock();
-          }
-        } else {
-          console.log("No controls object found, using document.body.requestPointerLock()");
-          document.body.requestPointerLock();
-        }
-      }
-    }, 200); // Slightly longer delay to ensure everything is reset
+    // In multiplayer, notify other players of restart
+    if (this.networkManager && this.networkManager.isConnected) {
+      this.networkManager.notifyGameRestart();
+    }
   }
   
   /**
@@ -2772,76 +2643,14 @@ export class Engine {
    * Reset all game state when returning to the menu
    */
   resetGameState() {
-    console.log("Performing complete game state reset");
-    
-    // Reset game state flags
-    this.isGameStarted = false;
-    this.isPaused = false;
+    console.log("Resetting game state flags");
     this.isGameOver = false;
+    this.isLocalPlayerDead = false;
+    this.isPaused = false;
     
-    // Reset player if it exists
-    if (this.controls) {
-      // Reset player position to starting position
-      if (typeof this.controls.resetPosition === 'function') {
-        this.controls.resetPosition();
-      }
-      
-      // Reset player health
-      if (typeof this.controls.resetHealth === 'function') {
-        this.controls.resetHealth();
-      }
-      
-      // Reset player score
-      if (typeof this.controls.resetScore === 'function') {
-        this.controls.resetScore();
-      }
-      
-      // Reset player weapons
-      if (typeof this.controls.resetWeapons === 'function') {
-        this.controls.resetWeapons();
-      }
-      
-      // Disable controls while in menu
-      this.controls.enabled = false;
-    }
-    
-    // Reset room and enemies
+    // Reset scene objects
     if (this.scene && this.scene.room) {
-      // Reset windows
-      if (typeof this.scene.room.resetWindows === 'function') {
-        this.scene.room.resetWindows();
-      }
-      
-      // Reset enemy manager
-      if (this.scene.room.enemyManager) {
-        // Clear all existing enemies
-        if (typeof this.scene.room.enemyManager.clearEnemies === 'function') {
-          this.scene.room.enemyManager.clearEnemies();
-        }
-        
-        // Explicitly unpause the enemy manager to ensure it doesn't stay paused
-        // when starting a new game later
-        this.scene.room.enemyManager.setPaused(false);
-        
-        // Disable enemy spawning
-        this.scene.room.enemyManager.toggleSpawning(false);
-        
-        // Reset enemy manager round counter if possible
-        if (typeof this.scene.room.enemyManager.resetRounds === 'function') {
-          this.scene.room.enemyManager.resetRounds();
-        } else {
-          // Manually reset round properties if method doesn't exist
-          this.scene.room.enemyManager.currentRound = 0;
-          this.scene.room.enemyManager.zombiesRemaining = 0;
-          this.scene.room.enemyManager.zombiesSpawned = 0;
-          this.scene.room.enemyManager.roundActive = false;
-        }
-      }
-      
-      // Reset mystery box if it exists
-      if (this.scene.room.mysteryBox && typeof this.scene.room.mysteryBox.reset === 'function') {
-        this.scene.room.mysteryBox.reset();
-      }
+      this.scene.room.reset();
     }
   }
 
@@ -2885,5 +2694,22 @@ export class Engine {
         notification.parentNode.removeChild(notification);
       }
     }, duration);
+  }
+
+  /**
+   * Unlock controls for spectator mode or when needed for UI interactions
+   */
+  unlockControls() {
+    console.log("Unlocking controls for UI interaction");
+    
+    // Unlock pointer
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+    
+    // Disable controls lock so UI elements can be interacted with
+    if (this.controls) {
+      this.controls.isLocked = false;
+    }
   }
 } 

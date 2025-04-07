@@ -1572,14 +1572,13 @@ export class PlayerControls {
   }
 
   /**
-   * Player death function
+   * Handle player death
    */
   die() {
-    if (this.isDead) return; // Prevent multiple calls
+    // Prevent multiple calls
+    if (this.isDead) return;
     
-    console.log("Player has died!");
-    
-    // Set player as dead
+    console.log("Player died");
     this.isDead = true;
     
     // Lock movement
@@ -1587,15 +1586,16 @@ export class PlayerControls {
     this.moveBackward = false;
     this.moveLeft = false;
     this.moveRight = false;
+    this.canMove = false;
     
-    // Stop any weapon sounds
+    // Stop weapon sounds, walking sounds, and background music
     this.stopWeaponSound();
-    
-    // Stop walking sound
-    this.stopWalkingSound();
-    
-    // Pause background music
-    this.pauseBackgroundMusic();
+    if (this.walkingSound) {
+      this.walkingSound.stop();
+    }
+    if (this.gameEngine && this.gameEngine.audio && this.gameEngine.audio.backgroundMusic) {
+      this.gameEngine.audio.backgroundMusic.pause();
+    }
     
     // Disable interactions
     this.isInteracting = false;
@@ -1609,9 +1609,18 @@ export class PlayerControls {
       document.exitPointerLock();
     }
     
-    // Signal the engine that the game is over
+    // Signal the engine that the local player has died
     if (this.gameEngine) {
+      // The engine will handle multiplayer cases differently than single player
+      console.log("Notifying game engine of local player death");
       this.gameEngine.endGame();
+    }
+    
+    // Send player death notification in multiplayer
+    if (this.gameEngine && this.gameEngine.networkManager) {
+      // Make sure our death state is broadcast to other players
+      console.log("Broadcasting player death to all clients");
+      this.gameEngine.networkManager.sendPlayerUpdate(true);
     }
   }
 

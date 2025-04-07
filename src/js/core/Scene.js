@@ -213,10 +213,6 @@ export class Scene {
   update(deltaTime) {
     // Update the room
     if (this.room) {
-      // Pass the force continue updates flag if set by the Engine
-      if (this.forceContinueUpdates) {
-        this.room.forceContinueUpdates = true;
-      }
       this.room.update(deltaTime);
     }
     

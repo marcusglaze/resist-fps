@@ -557,6 +557,14 @@ export class P2PNetwork {
           }
           break;
         
+        case 'gameRestart':
+          // Game is being restarted by the host
+          console.log("Received game restart message from host");
+          if (!this.isHost && this.gameEngine) {
+            this.handleGameRestart(data);
+          }
+          break;
+        
         case 'hostDisconnect':
           // Host is disconnecting, clean up
           console.log("Host is disconnecting:", data.message);
@@ -1140,82 +1148,71 @@ export class P2PNetwork {
   }
   
   /**
-   * Get the current state of all enemies for networking
+   * Get the current state of all enemies
    * @returns {Array} Array of enemy state objects
    */
   getEnemiesState() {
-    if (!this.gameEngine || !this.gameEngine.scene || !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
+    // This would extract enemy positions, health, etc.
+    if (!this.gameEngine.scene || !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
       return [];
     }
     
     const enemies = this.gameEngine.scene.room.enemyManager.enemies;
-    const isLocalPlayerDead = this.gameEngine.isLocalPlayerDead;
-    
-    // Check if there are living remote players when local player is dead
+    const isLocalPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
     let hasLivingRemotePlayers = false;
-    if (isLocalPlayerDead && this.remotePlayers) {
-      this.remotePlayers.forEach(player => {
+    
+    // Check if any remote players are alive - this is important for enemy targeting
+    if (isLocalPlayerDead && this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
+      this.gameEngine.networkManager.remotePlayers.forEach(player => {
         if (!player.isDead) {
           hasLivingRemotePlayers = true;
         }
       });
+      
+      // Log this information when host is dead but remote players are alive
+      if (hasLivingRemotePlayers) {
+        console.log(`Host player is dead but there are living remote players. Sending enemy states to clients.`);
+      }
     }
     
-    // Capture enemy positions and states
-    const enemiesState = [];
-    
-    enemies.forEach((enemy) => {
-      if (!enemy || !enemy.mesh) return;
-      
-      // Get enemy position and rotation
-      const position = enemy.mesh.position.clone();
-      const rotation = enemy.mesh.rotation.clone();
-      
-      // Get current state
-      let state = enemy.state;
-      
-      // If the local player is dead but there are living remote players,
-      // make sure enemies are still in a valid state for targeting
-      if (isLocalPlayerDead && hasLivingRemotePlayers && state === 'idle') {
-        // Force enemies to be in moving state so they'll target remote players
-        state = 'moving';
-        
-        // Also update the actual enemy object to ensure consistent state
-        if (enemy.state === 'idle') {
-          enemy.state = 'moving';
-          enemy._forceContinueUpdating = true;
-          console.log(`NETWORK: Forcing enemy ${enemy.id} to 'moving' state for remote players`);
+    // If there are any enemies to report
+    if (enemies && enemies.length > 0) {
+      // Generate enemy states for all enemies
+      return enemies.map(enemy => {
+        // Ensure each enemy has a consistent unique ID without modifying the original
+        if (!enemy.id) {
+          console.warn("Enemy without ID found, this should not happen", enemy);
+          // Give it a permanent ID rather than re-generating each time
+          enemy.id = `enemy_${Math.random().toString(36).substring(2, 15)}_${Date.now().toString(36)}`;
         }
-      }
-      
-      // Create enemy state object with all needed data for clients
-      enemiesState.push({
-        id: enemy.id,
-        position: {
-          x: position.x,
-          y: position.y,
-          z: position.z
-        },
-        rotation: {
-          x: rotation.x,
-          y: rotation.y,
-          z: rotation.z
-        },
-        state: state,
-        health: enemy.health,
-        speed: enemy.speed,
-        isAttacking: enemy.isAttacking,
-        target: enemy.target ? {
-          x: enemy.target.x,
-          y: enemy.target.y,
-          z: enemy.target.z
-        } : null,
-        attackCooldown: enemy.attackCooldown,
-        attackDistance: enemy.attackDistance
+        
+        // If the local player is dead but there are living remote players,
+        // make sure enemies are still in a valid state for targeting
+        if (isLocalPlayerDead && hasLivingRemotePlayers && enemy.state === 'idle') {
+          // Force enemies to be in moving state so they'll target remote players
+          enemy.state = 'moving';
+        }
+        
+        return {
+          id: enemy.id,
+          position: {
+            x: enemy.instance.position.x,
+            y: enemy.instance.position.y,
+            z: enemy.instance.position.z
+          },
+          health: enemy.health,
+          type: enemy.type || 'standard', // Include zombie type for proper spawning
+          state: enemy.state || 'moving', // idle, attacking, dying, etc.
+          targetWindow: enemy.targetWindow ? {
+            index: this.gameEngine.scene.room.windows.indexOf(enemy.targetWindow)
+          } : null, // Include target window information
+          insideRoom: enemy.insideRoom || false
+        };
       });
-    });
+    }
     
-    return enemiesState;
+    // Return empty array if no enemies
+    return [];
   }
   
   /**
@@ -1287,58 +1284,76 @@ export class P2PNetwork {
   getGameStatus() {
     if (!this.gameEngine) return {};
     
+    // Determine if all players are dead by checking both local and remote players
+    const allPlayersDead = this.areAllPlayersDead();
+    
+    // Check if the local player is dead (separate from global game over)
+    const isLocalPlayerDead = this.gameEngine.isLocalPlayerDead || false;
+    
+    // Important: isGameOver should only be true when ALL players are dead
+    // isLocalPlayerDead tracks just the local player's death state
     return {
       isPaused: this.gameEngine.isPaused || false,
       isGameOver: this.gameEngine.isGameOver || false,
-      allPlayersDead: this.areAllPlayersDead()
+      isLocalPlayerDead: isLocalPlayerDead,
+      allPlayersDead: allPlayersDead,
+      
+      // Add additional fields to help clients understand the game state
+      hasLivingRemotePlayers: this.hasLivingRemotePlayers(),
+      
+      // Include this timestamp to help debugging network state sync issues
+      statusTimestamp: Date.now()
     };
   }
   
   /**
-   * Check if all players in the game are dead
+   * Check if all players are dead (both local and remote)
    * @returns {boolean} True if all players are dead
    */
   areAllPlayersDead() {
-    if (!this.gameEngine) return false;
+    // Check if the local player is dead using the Engine's tracking property
+    // This is more reliable than checking controls.isDead which might be in a different state
+    const localPlayerDead = this.gameEngine.isLocalPlayerDead || false;
     
-    // Use the new flag instead of checking controls directly
-    const isLocalPlayerDead = this.gameEngine.isLocalPlayerDead;
+    // Log local player state
+    console.log(`DEATH STATE CHECK: Local player is ${localPlayerDead ? 'dead' : 'alive'}`);
     
-    console.log(`NETWORK: Checking if all players are dead. Local player dead: ${isLocalPlayerDead}`);
-    
-    // If local player is alive, we know not all players are dead
-    if (!isLocalPlayerDead) {
-      console.log("NETWORK: Local player is alive, not all players are dead");
+    // If local player is alive, not all players are dead - can return early
+    if (!localPlayerDead) {
       return false;
     }
     
-    // Check if there are any living remote players
-    let hasLivingRemotePlayers = false;
-    
-    // Count how many players we check
-    let remotePlayerCount = 0;
-    
-    // Check all remote players
-    if (this.remotePlayers) {
-      this.remotePlayers.forEach(player => {
-        remotePlayerCount++;
-        if (!player.isDead) {
-          hasLivingRemotePlayers = true;
-          console.log(`NETWORK: Remote player ${player.id} is still alive`);
-        } else {
-          console.log(`NETWORK: Remote player ${player.id} is dead`);
-        }
-      });
+    // Local player is dead, now check remote players
+    return !this.hasLivingRemotePlayers();
+  }
+  
+  /**
+   * Check if any remote players are still alive
+   * @returns {boolean} True if any remote players are alive
+   */
+  hasLivingRemotePlayers() {
+    // If we don't have network manager or remote players, then no living remote players
+    if (!this.gameEngine || !this.gameEngine.networkManager || 
+        !this.gameEngine.networkManager.remotePlayers || 
+        this.gameEngine.networkManager.remotePlayers.size === 0) {
+      return false;
     }
     
-    console.log(`NETWORK: Checked ${remotePlayerCount} remote players. Living remote players found: ${hasLivingRemotePlayers}`);
+    // Check each remote player
+    let hasLivingPlayers = false;
+    let remotePlayerCount = this.gameEngine.networkManager.remotePlayers.size;
     
-    // All players are dead if the local player is dead AND there are no living remote players
-    const allDead = isLocalPlayerDead && !hasLivingRemotePlayers;
+    this.gameEngine.networkManager.remotePlayers.forEach((player, playerId) => {
+      if (!player.isDead) {
+        hasLivingPlayers = true;
+        console.log(`DEATH STATE CHECK: Remote player ${playerId} is alive`);
+      } else {
+        console.log(`DEATH STATE CHECK: Remote player ${playerId} is dead`);
+      }
+    });
     
-    console.log(`NETWORK: All players dead check result: ${allDead}`);
-    
-    return allDead;
+    console.log(`DEATH STATE CHECK: ${remotePlayerCount} remote players, any living remote players: ${hasLivingPlayers}`);
+    return hasLivingPlayers;
   }
   
   /**
@@ -1842,76 +1857,170 @@ export class P2PNetwork {
   }
   
   /**
-   * Broadcast current game state to all clients
-   * @param {boolean} force - Whether to force sending the state regardless of debounce time
-   * @returns {boolean} Whether the broadcast was performed
+   * Broadcast the current game state to all connected clients
+   * @param {boolean} force - Whether to force a broadcast regardless of timing
+   * @returns {boolean} True if broadcast was sent, false otherwise
    */
   broadcastGameState(force = false) {
-    if (!this.gameEngine || !this.isHost) return false;
+    if (!this.isHost || !this.isConnected) return false;
     
     const now = Date.now();
     
     // Don't send updates if we recently received a client action (unless forced)
     if (!force && now - this.lastClientActionTime < this.clientActionDebounceTime) {
-      console.log(`NETWORK: Skipping state broadcast during client action debounce period...`);
+      console.log(`Skipping state broadcast during client action debounce period (${this.clientActionDebounceTime - (now - this.lastClientActionTime)}ms remaining)`);
       return false;
     }
     
-    // Even if the local player is dead, we should continue broadcasting game state 
-    // as long as there are living remote players
-    let shouldBroadcast = true;
+    // Rate limit state updates unless forced
+    if (!force && now - this.lastStateSent < this.stateUpdateInterval) {
+      return false;
+    }
     
-    if (this.gameEngine.isLocalPlayerDead) {
-      // Check if any remote players are still alive
-      let hasLivingRemotePlayers = false;
-      this.remotePlayers.forEach(player => {
+    // Get current game state
+    const gameState = this.getGameState();
+    
+    // Check if host player is dead but there are living remote players
+    const isHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
+    let hasLivingRemotePlayers = false;
+    
+    // Explicitly check the allPlayersDead status
+    const allPlayersDead = gameState.gameStatus?.allPlayersDead || false;
+    
+    // If host is dead, explicitly check for living remote players
+    if (isHostDead && this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
+      this.gameEngine.networkManager.remotePlayers.forEach(player => {
         if (!player.isDead) {
           hasLivingRemotePlayers = true;
         }
       });
       
-      // If local player is dead and there are living remote players, increase broadcast frequency
+      // When host is dead but remote players are alive, force updates to continue
       if (hasLivingRemotePlayers) {
-        console.log("NETWORK: Local player dead but remote players alive - continuing game state broadcasts");
+        console.log("HOST IS DEAD BUT REMOTE PLAYERS ALIVE: FORCING GAME STATE UPDATES");
         
-        // Check if we're broadcasting too frequently - throttle to avoid network saturation
-        if (!force && now - this.lastGameStateBroadcastTime < 100) { // 100ms = 10 broadcasts per second max
-          shouldBroadcast = false;
+        // If we don't already have a more frequent update interval for dead host state,
+        // set one up to improve remote player experience
+        if (!this._deadHostUpdateInterval) {
+          // First clear any existing interval to avoid duplicates
+          if (this._stateUpdateInterval) {
+            clearInterval(this._stateUpdateInterval);
+            this._stateUpdateInterval = null;
+          }
+          
+          // Setup new faster update interval for dead host case
+          const fasterInterval = this.stateUpdateInterval / 2; // Twice as frequent
+          console.log(`Setting up faster state update interval: ${fasterInterval}ms for dead host case`);
+          
+          this._deadHostUpdateInterval = setInterval(() => {
+            try {
+              // Check if we should still be in this state
+              const stillHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
+              let stillLivingRemotes = false;
+              
+              if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
+                this.gameEngine.networkManager.remotePlayers.forEach(player => {
+                  if (!player.isDead) {
+                    stillLivingRemotes = true;
+                  }
+                });
+              }
+              
+              if (stillHostDead && stillLivingRemotes) {
+                // Still valid state, continue with forced updates
+                this.broadcastGameState(true);
+              } else {
+                // State has changed, revert to normal interval
+                console.log("Host state or remote player state changed, reverting to normal interval");
+                this.resetUpdateIntervals();
+              }
+            } catch (error) {
+              console.error("Error in dead host game state update:", error);
+            }
+          }, fasterInterval);
         }
-      } else if (this.gameEngine.isGameOver) {
-        // If all players are dead (game is truly over), reduce broadcast frequency
-        if (!force && now - this.lastGameStateBroadcastTime < 1000) { // Once per second is enough
-          shouldBroadcast = false;
+        
+        // Force all enemies to be in moving state to ensure they keep functioning
+        if (gameState.enemies && gameState.enemies.length > 0) {
+          gameState.enemies.forEach(enemy => {
+            if (enemy.state === 'idle') {
+              enemy.state = 'moving';
+            }
+            
+            // Mark enemies to continue updating
+            enemy._forceContinueUpdating = true;
+          });
+        }
+      } else if (this._deadHostUpdateInterval) {
+        // No more living remote players, clean up the special interval
+        this.resetUpdateIntervals();
+      }
+    } else if (this._deadHostUpdateInterval) {
+      // Host is no longer dead, clean up the special interval
+      this.resetUpdateIntervals();
+    }
+    
+    // Log state updates if forced or significant changes
+    if (force || isHostDead || (now - this.lastStateSentLog > 5000)) {
+      console.log(`Game state broadcast [Force:${force}, HostDead:${isHostDead}, HasLivingRemotes:${hasLivingRemotePlayers}, AllPlayersDead:${allPlayersDead}]:`, {
+        playerCount: Object.keys(gameState.playerPositions || {}).length,
+        enemyCount: (gameState.enemies || []).length,
+        round: gameState.round?.round,
+        windowCount: (gameState.windows || []).length
+      });
+      this.lastStateSentLog = now;
+    }
+    
+    // Send to all connected peers
+    let broadcastSuccess = false;
+    this.connections.forEach((conn) => {
+      if (conn.open) {
+        try {
+          conn.send({
+            type: 'gameState',
+            state: gameState
+          });
+          broadcastSuccess = true;
+        } catch (error) {
+          console.error(`Error broadcasting game state to ${conn.peer}:`, error);
         }
       }
+    });
+    
+    // Update last sent time
+    if (broadcastSuccess) {
+      this.lastStateSent = now;
     }
     
-    // Only proceed if we should broadcast
-    if (!shouldBroadcast) {
-      return false;
+    return broadcastSuccess;
+  }
+  
+  /**
+   * Reset update intervals to their default state
+   */
+  resetUpdateIntervals() {
+    // Clear any dead host special interval
+    if (this._deadHostUpdateInterval) {
+      clearInterval(this._deadHostUpdateInterval);
+      this._deadHostUpdateInterval = null;
     }
     
-    // Get current game state with all entities
-    const gameState = this.getGameState();
-    
-    // Broadcast to all connected clients
-    const broadcastData = {
-      type: 'gameState',
-      data: gameState
-    };
-    
-    // Send using unreliable transport for regular updates (more frequent)
-    // but use reliable transport for forced updates (important state changes)
-    if (force) {
-      this.broadcast(broadcastData);
-    } else {
-      this.broadcastUnreliable(broadcastData);
+    // Clear any regular interval
+    if (this._stateUpdateInterval) {
+      clearInterval(this._stateUpdateInterval);
+      this._stateUpdateInterval = null;
     }
     
-    // Update last broadcast time
-    this.lastGameStateBroadcastTime = now;
-    
-    return true;
+    // Setup regular interval if needed
+    if (this.isHost && this.isConnected) {
+      this._stateUpdateInterval = setInterval(() => {
+        try {
+          this.broadcastGameState();
+        } catch (error) {
+          console.error("Error in regular game state update:", error);
+        }
+      }, this.stateUpdateInterval);
+    }
   }
   
   /**
@@ -1968,5 +2077,123 @@ export class P2PNetwork {
     } catch (error) {
       console.error("Error handling enemy damage confirmation:", error);
     }
+  }
+  
+  /**
+   * Handle game restart from host
+   * @param {Object} data - The restart data
+   */
+  handleGameRestart(data) {
+    console.log("Received game restart command from host");
+    
+    if (!this.gameEngine) {
+      console.error("Cannot handle game restart: game engine not available");
+      return;
+    }
+    
+    // Clear any game over or spectator UI
+    const gameOverScreen = document.getElementById('game-over-screen');
+    if (gameOverScreen) {
+      gameOverScreen.remove();
+    }
+    
+    const spectatorOverlay = document.getElementById('spectator-overlay');
+    if (spectatorOverlay) {
+      spectatorOverlay.remove();
+    }
+    
+    // Reset game state
+    console.log("Resetting game state from host command");
+    
+    // Reset flags
+    this.gameEngine.isGameOver = false;
+    this.gameEngine.isLocalPlayerDead = false;
+    
+    // Reset player
+    if (this.gameEngine.controls) {
+      console.log("Resetting player state");
+      
+      // Reset health and death status
+      this.gameEngine.controls.isDead = false;
+      this.gameEngine.controls.health = 100;
+      
+      // Reset position
+      if (typeof this.gameEngine.controls.resetPosition === 'function') {
+        this.gameEngine.controls.resetPosition();
+      }
+      
+      // Re-enable movement
+      this.gameEngine.controls.canMove = true;
+      
+      // Reset weapon if needed
+      if (this.gameEngine.weaponManager) {
+        this.gameEngine.weaponManager.reset();
+      }
+    }
+    
+    // Reset room and enemies if available
+    if (this.gameEngine.scene && this.gameEngine.scene.room) {
+      console.log("Resetting room state");
+      if (typeof this.gameEngine.scene.room.reset === 'function') {
+        this.gameEngine.scene.room.reset();
+      }
+    }
+    
+    // Force a position update to broadcast our alive state
+    this.sendPlayerPosition();
+    
+    // Show notification to player
+    this.showTemporaryMessage("Game Restarted", 3000);
+  }
+  
+  /**
+   * Show a temporary message to the player
+   * @param {string} message - The message to show
+   * @param {number} duration - How long to show the message (ms)
+   */
+  showTemporaryMessage(message, duration = 3000) {
+    // Remove any existing temporary messages
+    const existingMsg = document.getElementById('temporary-message');
+    if (existingMsg) {
+      existingMsg.remove();
+    }
+    
+    // Create message element
+    const msgElement = document.createElement('div');
+    msgElement.id = 'temporary-message';
+    msgElement.style.position = 'absolute';
+    msgElement.style.top = '100px';
+    msgElement.style.left = '50%';
+    msgElement.style.transform = 'translateX(-50%)';
+    msgElement.style.padding = '10px 20px';
+    msgElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    msgElement.style.color = '#fff';
+    msgElement.style.borderRadius = '5px';
+    msgElement.style.zIndex = '1000';
+    msgElement.style.fontFamily = 'Arial, sans-serif';
+    msgElement.style.fontSize = '18px';
+    msgElement.style.textAlign = 'center';
+    msgElement.style.transition = 'opacity 0.5s ease';
+    
+    // Set message
+    msgElement.textContent = message;
+    
+    // Add to DOM
+    document.body.appendChild(msgElement);
+    
+    // Remove after duration
+    setTimeout(() => {
+      if (msgElement.parentNode) {
+        // Fade out
+        msgElement.style.opacity = '0';
+        
+        // Remove after fade
+        setTimeout(() => {
+          if (msgElement.parentNode) {
+            msgElement.parentNode.removeChild(msgElement);
+          }
+        }, 500);
+      }
+    }, duration);
   }
 } 
