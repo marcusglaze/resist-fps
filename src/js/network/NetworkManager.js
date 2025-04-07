@@ -1057,24 +1057,17 @@ export class NetworkManager {
     console.log(`Updating player ${playerId} death state: ${isDead}`);
     
     if (isDead) {
-      console.log(`Player ${playerId} died - playing death animation`);
+      console.log(`Player ${playerId} died - removing player model`);
       
-      // Get the player model
+      // Remove existing player model from scene
       const model = this.playerModels.get(playerId);
-      if (model) {
-        // Play death animation
-        if (model.userData && model.userData.animations) {
-          const deathAnim = model.userData.animations.find(anim => anim.name === 'death');
-          if (deathAnim) {
-            deathAnim.reset();
-            deathAnim.play();
-            deathAnim.clampWhenFinished = true;
-          }
-        }
-        
-        // Create a dead player marker
-        this.createDeadPlayerMarker(playerId, playerData?.position);
+      if (model && this.gameEngine.scene && this.gameEngine.scene.instance) {
+        this.gameEngine.scene.instance.remove(model);
+        this.playerModels.delete(playerId);
       }
+      
+      // If needed, create a dead player indicator or temporary marker
+      this.createDeadPlayerMarker(playerId, playerData?.position);
       
     } else {
       // Player has been respawned
@@ -3002,5 +2995,23 @@ export class NetworkManager {
         timestamp: Date.now()
       });
     }
+  }
+
+  sendPlayerUpdate(isDead = false) {
+    if (!this.isHost) return;
+
+    const playerData = {
+      position: this.gameEngine.controls.object.position.toArray(),
+      rotation: this.gameEngine.controls.object.rotation.toArray(),
+      health: this.gameEngine.controls.health,
+      isDead: isDead,
+      weapon: {
+        currentWeapon: this.gameEngine.controls.currentWeapon,
+        ammo: this.gameEngine.controls.ammo,
+        isReloading: this.gameEngine.controls.isReloading
+      }
+    };
+
+    this.p2pNetwork.broadcastPlayerUpdate(playerData);
   }
 } 

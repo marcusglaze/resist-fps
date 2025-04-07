@@ -2215,4 +2215,72 @@ export class P2PNetwork {
       }
     }, duration);
   }
+
+  broadcastPlayerUpdate(playerData) {
+    if (!this.isHost) return;
+
+    const update = {
+      type: 'playerUpdate',
+      playerId: this.peer.id,
+      data: playerData
+    };
+
+    this.broadcast(update);
+  }
+
+  handlePlayerUpdate(data) {
+    const { playerId, data: playerData } = data;
+    
+    if (playerId === this.peer.id) return; // Ignore own updates
+
+    const remotePlayer = this.remotePlayers.get(playerId);
+    if (!remotePlayer) return;
+
+    // Update remote player's death state
+    if (playerData.isDead !== undefined) {
+        remotePlayer.isDead = playerData.isDead;
+    }
+
+    // Update position and rotation
+    if (playerData.position) {
+        remotePlayer.position.fromArray(playerData.position);
+    }
+    if (playerData.rotation) {
+        remotePlayer.rotation.fromArray(playerData.rotation);
+    }
+
+    // Update health
+    if (playerData.health !== undefined) {
+        remotePlayer.health = playerData.health;
+    }
+
+    // Update weapon state
+    if (playerData.weapon) {
+        remotePlayer.currentWeapon = playerData.weapon.currentWeapon;
+        remotePlayer.ammo = playerData.weapon.ammo;
+        remotePlayer.isReloading = playerData.weapon.isReloading;
+    }
+
+    // Check if all players are dead
+    this.checkAllPlayersDead();
+  }
+
+  checkAllPlayersDead() {
+    // Check local player
+    if (!this.gameEngine.controls.isDead) {
+        return false;
+    }
+
+    // Check all remote players
+    for (const [_, player] of this.remotePlayers) {
+        if (!player.isDead) {
+            return false;
+        }
+    }
+
+    // If we get here, all players are dead
+    console.log("All players are dead, showing game over screen");
+    this.gameEngine.showMultiplayerGameOverScreen();
+    return true;
+  }
 } 
