@@ -555,23 +555,13 @@ export class Engine {
         this.handleMultiplayerGameOver();
       } else {
         // Local player is dead but some remote players are still alive
-        console.log("Local player is dead but remote players are still alive - entering spectator mode");
+        console.log("Local player is dead but remote players are still alive - continuing game");
         
         // Handle local player death ui but don't end the game completely
         this.unlockControls();
         
-        // Make sure the player is marked as dead
-        if (this.controls) {
-          this.controls.isDead = true;
-        }
-        
         // Enter spectator mode for the local player
-        if (this.networkManager.enterSpectatorMode) {
-          console.log("Entering spectator mode");
-          this.networkManager.enterSpectatorMode();
-        } else {
-          console.error("enterSpectatorMode method not found in networkManager");
-        }
+        this.networkManager.enterSpectatorMode();
         
         // If we're the host, make sure the game state continues updating
         if (this.networkManager.isHost) {
@@ -603,11 +593,7 @@ export class Engine {
   handleMultiplayerGameOver() {
     console.log("Handling multiplayer game over state");
     
-    // First check if truly all players are dead
-    const allDead = this.areAllPlayersDead();
-    console.log(`All players dead check result: ${allDead}`);
-    
-    // If local player is dead but some remote players are still alive, enter spectator mode
+    // If we're in spectator mode but the game isn't fully over, don't show game over screen yet
     if (this.isLocalPlayerDead && !this.isGameOver) {
       console.log("Local player is dead but game continues - entering spectator mode");
       
@@ -620,21 +606,14 @@ export class Engine {
     }
     
     // If all players are confirmed dead, show the game over screen
-    if (allDead || this.isGameOver) {
-      console.log("All players confirmed dead or game over flag set - showing multiplayer game over screen");
-      
-      // Set game over state if not already set
-      this.isGameOver = true;
-      
-      // Show multiplayer game over
-      if (this.networkManager) {
-        this.networkManager.showMultiplayerGameOverScreen();
-      } else {
-        // Fallback to standard game over if network manager isn't available
-        this.showGameOverScreen();
-      }
+    console.log("All players dead - showing multiplayer game over screen");
+    
+    // Show multiplayer game over
+    if (this.networkManager) {
+      this.networkManager.showMultiplayerGameOverScreen();
     } else {
-      console.log("Not showing game over screen yet - some players still alive");
+      // Fallback to standard game over if network manager isn't available
+      this.showGameOverScreen();
     }
   }
   
@@ -644,39 +623,22 @@ export class Engine {
    */
   areAllPlayersDead() {
     // Check if local player is dead
-    console.log(`Local player dead status: ${this.isLocalPlayerDead}`);
-    
     if (!this.isLocalPlayerDead) {
       return false; // Local player is alive
     }
     
     // Check if there are any living remote players
     if (this.networkManager && this.networkManager.remotePlayers) {
-      let allRemotePlayersDead = true;
-      let remotePlayerCount = 0;
-      
-      this.networkManager.remotePlayers.forEach((player, playerId) => {
-        remotePlayerCount++;
+      for (const player of this.networkManager.remotePlayers) {
         if (!player.isDead) {
-          console.log(`Remote player ${playerId} is still alive`);
-          allRemotePlayersDead = false;
-        } else {
-          console.log(`Remote player ${playerId} is dead`);
+          console.log(`Remote player ${player.id} is still alive`);
+          return false; // Found a living remote player
         }
-      });
-      
-      console.log(`Remote player check: ${remotePlayerCount} players, all dead: ${allRemotePlayersDead}`);
-      
-      if (!allRemotePlayersDead) {
-        return false; // Found a living remote player
       }
     }
     
-    // At this point:
-    // - Local player is dead
-    // - All remote players are dead or there are no remote players
     console.log("All players are confirmed dead");
-    return true;
+    return true; // No living players found
   }
   
   /**
@@ -1100,15 +1062,26 @@ export class Engine {
   checkMultiplayerRoundEnd() {
     if (!this.networkManager || !this.networkManager.isHost) return;
     
-    // Check if round is no longer active and there are dead players
+    // Check if round is no longer active and there are no active zombies
     if (this.scene.room && 
         this.scene.room.enemyManager && 
-        !this.scene.room.enemyManager.roundActive) {
+        !this.scene.room.enemyManager.roundActive &&
+        this.scene.room.enemyManager.enemies.length === 0) {
+      
+      console.log("Round ended, checking for player respawns");
+      
       // Round has ended, check if we need to respawn any players
       this.networkManager.checkPlayersForRespawn();
       
+      // Reset local player dead flag if the player has been respawned
+      if (this.isLocalPlayerDead && this.controls && !this.controls.isDead) {
+        console.log("Local player has been respawned, resetting isLocalPlayerDead flag");
+        this.isLocalPlayerDead = false;
+      }
+      
       // Disable spectator mode for all players when they respawn
       if (this.isSpectatorMode && !this.controls.isDead) {
+        console.log("Disabling spectator mode for respawned player");
         this.disableSpectatorMode();
       }
     }

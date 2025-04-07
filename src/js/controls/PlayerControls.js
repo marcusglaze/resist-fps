@@ -1504,21 +1504,9 @@ export class PlayerControls {
     // Show damage effect
     this.showDamageEffect();
     
-    console.log(`Player took ${damageTaken} damage, health now: ${this.health}`);
-    
-    // Check if player has died - use strict equality to catch edge cases
+    // Check if player has died
     if (this.health <= 0) {
-      console.log("Health reached 0 or less, triggering death");
-      // Force health to exactly 0 for consistency
-      this.health = 0;
-      // Update health display one last time
-      this.updateHealthDisplay();
-      // Call die with a small timeout to ensure other updates complete
-      setTimeout(() => {
-        if (!this.isDead) {
-          this.die();
-        }
-      }, 50);
+      this.die();
     }
   }
 
@@ -1587,94 +1575,53 @@ export class PlayerControls {
    * Handle player death
    */
   die() {
-    if (this.isDead) return; // Prevent multiple calls
+    // Prevent multiple calls
+    if (this.isDead) return;
     
-    console.log('Player died');
+    console.log("Player died");
+    this.isDead = true;
     
-    // Lock player movement
-    this.canMove = false;
+    // Lock movement
     this.moveForward = false;
     this.moveBackward = false;
     this.moveLeft = false;
     this.moveRight = false;
+    this.canMove = false;
     
-    // Stop weapon sounds
-    if (this.gameEngine.weaponManager) {
-      this.gameEngine.weaponManager.stopWeaponSounds();
+    // Stop weapon sounds, walking sounds, and background music
+    this.stopWeaponSound();
+    if (this.walkingSound) {
+      this.walkingSound.stop();
     }
-    
-    // Stop walking and background music sounds
-    if (this.gameEngine.soundManager) {
-      this.gameEngine.soundManager.stopWalkingSound();
-      this.gameEngine.soundManager.stopMusic();
+    if (this.gameEngine && this.gameEngine.audio && this.gameEngine.audio.backgroundMusic) {
+      this.gameEngine.audio.backgroundMusic.pause();
     }
     
     // Disable interactions
-    this.canShoot = false;
-    this.canInteract = false;
+    this.isInteracting = false;
+    this.shooting = false;
     
-    // Cancel any reload in progress
-    if (this.gameEngine.weaponManager && this.gameEngine.weaponManager.isReloading) {
-      this.gameEngine.weaponManager.cancelReload();
+    // Stop any reload in progress
+    this.isReloading = false;
+    
+    // Unlock pointer to allow button interaction
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
     }
     
-    // Create death model at player position
-    this.createDeathModel();
-    
-    // Unlock the pointer for button interaction
-    document.exitPointerLock();
-    
-    // Set player as dead
-    this.isDead = true;
-    
-    // Signal to game engine that local player has died
-    // This will handle multiplayer cases differently than single-player
+    // Signal the engine that the local player has died
     if (this.gameEngine) {
-      this.gameEngine.isLocalPlayerDead = true;
+      // The engine will handle multiplayer cases differently than single player
+      console.log("Notifying game engine of local player death");
       this.gameEngine.endGame();
     }
     
-    // Broadcast death notification to other clients
+    // Send player death notification in multiplayer
     if (this.gameEngine && this.gameEngine.networkManager) {
-      // Send immediate update with isDead flag
+      // Make sure our death state is broadcast to other players
+      console.log("Broadcasting player death to all clients");
       this.gameEngine.networkManager.sendPlayerUpdate(true);
     }
-  }
-  
-  /**
-   * Create a visual model at player's death location
-   */
-  createDeathModel() {
-    // Remove any existing death model
-    if (this.deathModel && this.gameEngine.scene && this.gameEngine.scene.instance) {
-      this.gameEngine.scene.instance.remove(this.deathModel);
-      this.deathModel = null;
-    }
-    
-    // Create a simple model to represent the dead player
-    const geometry = new THREE.BoxGeometry(0.5, 0.2, 1.3);
-    const material = new THREE.MeshBasicMaterial({ color: 0x777777 });
-    this.deathModel = new THREE.Mesh(geometry, material);
-    
-    // Position at player's current location
-    this.deathModel.position.set(
-      this.camera.position.x,
-      this.camera.position.y - 1.6, // Place on ground
-      this.camera.position.z
-    );
-    
-    // Rotate to match player's direction
-    this.deathModel.rotation.y = this.camera.rotation.y;
-    
-    // Add to scene
-    if (this.gameEngine.scene && this.gameEngine.scene.instance) {
-      this.gameEngine.scene.instance.add(this.deathModel);
-      console.log('Added death model to scene');
-    } else {
-      console.warn('Could not add death model - scene not available');
-    }
-    
-    return this.deathModel;
   }
 
   /**
@@ -3942,5 +3889,69 @@ export class PlayerControls {
     } catch (error) {
       console.error("Error in castRay:", error);
     }
+  }
+
+  /**
+   * Complete player respawn functionality
+   * Resets health, weapons, score, and position
+   */
+  respawn() {
+    console.log("Player respawning - full reset");
+    
+    // Reset health and damage state
+    this.resetHealth();
+    
+    // Reset weapons to default loadout (pistol)
+    this.resetWeapons();
+    
+    // Reset score to 0
+    this.resetScore();
+    
+    // Reset position to spawn point
+    this.resetPosition();
+    
+    // Reset flags
+    this.isDead = false;
+    this.canMove = true;
+    this.isLocked = false;
+    this.movementEnabled = true;
+    
+    // Re-enable movement
+    this.moveForward = false;
+    this.moveBackward = false;
+    this.moveLeft = false;
+    this.moveRight = false;
+    
+    // Reset interaction state
+    this.isInteracting = false;
+    this.shooting = false;
+    this.isReloading = false;
+    
+    // Make sure UI elements are showing
+    if (this.healthDisplay) {
+      this.healthDisplay.style.display = 'block';
+    }
+    if (this.scoreDisplay) {
+      this.scoreDisplay.style.display = 'block';
+    }
+    if (this.ammoDisplay) {
+      this.ammoDisplay.style.display = 'block';
+    }
+    if (this.crosshair) {
+      this.crosshair.style.display = 'block';
+    }
+    
+    // Resume background music
+    if (this.gameEngine && this.gameEngine.audio && this.gameEngine.audio.backgroundMusic) {
+      this.gameEngine.audio.backgroundMusic.play();
+    }
+    
+    // Update health display
+    this.updateHealthDisplay();
+    
+    // Update ammo display
+    this.updateAmmoDisplay();
+    
+    console.log("Player respawn complete");
   }
 } 
