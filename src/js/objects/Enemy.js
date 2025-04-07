@@ -438,40 +438,28 @@ export class Enemy {
         // No player reference, just move randomly
         this.moveRandomly(deltaTime);
       }
-    } else {
-      // If window is boarded, attack it
-      if (this.targetWindow && this.targetWindow.boardsCount > 0) {
-        this.attackWindow(deltaTime);
-      } else if (this.targetWindow) {
-        // Window has no boards, move inside
-        this.moveTowardsWindow(deltaTime);
-        
-        // Check if reached the window
-        const horizDistance = new THREE.Vector2(
-          this.instance.position.x - this.targetPosition.x,
-          this.instance.position.z - this.targetPosition.z
-        ).length();
-        
-        if (horizDistance < 0.5) {
-          this.enterRoom();
-        }
-      } else {
-        // No target window, move randomly
-        this.moveRandomly(deltaTime);
-      }
+      return;
     }
     
-    // CRITICAL FIX: Always update the position property to match the instance position
-    // This ensures network transmission will use current position values
-    if (this.instance && this.position) {
-      this.position.copy(this.instance.position);
+    // If window is boarded, attack it
+    if (this.targetWindow && this.targetWindow.boardsCount > 0) {
+      this.attackWindow(deltaTime);
+    } else if (this.targetWindow) {
+      // Window has no boards, move inside
+      this.moveTowardsWindow(deltaTime);
       
-      // Occasionally log position sync for debugging
-      if (Math.random() < 0.002) { // 0.2% chance per frame
-        console.log(`Enemy ${this.id} position synced: 
-          instance: [${this.instance.position.x.toFixed(2)}, ${this.instance.position.y.toFixed(2)}, ${this.instance.position.z.toFixed(2)}]
-          property: [${this.position.x.toFixed(2)}, ${this.position.y.toFixed(2)}, ${this.position.z.toFixed(2)}]`);
+      // Check if reached the window
+      const horizDistance = new THREE.Vector2(
+        this.instance.position.x - this.targetPosition.x,
+        this.instance.position.z - this.targetPosition.z
+      ).length();
+      
+      if (horizDistance < 0.5) {
+        this.enterRoom();
       }
+    } else {
+      // No target window, move randomly
+      this.moveRandomly(deltaTime);
     }
   }
 
@@ -543,11 +531,6 @@ export class Enemy {
     
     // Look at target (on ground level)
     this.instance.lookAt(targetPointOnGround);
-    
-    // CRITICAL FIX: Sync the position property immediately after movement
-    if (this.position) {
-      this.position.copy(this.instance.position);
-    }
     
     // Log position change if enabled
     if (shouldLog && originalPosition) {
@@ -780,11 +763,6 @@ export class Enemy {
     
     // Keep inside room boundaries
     this.enforceRoomBoundaries();
-    
-    // CRITICAL FIX: Sync the position property immediately after movement
-    if (this.position) {
-      this.position.copy(this.instance.position);
-    }
   }
 
   /**
@@ -917,11 +895,6 @@ export class Enemy {
     // Enforce room boundaries
     this.enforceRoomBoundaries();
     
-    // CRITICAL FIX: Sync the position property immediately after movement
-    if (this.position) {
-      this.position.copy(this.instance.position);
-    }
-    
     // Log position change if enabled
     if (shouldLog && originalPosition) {
       console.log(`Enemy ${this.id} movement (moveRandomly):
@@ -955,11 +928,6 @@ export class Enemy {
       if (!this.player) {
         this.instance.rotation.y += Math.PI; // Turn around
       }
-    }
-    
-    // CRITICAL FIX: Sync the position property after boundary enforcement
-    if (this.position) {
-      this.position.copy(this.instance.position);
     }
   }
 
