@@ -559,79 +559,341 @@ export class NetworkManager {
         return;
       }
       
-      // Create appropriate enemy type based on received data
-      let enemy;
+      console.log(`CLIENT: Creating enemy from network data - ID: ${enemyData.id}, Type: ${enemyData.type}`);
+      
+      // Check if the EnemyManager has a modelLoader which we can use to properly initialize enemies
+      const hasModelLoader = enemyManager.modelLoader && typeof enemyManager.modelLoader.getEnemyModel === 'function';
+      
+      if (hasModelLoader) {
+        console.log("Using EnemyManager's modelLoader for proper enemy initialization");
+      } else {
+        console.warn("EnemyManager does not have a modelLoader - enemy visuals may be missing");
+      }
+      
+      // Determine the correct enemy type string to use
+      let enemyType = 'standard';
       switch (enemyData.type) {
         case 'crawler':
-          enemy = new CrawlingZombie(targetWindow);
+          enemyType = 'crawler';
           break;
         case 'runner':
-          enemy = new RunnerZombie(targetWindow);
+          enemyType = 'runner';
           break;
         case 'spitter':
-          enemy = new SpitterZombie(targetWindow);
+          enemyType = 'spitter';
           break;
         default:
-          enemy = new Enemy(targetWindow);
+          enemyType = 'standard';
           break;
       }
       
-      // Set the ID to match the host
-      enemy.id = enemyData.id;
+      // Create enemy with reliable approach
+      let enemy;
       
-      // Initialize the enemy
-      enemy.init();
-      
-      // Set position
-      if (enemyData.position && enemy.instance) {
-        enemy.instance.position.set(
-          enemyData.position.x,
-          enemyData.position.y,
-          enemyData.position.z
-        );
-      }
-      
-      // Set state properties
-      enemy.health = enemyData.health;
-      enemy.state = enemyData.state;
-      enemy.insideRoom = enemyData.insideRoom || false;
-      
-      // Set manager reference
-      enemy.manager = enemyManager;
-      
-      // Set game engine reference directly
-      enemy.gameEngine = this.gameEngine;
-      
-      // Set player reference if available
-      if (enemyManager.player) {
-        enemy.setPlayer(enemyManager.player);
-      }
-      
-      // Use the correct THREE.js scene instance
-      // The actual THREE.js scene is at this.gameEngine.scene.instance, not this.gameEngine.scene
-      if (this.gameEngine.scene.instance && typeof this.gameEngine.scene.instance.add === 'function') {
-        // Add to scene using the correct scene instance
-        this.gameEngine.scene.instance.add(enemy.instance);
-      } else {
-        console.warn("Cannot add enemy to scene - scene.instance.add is not available");
+      // Always prefer using the enemyManager's createEnemy method if available
+      if (enemyManager.createEnemy && typeof enemyManager.createEnemy === 'function') {
+        console.log(`Creating ${enemyType} enemy with enemyManager.createEnemy`);
+        enemy = enemyManager.createEnemy(enemyType, targetWindow);
         
-        // Try alternative ways to add the enemy
-        if (room && room.instance && typeof room.instance.add === 'function') {
-          room.instance.add(enemy.instance);
+        // Set the ID to match the host's enemy ID
+        if (enemy) {
+          enemy.id = enemyData.id;
         } else {
-          console.error("Could not add enemy to any available scene object");
-          // Don't add enemy to tracking array if we couldn't add it to the scene
+          console.error(`Failed to create enemy with type ${enemyType}`);
           return null;
+        }
+      } else {
+        // Fallback to direct class instantiation (less preferred)
+        console.warn("Falling back to direct class instantiation - textures may be missing");
+        
+        switch (enemyType) {
+          case 'crawler':
+            enemy = new CrawlingZombie(targetWindow);
+            break;
+          case 'runner':
+            enemy = new RunnerZombie(targetWindow);
+            break;
+          case 'spitter':
+            enemy = new SpitterZombie(targetWindow);
+            break;
+          default:
+            enemy = new Enemy(targetWindow);
+            break;
+        }
+        
+        // Set the ID to match the host's enemy ID
+        enemy.id = enemyData.id;
+        
+        // Initialize the enemy - this creates the model and sets up animations
+        if (enemy.init && typeof enemy.init === 'function') {
+          enemy.init();
         }
       }
       
-      // Add to tracking array
-      enemyManager.enemies.push(enemy);
+      // For enemies that use asynchronous model loading
+      if (enemy.modelLoadPromise) {
+        console.log(`Enemy ${enemy.id} is using async model loading - waiting for completion`);
+        
+        enemy.modelLoadPromise.then(() => {
+          console.log(`Enemy ${enemy.id} model loaded successfully, finalizing setup`);
+          this._finalizeEnemySetup(enemy, enemyData, enemyManager, room);
+        }).catch(err => {
+          console.error(`Error loading model for enemy ${enemy.id}:`, err);
+        });
+        
+        return enemy;
+      } else if (enemy.waitForModel && typeof enemy.waitForModel === 'function') {
+        console.log(`Enemy ${enemy.id} has waitForModel method - using it for setup`);
+        
+        enemy.waitForModel().then(() => {
+          console.log(`Enemy ${enemy.id} model ready from waitForModel, finalizing setup`);
+          this._finalizeEnemySetup(enemy, enemyData, enemyManager, room);
+        }).catch(err => {
+          console.error(`Error from waitForModel for enemy ${enemy.id}:`, err);
+        });
+        
+        return enemy;
+      }
+      
+      // For immediately available models
+      setTimeout(() => {
+        console.log(`Finalizing setup for enemy ${enemy.id} with immediate model`);
+        this._finalizeEnemySetup(enemy, enemyData, enemyManager, room);
+      }, 100); // Short delay to ensure any pending operations complete
       
       return enemy;
     } catch (error) {
       console.error("Error spawning enemy from network data:", error);
       return null;
+    }
+  }
+  
+  /**
+   * Complete the setup of an enemy after model is loaded
+   * @private
+   * @param {Enemy} enemy - The enemy to setup
+   * @param {Object} enemyData - The enemy data from the host
+   * @param {EnemyManager} enemyManager - The enemy manager
+   * @param {Room} room - The room instance
+   */
+  _finalizeEnemySetup(enemy, enemyData, enemyManager, room) {
+    console.log(`Finalizing setup for enemy ${enemy.id}`);
+    
+    // Ensure enemy has an instance
+    if (!enemy.instance && enemy.model) {
+      console.log(`Using enemy.model as instance for enemy ${enemy.id}`);
+      enemy.instance = enemy.model;
+    }
+    
+    if (!enemy.instance) {
+      console.error(`Enemy ${enemy.id} has no valid instance or model`);
+      return;
+    }
+    
+    // Set position from network data
+    if (enemyData.position && enemy.instance) {
+      enemy.instance.position.set(
+        enemyData.position.x,
+        enemyData.position.y,
+        enemyData.position.z
+      );
+    }
+    
+    // Set state properties
+    enemy.health = enemyData.health || 100;
+    enemy.maxHealth = enemyData.health || 100; // Make sure maxHealth is set to avoid health bar issues
+    enemy.state = enemyData.state || 'idle';
+    enemy.insideRoom = enemyData.insideRoom || false;
+    
+    // Set manager reference
+    enemy.manager = enemyManager;
+    
+    // Set game engine reference directly
+    enemy.gameEngine = this.gameEngine;
+    
+    // Set player reference if available
+    if (enemyManager.player) {
+      enemy.setPlayer(enemyManager.player);
+    }
+    
+    // Force model verification and texture application
+    this._verifyEnemyModel(enemy);
+    
+    // Determine which scene instance to use
+    let sceneInstance = null;
+    
+    // Try all possible scene references in order of preference
+    if (this.gameEngine.scene.instance && typeof this.gameEngine.scene.instance.add === 'function') {
+      sceneInstance = this.gameEngine.scene.instance;
+    } else if (room && room.instance && typeof room.instance.add === 'function') {
+      sceneInstance = room.instance;
+    } else if (this.gameEngine.scene && typeof this.gameEngine.scene.add === 'function') {
+      sceneInstance = this.gameEngine.scene;
+    }
+    
+    if (!sceneInstance) {
+      console.error(`Could not find valid scene instance for enemy ${enemy.id}`);
+      return;
+    }
+    
+    // Check if the instance is already in the scene
+    let isInScene = false;
+    if (enemy.instance.parent === sceneInstance) {
+      isInScene = true;
+    }
+    
+    // Add to scene if not already there
+    if (!isInScene) {
+      console.log(`Adding enemy ${enemy.id} to scene`);
+      sceneInstance.add(enemy.instance);
+    } else {
+      console.log(`Enemy ${enemy.id} is already in the scene`);
+    }
+    
+    // Make sure animations start playing
+    if (enemy.startAnimation && typeof enemy.startAnimation === 'function') {
+      // Try to start animation based on state
+      const animationName = enemy.state === 'idle' ? 'idle' : 'walk';
+      console.log(`Starting ${animationName} animation for enemy ${enemy.id}`);
+      enemy.startAnimation(animationName);
+    } else if (enemy.mixer && enemy.animationActions) {
+      // Try to start animation directly if startAnimation method is not available
+      const action = enemy.animationActions['walk'] || 
+                    enemy.animationActions['Walk'] || 
+                    enemy.animationActions['idle'] || 
+                    enemy.animationActions['Idle'];
+      if (action) {
+        console.log(`Playing animation directly for enemy ${enemy.id}`);
+        action.reset().play();
+      } else {
+        console.warn(`No suitable animation found for enemy ${enemy.id}`);
+      }
+    } else if (enemy.mixer && enemy.animations && enemy.animations.length > 0) {
+      // Last resort: try to create animation actions on the fly
+      console.log(`Creating animation actions for enemy ${enemy.id}`);
+      enemy.animationActions = {};
+      
+      enemy.animations.forEach((anim, index) => {
+        const name = anim.name || `anim_${index}`;
+        const action = enemy.mixer.clipAction(anim);
+        enemy.animationActions[name] = action;
+        
+        // Play the first animation as a fallback
+        if (index === 0) {
+          action.play();
+        }
+      });
+    }
+    
+    // Start behavior based on state
+    if (enemy.state === 'moving' && enemy.startMoving && typeof enemy.startMoving === 'function') {
+      console.log(`Starting movement for enemy ${enemy.id}`);
+      enemy.startMoving();
+    }
+    
+    // Create health bar if needed
+    if (!enemy.healthBar && enemy.createHealthBar && typeof enemy.createHealthBar === 'function') {
+      console.log(`Creating health bar for enemy ${enemy.id}`);
+      enemy.createHealthBar();
+    }
+    
+    // Make enemy visible
+    if (enemy.instance) {
+      enemy.instance.visible = true;
+    }
+    
+    // Add to tracking array in enemy manager if not already there
+    if (!enemyManager.enemies.includes(enemy)) {
+      enemyManager.enemies.push(enemy);
+      console.log(`Added enemy ${enemy.id} to enemyManager tracking array`);
+    }
+  }
+  
+  /**
+   * Verify that an enemy's model is properly set up with materials and meshes
+   * @private
+   * @param {Enemy} enemy - The enemy to verify
+   */
+  _verifyEnemyModel(enemy) {
+    if (!enemy.instance) return;
+    
+    // Check if model has been properly initialized
+    if (!enemy.instance.userData.initialized) {
+      console.log(`CLIENT: Ensuring full initialization of enemy model: ${enemy.id}`);
+      
+      // Mark as initialized to avoid redundant processing
+      enemy.instance.userData.initialized = true;
+      
+      // Set userData for all mesh children
+      enemy.instance.traverse((child) => {
+        if (child.isMesh) {
+          // Set userData for raycasting
+          child.userData.type = 'zombie';
+          child.userData.enemy = enemy;
+          child.userData.parent = enemy.instance;
+          
+          // Check if mesh has a material but no texture
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              // Multiple materials
+              child.material.forEach(mat => {
+                this._ensureMaterialHasTexture(mat, enemy);
+              });
+            } else {
+              // Single material
+              this._ensureMaterialHasTexture(child.material, enemy);
+            }
+          }
+        }
+      });
+      
+      // Setup animations if needed
+      if (enemy.mixer && enemy.animations && (!enemy.animationsInitialized || !enemy.animationActions)) {
+        console.log(`CLIENT: Setting up animations for enemy ${enemy.id}`);
+        enemy.animationActions = {};
+        
+        enemy.animations.forEach(anim => {
+          if (anim.name) {
+            enemy.animationActions[anim.name] = enemy.mixer.clipAction(anim);
+          }
+        });
+        
+        // Store references to common animations
+        enemy.idleAction = enemy.animationActions['idle'] || enemy.animationActions['Idle'];
+        enemy.walkAction = enemy.animationActions['walk'] || enemy.animationActions['Walk'];
+        enemy.attackAction = enemy.animationActions['attack'] || enemy.animationActions['Attack'];
+        enemy.dieAction = enemy.animationActions['die'] || enemy.animationActions['Death'];
+        
+        enemy.animationsInitialized = true;
+      }
+      
+      // Create health bar if needed
+      if (!enemy.healthBar && enemy.createHealthBar && typeof enemy.createHealthBar === 'function') {
+        enemy.createHealthBar();
+      }
+    }
+  }
+  
+  /**
+   * Ensure a material has a texture or default color
+   * @private
+   * @param {THREE.Material} material - The material to check
+   * @param {Enemy} enemy - The enemy with the material
+   */
+  _ensureMaterialHasTexture(material, enemy) {
+    if (!material) return;
+    
+    // Skip if material already has a map
+    if (material.map) return;
+    
+    // If enemy has a defaultTexture, use it
+    if (enemy.defaultTexture) {
+      material.map = enemy.defaultTexture;
+      material.needsUpdate = true;
+    } else if (!material.color || material.color.getHex() === 0xffffff) {
+      // If no texture and default white color, set a zombie-like color
+      material.color.setHex(0x559944); // greenish zombie color
+      material.needsUpdate = true;
     }
   }
   
@@ -2042,141 +2304,99 @@ export class NetworkManager {
   
   /**
    * Show multiplayer game over screen
-   * @param {boolean} allPlayersDead - Whether all players are dead
    */
-  showMultiplayerGameOverScreen(allPlayersDead) {
-    if (!this.gameEngine) return;
+  showMultiplayerGameOverScreen() {
+    console.log("Showing multiplayer game over screen");
     
-    // Set game over flag
-    this.gameEngine.isGameOver = true;
-    
-    // Create game over container
-    const gameOverContainer = document.createElement('div');
-    gameOverContainer.id = 'game-over-menu';
-    gameOverContainer.className = 'game-over-menu';
-    gameOverContainer.style.position = 'absolute';
-    gameOverContainer.style.top = '0';
-    gameOverContainer.style.left = '0';
-    gameOverContainer.style.width = '100%';
-    gameOverContainer.style.height = '100%';
-    gameOverContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
-    gameOverContainer.style.display = 'flex';
-    gameOverContainer.style.flexDirection = 'column';
-    gameOverContainer.style.alignItems = 'center';
-    gameOverContainer.style.justifyContent = 'center';
-    gameOverContainer.style.zIndex = '2000';
-    gameOverContainer.style.color = '#fff';
-    gameOverContainer.style.fontFamily = 'monospace, "Press Start 2P", Courier, fantasy';
-    
-    // Game over title
-    const title = document.createElement('h1');
-    title.textContent = allPlayersDead ? 'ALL PLAYERS DEAD' : 'GAME OVER';
-    title.style.color = '#ff3333';
-    title.style.fontSize = '48px';
-    title.style.textShadow = '0 0 10px #ff3333, 0 0 20px #ff3333';
-    title.style.marginBottom = '30px';
-    title.style.fontFamily = 'Impact, fantasy';
-    title.style.letterSpacing = '2px';
-    
-    // Score display
-    let scoreText = "Score: 0";
-    if (this.gameEngine.controls && this.gameEngine.controls.score !== undefined) {
-      scoreText = `Score: ${this.gameEngine.controls.score}`;
+    // Set game over state
+    if (this.gameEngine) {
+      this.gameEngine.isGameOver = true;
+      this.gameEngine.isLocalPlayerDead = true;
     }
     
-    const scoreDisplay = document.createElement('h2');
-    scoreDisplay.textContent = scoreText;
-    scoreDisplay.style.color = '#ffffff';
-    scoreDisplay.style.fontSize = '24px';
-    scoreDisplay.style.marginBottom = '20px';
-    
-    // Status message
-    const statusMessage = document.createElement('p');
-    statusMessage.textContent = allPlayersDead 
-      ? 'Waiting for the host to restart the game...'
-      : 'Your team is still fighting! Wait for the round to end or return to lobby.';
-    statusMessage.style.color = '#fcba03';
-    statusMessage.style.fontSize = '18px';
-    statusMessage.style.marginBottom = '40px';
-    statusMessage.style.maxWidth = '80%';
-    statusMessage.style.textAlign = 'center';
-    
-    // Buttons container
-    const buttonContainer = document.createElement('div');
-    buttonContainer.style.display = 'flex';
-    buttonContainer.style.flexDirection = 'column';
-    buttonContainer.style.gap = '15px';
-    buttonContainer.style.width = '300px';
-    
-    // Create main menu button
-    const menuButton = document.createElement('button');
-    menuButton.textContent = 'RETURN TO MAIN MENU';
-    menuButton.style.padding = '15px 20px';
-    menuButton.style.fontSize = '18px';
-    menuButton.style.backgroundColor = '#e74c3c';
-    menuButton.style.color = 'white';
-    menuButton.style.border = 'none';
-    menuButton.style.borderRadius = '5px';
-    menuButton.style.cursor = 'pointer';
-    menuButton.style.fontFamily = 'monospace, Courier';
-    menuButton.style.fontWeight = 'bold';
-    menuButton.style.transition = 'all 0.2s ease';
-    
-    // Add warning text
-    const warningText = document.createElement('p');
-    warningText.textContent = 'Warning: This will disconnect you from the multiplayer session.';
-    warningText.style.color = '#ff6b6b';
-    warningText.style.fontSize = '14px';
-    warningText.style.marginTop = '10px';
-    
-    // Hover effects
-    menuButton.addEventListener('mouseover', () => {
-      menuButton.style.transform = 'scale(1.05)';
-      menuButton.style.boxShadow = '0 0 10px #e74c3c';
-    });
-    
-    menuButton.addEventListener('mouseout', () => {
-      menuButton.style.transform = 'scale(1)';
-      menuButton.style.boxShadow = 'none';
-    });
-    
-    // Return to main menu when clicked
-    menuButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
+    // Force a broadcast of game over state for host
+    if (this.isHost && this.network && this.network.broadcastGameState) {
+      console.log("Broadcasting final game over state to all clients");
+      this.network.broadcastGameState(true);
       
-      // Remove game over screen
-      document.body.removeChild(gameOverContainer);
-      
-      // Properly disconnect from multiplayer
-      this.disconnect();
-      
-      // Use the engine's reset method
-      this.gameEngine.resetGameState();
-      
-      // Show the start menu
-      if (this.gameEngine.startMenu) {
-        this.gameEngine.startMenu.show();
-      } else {
-        // Fallback to the custom main menu
-        this.gameEngine.showMainMenu();
-      }
-    });
+      // Send multiple times to ensure delivery
+      setTimeout(() => {
+        if (this.isConnected && this.network.broadcastGameState) {
+          this.network.broadcastGameState(true);
+        }
+      }, 300);
+    }
     
-    // Add elements to game over container
-    gameOverContainer.appendChild(title);
-    gameOverContainer.appendChild(scoreDisplay);
-    gameOverContainer.appendChild(statusMessage);
+    // Remove any existing game over UI
+    const existingUI = document.getElementById('game-over-screen');
+    if (existingUI) {
+      existingUI.remove();
+    }
     
-    // Add buttons to container
-    buttonContainer.appendChild(menuButton);
-    buttonContainer.appendChild(warningText);
+    // Remove spectator UI if present
+    const spectatorUI = document.getElementById('spectator-overlay');
+    if (spectatorUI) {
+      spectatorUI.remove();
+    }
     
-    // Add button container to main container
-    gameOverContainer.appendChild(buttonContainer);
+    // Create game over container
+    const container = document.createElement('div');
+    container.id = 'game-over-screen';
+    container.style.position = 'absolute';
+    container.style.top = '0';
+    container.style.left = '0';
+    container.style.width = '100%';
+    container.style.height = '100%';
+    container.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+    container.style.color = '#fff';
+    container.style.display = 'flex';
+    container.style.flexDirection = 'column';
+    container.style.justifyContent = 'center';
+    container.style.alignItems = 'center';
+    container.style.zIndex = '2000';
+    container.style.fontFamily = 'Arial, sans-serif';
     
-    // Add to the document
-    document.body.appendChild(gameOverContainer);
+    // Add title
+    const title = document.createElement('h1');
+    title.textContent = 'GAME OVER';
+    title.style.fontSize = '48px';
+    title.style.marginBottom = '20px';
+    title.style.color = '#ff0000';
+    container.appendChild(title);
+    
+    // Add message
+    const message = document.createElement('p');
+    message.textContent = 'All players have died';
+    message.style.fontSize = '24px';
+    message.style.marginBottom = '40px';
+    container.appendChild(message);
+    
+    // Add restart button (only visible to host)
+    const restartBtn = document.createElement('button');
+    restartBtn.textContent = this.isHost ? 'Restart Game' : 'Waiting for host to restart...';
+    restartBtn.style.padding = '12px 24px';
+    restartBtn.style.fontSize = '18px';
+    restartBtn.style.backgroundColor = this.isHost ? '#4CAF50' : '#555';
+    restartBtn.style.color = '#fff';
+    restartBtn.style.border = 'none';
+    restartBtn.style.borderRadius = '4px';
+    restartBtn.style.cursor = this.isHost ? 'pointer' : 'default';
+    restartBtn.disabled = !this.isHost;
+    
+    // Add restart functionality (host only)
+    if (this.isHost) {
+      restartBtn.addEventListener('click', () => {
+        console.log("Host restarting multiplayer game");
+        if (this.gameEngine) {
+          this.gameEngine.restartGame();
+        }
+      });
+    }
+    
+    container.appendChild(restartBtn);
+    
+    // Add to DOM
+    document.body.appendChild(container);
   }
   
   /**
@@ -2225,64 +2445,86 @@ export class NetworkManager {
     }
     
     // Only respawn players at round end when zombies are cleared
-    if (enemyManager.roundActive || enemyManager.zombiesRemaining > 0) {
+    if (enemyManager.roundActive || enemyManager.zombiesRemaining > 0 || enemyManager.enemies.length > 0) {
       console.log("Round still active or zombies remaining, not respawning players yet");
       return;
     }
     
-    // If no round active and there are dead players but at least one player alive,
-    // respawn the dead players
+    console.log("Round is over and no zombies left - checking for dead players to respawn");
+    
+    // Check if any player is dead
     const deadPlayers = [];
-    let anyAlive = !this.gameEngine.controls.isDead; // Check if host is alive
     
-    // Log host state
-    console.log(`Host player alive status: ${!this.gameEngine.controls.isDead}`);
+    // Check if host is dead - use the more reliable isLocalPlayerDead flag
+    const isHostDead = this.gameEngine.isLocalPlayerDead || false;
     
-    // Check all remote players
+    // Add host to dead players if needed
+    if (isHostDead) {
+      deadPlayers.push("host");
+      console.log("Host player is dead and needs respawning");
+    }
+    
+    // Check each remote player
+    let hasLivingRemotePlayers = false;
     this.remotePlayers.forEach((player, playerId) => {
       if (player.isDead) {
         deadPlayers.push(playerId);
-        console.log(`Found dead player: ${playerId}`);
+        console.log(`Found dead remote player: ${playerId}`);
       } else {
-        anyAlive = true;
-        console.log(`Found alive player: ${playerId}`);
+        hasLivingRemotePlayers = true;
+        console.log(`Found alive remote player: ${playerId}`);
       }
     });
     
-    // If at least one player is alive, respawn all dead players
-    if (anyAlive && deadPlayers.length > 0) {
-      console.log(`Host respawning ${deadPlayers.length} players at round end because at least one player is alive`);
+    console.log(`Respawn check: Host dead: ${isHostDead}, Living remote players: ${hasLivingRemotePlayers}, Dead players total: ${deadPlayers.length}`);
+    
+    // Respawn all players at the end of the round regardless of who's alive
+    // This is a more fun gameplay loop and prevents players having to wait
+    if (deadPlayers.length > 0) {
+      console.log(`Respawning ${deadPlayers.length} players at round end`);
       
-      // Respawn each dead player
+      // Respawn remote players
       deadPlayers.forEach(playerId => {
-        console.log(`Sending respawn command to player: ${playerId}`);
-        if (this.network.hostRespawnPlayer) {
-          this.network.hostRespawnPlayer(playerId);
-        } else {
-          console.error("hostRespawnPlayer method not found on network object");
+        if (playerId !== "host") {
+          console.log(`Sending respawn command to player: ${playerId}`);
+          if (this.network.hostRespawnPlayer) {
+            this.network.hostRespawnPlayer(playerId);
+          } else {
+            console.error("hostRespawnPlayer method not found on network object");
+          }
         }
       });
       
-      // If host is dead, respawn locally
-      if (this.gameEngine.controls.isDead) {
+      // Respawn local host if needed
+      if (isHostDead) {
         console.log("Respawning local host player");
         this.respawnLocalPlayer();
         
-        // Force a game state update after respawning
-        if (this.network.broadcastGameState) {
-          this.network.broadcastGameState(true); // Force immediate update
+        // Make sure the game engine knows the player is no longer dead
+        if (this.gameEngine) {
+          this.gameEngine.isLocalPlayerDead = false;
+          this.gameEngine.isGameOver = false;
+          
+          // Also reset the controls.isDead flag to ensure consistency
+          if (this.gameEngine.controls) {
+            this.gameEngine.controls.isDead = false;
+          }
         }
       }
       
-      // Update all clients that players have been respawned
+      // Force an immediate game state update to ensure all clients know who's respawned
+      if (this.network.broadcastGameState) {
+        console.log("Sending immediate game state update after respawns");
+        this.network.broadcastGameState(true);
+      }
+      
+      // Send additional delayed update for reliability
       setTimeout(() => {
         if (this.network.broadcastGameState) {
           console.log("Sending follow-up game state update after respawns");
           this.network.broadcastGameState(true);
         }
       }, 500);
-    } else if (!anyAlive) {
-      console.log("All players are dead, not respawning anyone");
     } else {
       console.log("No dead players to respawn");
     }
@@ -2294,24 +2536,107 @@ export class NetworkManager {
   respawnLocalPlayer() {
     if (!this.gameEngine || !this.gameEngine.controls) return;
     
-    console.log('Respawning local player');
+    console.log('Full respawn of local player');
+    
+    // Clear dead player visual (if exists)
+    if (this.gameEngine.controls.deathModel) {
+      if (this.gameEngine.scene && this.gameEngine.scene.instance) {
+        this.gameEngine.scene.instance.remove(this.gameEngine.controls.deathModel);
+      }
+      this.gameEngine.controls.deathModel = null;
+    }
     
     // Reset player state
-    this.gameEngine.controls.resetHealth();
     this.gameEngine.controls.isDead = false;
+    this.gameEngine.isLocalPlayerDead = false;
     
-    // Re-lock pointer
+    // Reset player health
+    this.gameEngine.controls.resetHealth();
+    
+    // Reset player position
+    if (typeof this.gameEngine.controls.resetPosition === 'function') {
+      this.gameEngine.controls.resetPosition();
+    } else {
+      // Fallback positioning if resetPosition doesn't exist
+      const startPosition = this.gameEngine.controls.startPosition || { x: 0, y: 1.8, z: 0 };
+      this.gameEngine.controls.camera.position.set(startPosition.x, startPosition.y, startPosition.z);
+    }
+    
+    // Reset player score (optional depending on game design)
+    if (this.gameEngine.controls.score !== undefined) {
+      // Keep the old score for reference
+      const oldScore = this.gameEngine.controls.score;
+      // Reset if needed (commenting out by default as often games don't reset score on respawn)
+      // this.gameEngine.controls.score = 0; 
+      console.log(`Player respawned with score maintained at: ${oldScore}`);
+    }
+    
+    // Reset weapons
+    if (this.gameEngine.weaponManager) {
+      console.log("Resetting weapon manager state");
+      
+      // Reset ammo, weapons, etc.
+      if (typeof this.gameEngine.weaponManager.reset === 'function') {
+        this.gameEngine.weaponManager.reset();
+      }
+      
+      // Switch to default weapon (usually pistol)
+      if (typeof this.gameEngine.weaponManager.switchToDefaultWeapon === 'function') {
+        this.gameEngine.weaponManager.switchToDefaultWeapon();
+      } else if (typeof this.gameEngine.weaponManager.switchToWeapon === 'function') {
+        // Try to find the pistol or first weapon
+        const defaultWeapon = this.gameEngine.weaponManager.weapons?.find(w => w.type === 'PISTOL') || 
+                            this.gameEngine.weaponManager.weapons?.[0];
+        
+        if (defaultWeapon) {
+          this.gameEngine.weaponManager.switchToWeapon(defaultWeapon.type);
+        }
+      }
+    }
+    
+    // Re-enable movement
+    this.gameEngine.controls.canMove = true;
+    this.gameEngine.controls.moveForward = false;
+    this.gameEngine.controls.moveBackward = false;
+    this.gameEngine.controls.moveLeft = false;
+    this.gameEngine.controls.moveRight = false;
+    
+    // Re-lock pointer for gameplay
     document.body.requestPointerLock();
     
-    // Hide game over screen if visible
+    // Remove game over screen if visible
     const gameOverMenu = document.getElementById('game-over-menu');
     if (gameOverMenu) {
       gameOverMenu.remove();
     }
     
+    // Remove spectator UI if visible
+    const spectatorUI = document.getElementById('spectator-overlay');
+    if (spectatorUI) {
+      spectatorUI.remove();
+    }
+    
     // Unpause game if it was paused
     if (this.gameEngine.isPaused) {
       this.gameEngine.resumeGame();
+    }
+    
+    // Reset any game engine state flags
+    this.gameEngine.isGameOver = false;
+    
+    // Remove any spectator camera mode
+    if (this.isSpectatorMode) {
+      this.isSpectatorMode = false;
+      if (this.gameEngine.disableSpectatorMode && typeof this.gameEngine.disableSpectatorMode === 'function') {
+        this.gameEngine.disableSpectatorMode();
+      }
+    }
+    
+    console.log('Player respawned successfully');
+    
+    // Show respawn message to player
+    if (this.gameEngine.ui && typeof this.gameEngine.ui.showNotification === 'function') {
+      this.gameEngine.ui.showNotification('You have respawned!', 3000);
     }
   }
   
@@ -2804,115 +3129,396 @@ export class NetworkManager {
    * Show the spectator UI overlay
    */
   showSpectatorUI() {
-    // Remove any existing spectator UI
-    const existingUI = document.getElementById('spectator-overlay');
-    if (existingUI) {
-      existingUI.remove();
+    // Remove any existing spectator overlay
+    const existingOverlay = document.getElementById('spectator-overlay');
+    if (existingOverlay) {
+      existingOverlay.remove();
+    }
+
+    // Create a container for the spectator mode
+    const spectatorContainer = document.createElement('div');
+    spectatorContainer.id = 'spectator-overlay';
+    spectatorContainer.style.position = 'absolute';
+    spectatorContainer.style.top = '0';
+    spectatorContainer.style.left = '0';
+    spectatorContainer.style.width = '100%';
+    spectatorContainer.style.height = '100%';
+    spectatorContainer.style.pointerEvents = 'none';
+    spectatorContainer.style.zIndex = '1000';
+    spectatorContainer.style.display = 'flex';
+    spectatorContainer.style.flexDirection = 'column';
+    spectatorContainer.style.justifyContent = 'space-between';
+    spectatorContainer.style.padding = '20px';
+    spectatorContainer.style.boxSizing = 'border-box';
+
+    // Create the spectator banner
+    const banner = document.createElement('div');
+    banner.textContent = 'SPECTATOR MODE';
+    banner.style.color = 'red';
+    banner.style.background = 'rgba(0, 0, 0, 0.5)';
+    banner.style.padding = '10px 20px';
+    banner.style.borderRadius = '5px';
+    banner.style.fontFamily = 'Arial, sans-serif';
+    banner.style.fontWeight = 'bold';
+    banner.style.fontSize = '24px';
+    banner.style.textAlign = 'center';
+    banner.style.textShadow = '2px 2px 4px rgba(0, 0, 0, 0.5)';
+    banner.style.alignSelf = 'center';
+    spectatorContainer.appendChild(banner);
+
+    // Message about respawning
+    const respawnMessage = document.createElement('div');
+    respawnMessage.textContent = 'You will respawn when the round ends if any player survives.';
+    respawnMessage.style.color = 'white';
+    respawnMessage.style.background = 'rgba(0, 0, 0, 0.5)';
+    respawnMessage.style.padding = '10px';
+    respawnMessage.style.borderRadius = '5px';
+    respawnMessage.style.fontFamily = 'Arial, sans-serif';
+    respawnMessage.style.textAlign = 'center';
+    respawnMessage.style.position = 'absolute';
+    respawnMessage.style.bottom = '80px';
+    respawnMessage.style.left = '50%';
+    respawnMessage.style.transform = 'translateX(-50%)';
+    spectatorContainer.appendChild(respawnMessage);
+
+    // Create container for player controls
+    const controlsContainer = document.createElement('div');
+    controlsContainer.id = 'spectator-controls';
+    controlsContainer.style.display = 'flex';
+    controlsContainer.style.flexDirection = 'column';
+    controlsContainer.style.alignItems = 'center';
+    controlsContainer.style.background = 'rgba(0, 0, 0, 0.7)';
+    controlsContainer.style.padding = '10px';
+    controlsContainer.style.borderRadius = '5px';
+    controlsContainer.style.position = 'absolute';
+    controlsContainer.style.top = '60px';
+    controlsContainer.style.left = '50%';
+    controlsContainer.style.transform = 'translateX(-50%)';
+    controlsContainer.style.pointerEvents = 'auto';
+    
+    // Instructions
+    const instructions = document.createElement('div');
+    instructions.textContent = 'Press [←] or [→] to switch between players';
+    instructions.style.color = 'white';
+    instructions.style.marginBottom = '10px';
+    instructions.style.fontFamily = 'Arial, sans-serif';
+    controlsContainer.appendChild(instructions);
+    
+    // Player selector
+    const playerSelector = document.createElement('div');
+    playerSelector.id = 'player-selector';
+    playerSelector.style.display = 'flex';
+    playerSelector.style.gap = '10px';
+    playerSelector.style.justifyContent = 'center';
+    playerSelector.style.flexWrap = 'wrap';
+    controlsContainer.appendChild(playerSelector);
+    
+    spectatorContainer.appendChild(controlsContainer);
+
+    // Living players counter (bottom right)
+    const playersCounter = document.createElement('div');
+    playersCounter.id = 'living-players-counter';
+    playersCounter.style.color = 'white';
+    playersCounter.style.background = 'rgba(0, 0, 0, 0.5)';
+    playersCounter.style.padding = '10px';
+    playersCounter.style.borderRadius = '5px';
+    playersCounter.style.fontFamily = 'Arial, sans-serif';
+    playersCounter.style.position = 'absolute';
+    playersCounter.style.bottom = '20px';
+    playersCounter.style.right = '20px';
+    spectatorContainer.appendChild(playersCounter);
+
+    document.body.appendChild(spectatorContainer);
+
+    // Initialize spectator mode
+    this.isSpectatorMode = true;
+    this.initializeSpectatorMode();
+    
+    // Update players counter every 2 seconds
+    this.updateLivingPlayersCounter();
+    this.playersCounterInterval = setInterval(() => this.updateLivingPlayersCounter(), 2000);
+  }
+
+  /**
+   * Initialize spectator mode by setting up player following and keyboard listeners
+   */
+  initializeSpectatorMode() {
+    console.log("Initializing spectator mode");
+    
+    // Setup spectator camera follow
+    this.spectatorTargets = this.getLivingRemotePlayers();
+    console.log(`Found ${this.spectatorTargets.length} living players to spectate`);
+    
+    // Initialize with first player if available
+    this.currentSpectatorTargetIndex = 0;
+    
+    if (this.spectatorTargets.length > 0) {
+      this.switchSpectatorTarget(0);
+      this.updatePlayerSelector();
     }
     
-    // Create overlay container
-    const overlay = document.createElement('div');
-    overlay.id = 'spectator-overlay';
-    overlay.style.position = 'absolute';
-    overlay.style.top = '20px';
-    overlay.style.left = '50%';
-    overlay.style.transform = 'translateX(-50%)';
-    overlay.style.padding = '10px 20px';
-    overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-    overlay.style.color = '#fff';
-    overlay.style.borderRadius = '5px';
-    overlay.style.zIndex = '1000';
-    overlay.style.textAlign = 'center';
-    overlay.style.fontFamily = 'Arial, sans-serif';
+    // Add keyboard controls for switching between players
+    document.addEventListener('keydown', this.handleSpectatorKeydown);
     
-    // Add text
-    overlay.textContent = 'SPECTATOR MODE - Waiting for round to end';
-    
-    // Add to DOM
-    document.body.appendChild(overlay);
+    // Disable any remaining player controls
+    if (this.gameEngine.controls) {
+      this.gameEngine.controls.canMove = false;
+      this.gameEngine.controls.canShoot = false;
+    }
   }
   
   /**
-   * Show the multiplayer game over screen
+   * Handle keydown events in spectator mode
+   * @param {KeyboardEvent} event 
    */
-  showMultiplayerGameOverScreen() {
-    console.log("Showing multiplayer game over screen");
+  handleSpectatorKeydown = (event) => {
+    if (!this.isSpectatorMode) return;
     
-    // Set game over state
-    if (this.gameEngine) {
-      this.gameEngine.isGameOver = true;
+    if (event.key === 'ArrowLeft') {
+      this.switchToPreviousPlayer();
+    } else if (event.key === 'ArrowRight') {
+      this.switchToNextPlayer();
+    }
+  }
+  
+  /**
+   * Switch to the next living player
+   */
+  switchToNextPlayer() {
+    if (this.spectatorTargets.length === 0) return;
+    
+    const nextIndex = (this.currentSpectatorTargetIndex + 1) % this.spectatorTargets.length;
+    this.switchSpectatorTarget(nextIndex);
+  }
+  
+  /**
+   * Switch to the previous living player
+   */
+  switchToPreviousPlayer() {
+    if (this.spectatorTargets.length === 0) return;
+    
+    const prevIndex = (this.currentSpectatorTargetIndex - 1 + this.spectatorTargets.length) % this.spectatorTargets.length;
+    this.switchSpectatorTarget(prevIndex);
+  }
+  
+  /**
+   * Switch the spectator camera to a specific player index
+   * @param {number} index 
+   */
+  switchSpectatorTarget(index) {
+    if (!this.spectatorTargets || index >= this.spectatorTargets.length) return;
+    
+    this.currentSpectatorTargetIndex = index;
+    const target = this.spectatorTargets[index];
+    console.log(`Switching spectator view to player: ${target.clientId}`);
+    
+    // Update the player selector UI
+    this.updatePlayerSelector();
+    
+    // If we have direct access to player (host), we can directly position the camera
+    if (this.gameEngine.isHost && this.gameEngine.controls && this.gameEngine.scene) {
+      // Store the original camera for restoration later if needed
+      if (!this.originalCameraPosition) {
+        this.originalCameraPosition = {
+          x: this.gameEngine.controls.camera.position.x,
+          y: this.gameEngine.controls.camera.position.y,
+          z: this.gameEngine.controls.camera.position.z
+        };
+      }
+      
+      // Update camera position logic goes here
+      this.followPlayerAsSpectator(target);
+    } else {
+      // For clients, we may need to use different logic or request camera position from host
+      console.log("Client-side spectator mode - limited functionality");
+      this.followPlayerAsSpectator(target);
+    }
+  }
+  
+  /**
+   * Get all living remote players
+   * @returns {Array} Array of living remote player objects
+   */
+  getLivingRemotePlayers() {
+    const players = [];
+    
+    for (const clientId in this.remotePlayers) {
+      const player = this.remotePlayers[clientId];
+      if (player && !player.isDead) {
+        players.push({
+          clientId: clientId,
+          position: player.position,
+          rotation: player.rotation,
+          name: player.name || `Player ${clientId.substring(0, 4)}`
+        });
+      }
     }
     
-    // Remove any existing game over UI
-    const existingUI = document.getElementById('game-over-screen');
-    if (existingUI) {
-      existingUI.remove();
+    return players;
+  }
+  
+  /**
+   * Update the living players counter UI
+   */
+  updateLivingPlayersCounter() {
+    const counter = document.getElementById('living-players-counter');
+    if (!counter) return;
+    
+    // Refresh spectator targets
+    this.spectatorTargets = this.getLivingRemotePlayers();
+    
+    // If the current target no longer exists (player died), switch to another
+    if (this.spectatorTargets.length > 0 && 
+        (this.currentSpectatorTargetIndex >= this.spectatorTargets.length || 
+         !this.spectatorTargets[this.currentSpectatorTargetIndex])) {
+      this.currentSpectatorTargetIndex = 0;
+      this.switchSpectatorTarget(0);
     }
     
-    // Remove spectator UI if present
+    // Update the counter display
+    counter.textContent = `Living Players: ${this.spectatorTargets.length}`;
+    
+    // Update player selector
+    this.updatePlayerSelector();
+  }
+  
+  /**
+   * Follow a player as a spectator
+   * @param {Object} targetPlayer 
+   */
+  followPlayerAsSpectator(targetPlayer) {
+    if (!targetPlayer || !this.gameEngine.controls || !this.gameEngine.controls.camera) {
+      console.warn("Cannot follow player, invalid target or camera");
+      return;
+    }
+    
+    // Get the remote player's position
+    const playerPos = targetPlayer.position;
+    if (!playerPos) {
+      console.warn("Cannot follow player, position data missing");
+      return;
+    }
+    
+    // Set up a regular interval to update the camera position
+    if (this.spectatorFollowInterval) {
+      clearInterval(this.spectatorFollowInterval);
+    }
+    
+    // Display who we're following
+    const banner = document.querySelector('#spectator-overlay div');
+    if (banner) {
+      banner.textContent = `SPECTATING: ${targetPlayer.name}`;
+    }
+    
+    // Create spectator follow interval
+    this.spectatorFollowInterval = setInterval(() => {
+      // Get the latest position of the target player
+      const player = this.remotePlayers[targetPlayer.clientId];
+      if (!player || player.isDead) {
+        // Player is no longer valid, try to switch to another player
+        this.updateLivingPlayersCounter();
+        return;
+      }
+      
+      // Update camera position to follow the player
+      // Positioning logic should account for:
+      // 1. Eye height
+      // 2. Rotation/direction the player is facing
+      // Position camera at player's position
+      this.gameEngine.controls.camera.position.set(
+        player.position.x,
+        player.position.y + 1.8, // Typical eye height
+        player.position.z
+      );
+      
+      // Apply rotation if available
+      if (player.rotation) {
+        this.gameEngine.controls.camera.rotation.set(
+          player.rotation.x || 0,
+          player.rotation.y || 0,
+          player.rotation.z || 0
+        );
+      }
+    }, 50); // Update at 20Hz
+  }
+  
+  /**
+   * Update the player selector UI
+   */
+  updatePlayerSelector() {
+    const selector = document.getElementById('player-selector');
+    if (!selector) return;
+    
+    // Clear existing buttons
+    selector.innerHTML = '';
+    
+    // Add a button for each living player
+    this.spectatorTargets.forEach((player, index) => {
+      const button = document.createElement('button');
+      button.textContent = player.name;
+      button.style.padding = '5px 10px';
+      button.style.margin = '0 5px';
+      button.style.borderRadius = '3px';
+      button.style.cursor = 'pointer';
+      button.style.background = index === this.currentSpectatorTargetIndex ? 'rgba(0, 150, 0, 0.7)' : 'rgba(50, 50, 50, 0.7)';
+      button.style.color = 'white';
+      button.style.border = 'none';
+      
+      button.addEventListener('click', () => {
+        this.switchSpectatorTarget(index);
+      });
+      
+      selector.appendChild(button);
+    });
+    
+    // If no players, show a message
+    if (this.spectatorTargets.length === 0) {
+      const message = document.createElement('div');
+      message.textContent = 'No living players to spectate';
+      message.style.color = 'red';
+      selector.appendChild(message);
+    }
+  }
+  
+  /**
+   * Clean up spectator mode
+   */
+  disableSpectatorMode() {
+    console.log("Disabling spectator mode");
+    
+    // Remove keyboard listener
+    document.removeEventListener('keydown', this.handleSpectatorKeydown);
+    
+    // Clear intervals
+    if (this.playersCounterInterval) {
+      clearInterval(this.playersCounterInterval);
+      this.playersCounterInterval = null;
+    }
+    
+    if (this.spectatorFollowInterval) {
+      clearInterval(this.spectatorFollowInterval);
+      this.spectatorFollowInterval = null;
+    }
+    
+    // Reset camera to original position if available
+    if (this.originalCameraPosition && this.gameEngine.controls && this.gameEngine.controls.camera) {
+      this.gameEngine.controls.camera.position.set(
+        this.originalCameraPosition.x,
+        this.originalCameraPosition.y,
+        this.originalCameraPosition.z
+      );
+      this.originalCameraPosition = null;
+    }
+    
+    // Remove UI
     const spectatorUI = document.getElementById('spectator-overlay');
     if (spectatorUI) {
       spectatorUI.remove();
     }
     
-    // Create game over container
-    const container = document.createElement('div');
-    container.id = 'game-over-screen';
-    container.style.position = 'absolute';
-    container.style.top = '0';
-    container.style.left = '0';
-    container.style.width = '100%';
-    container.style.height = '100%';
-    container.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
-    container.style.color = '#fff';
-    container.style.display = 'flex';
-    container.style.flexDirection = 'column';
-    container.style.justifyContent = 'center';
-    container.style.alignItems = 'center';
-    container.style.zIndex = '2000';
-    container.style.fontFamily = 'Arial, sans-serif';
-    
-    // Add title
-    const title = document.createElement('h1');
-    title.textContent = 'GAME OVER';
-    title.style.fontSize = '48px';
-    title.style.marginBottom = '20px';
-    title.style.color = '#ff0000';
-    container.appendChild(title);
-    
-    // Add message
-    const message = document.createElement('p');
-    message.textContent = 'All players have died';
-    message.style.fontSize = '24px';
-    message.style.marginBottom = '40px';
-    container.appendChild(message);
-    
-    // Add restart button (only visible to host)
-    const restartBtn = document.createElement('button');
-    restartBtn.textContent = this.isHost ? 'Restart Game' : 'Waiting for host to restart...';
-    restartBtn.style.padding = '12px 24px';
-    restartBtn.style.fontSize = '18px';
-    restartBtn.style.backgroundColor = this.isHost ? '#4CAF50' : '#555';
-    restartBtn.style.color = '#fff';
-    restartBtn.style.border = 'none';
-    restartBtn.style.borderRadius = '4px';
-    restartBtn.style.cursor = this.isHost ? 'pointer' : 'default';
-    restartBtn.disabled = !this.isHost;
-    
-    // Add restart functionality (host only)
-    if (this.isHost) {
-      restartBtn.addEventListener('click', () => {
-        console.log("Host restarting multiplayer game");
-        if (this.gameEngine) {
-          this.gameEngine.restartGame();
-        }
-      });
-    }
-    
-    container.appendChild(restartBtn);
-    
-    // Add to DOM
-    document.body.appendChild(container);
+    this.isSpectatorMode = false;
+    this.spectatorTargets = [];
+    this.currentSpectatorTargetIndex = -1;
   }
   
   /**

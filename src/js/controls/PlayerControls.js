@@ -1575,53 +1575,94 @@ export class PlayerControls {
    * Handle player death
    */
   die() {
-    // Prevent multiple calls
-    if (this.isDead) return;
+    if (this.isDead) return; // Prevent multiple calls
     
-    console.log("Player died");
-    this.isDead = true;
+    console.log('Player died');
     
-    // Lock movement
+    // Lock player movement
+    this.canMove = false;
     this.moveForward = false;
     this.moveBackward = false;
     this.moveLeft = false;
     this.moveRight = false;
-    this.canMove = false;
     
-    // Stop weapon sounds, walking sounds, and background music
-    this.stopWeaponSound();
-    if (this.walkingSound) {
-      this.walkingSound.stop();
+    // Stop weapon sounds
+    if (this.gameEngine.weaponManager) {
+      this.gameEngine.weaponManager.stopWeaponSounds();
     }
-    if (this.gameEngine && this.gameEngine.audio && this.gameEngine.audio.backgroundMusic) {
-      this.gameEngine.audio.backgroundMusic.pause();
+    
+    // Stop walking and background music sounds
+    if (this.gameEngine.soundManager) {
+      this.gameEngine.soundManager.stopWalkingSound();
+      this.gameEngine.soundManager.stopMusic();
     }
     
     // Disable interactions
-    this.isInteracting = false;
-    this.shooting = false;
+    this.canShoot = false;
+    this.canInteract = false;
     
-    // Stop any reload in progress
-    this.isReloading = false;
-    
-    // Unlock pointer to allow button interaction
-    if (document.pointerLockElement) {
-      document.exitPointerLock();
+    // Cancel any reload in progress
+    if (this.gameEngine.weaponManager && this.gameEngine.weaponManager.isReloading) {
+      this.gameEngine.weaponManager.cancelReload();
     }
     
-    // Signal the engine that the local player has died
+    // Create death model at player position
+    this.createDeathModel();
+    
+    // Unlock the pointer for button interaction
+    document.exitPointerLock();
+    
+    // Set player as dead
+    this.isDead = true;
+    
+    // Signal to game engine that local player has died
+    // This will handle multiplayer cases differently than single-player
     if (this.gameEngine) {
-      // The engine will handle multiplayer cases differently than single player
-      console.log("Notifying game engine of local player death");
+      this.gameEngine.isLocalPlayerDead = true;
       this.gameEngine.endGame();
     }
     
-    // Send player death notification in multiplayer
+    // Broadcast death notification to other clients
     if (this.gameEngine && this.gameEngine.networkManager) {
-      // Make sure our death state is broadcast to other players
-      console.log("Broadcasting player death to all clients");
+      // Send immediate update with isDead flag
       this.gameEngine.networkManager.sendPlayerUpdate(true);
     }
+  }
+  
+  /**
+   * Create a visual model at player's death location
+   */
+  createDeathModel() {
+    // Remove any existing death model
+    if (this.deathModel && this.gameEngine.scene && this.gameEngine.scene.instance) {
+      this.gameEngine.scene.instance.remove(this.deathModel);
+      this.deathModel = null;
+    }
+    
+    // Create a simple model to represent the dead player
+    const geometry = new THREE.BoxGeometry(0.5, 0.2, 1.3);
+    const material = new THREE.MeshBasicMaterial({ color: 0x777777 });
+    this.deathModel = new THREE.Mesh(geometry, material);
+    
+    // Position at player's current location
+    this.deathModel.position.set(
+      this.camera.position.x,
+      this.camera.position.y - 1.6, // Place on ground
+      this.camera.position.z
+    );
+    
+    // Rotate to match player's direction
+    this.deathModel.rotation.y = this.camera.rotation.y;
+    
+    // Add to scene
+    if (this.gameEngine.scene && this.gameEngine.scene.instance) {
+      this.gameEngine.scene.instance.add(this.deathModel);
+      console.log('Added death model to scene');
+    } else {
+      console.warn('Could not add death model - scene not available');
+    }
+    
+    return this.deathModel;
   }
 
   /**
