@@ -1227,7 +1227,7 @@ export class P2PNetwork {
   receiveData(data, conn) {
     try {
       // Log incoming data with some basic info
-      if (data.type !== 'gameState') { // Don't log game state updates, too noisy
+      if (data.type !== 'gameState' && data.type !== 'ping') { // Don't log game state or ping, too noisy
         console.log(`Received ${data.type} from ${conn.peer}`);
       }
       
@@ -1238,6 +1238,17 @@ export class P2PNetwork {
           if (!this.isHost) {
             this.handleGameState(data.state);
           }
+          break;
+        
+        case 'ping':
+          // Heartbeat ping, respond with pong to confirm connection is alive
+          conn.send({ type: 'pong', timestamp: Date.now(), echo: data.timestamp });
+          break;
+        
+        case 'pong':
+          // Heartbeat response, could track latency if needed
+          // const latency = Date.now() - data.echo;
+          // console.log(`Connection latency to ${conn.peer}: ${latency}ms`);
           break;
         
         case 'playerAction':
@@ -1273,6 +1284,21 @@ export class P2PNetwork {
           if (this.isHost && this._deadHostClientTakeover === conn.peer) {
             console.log("TAKEOVER: Received enemy updates from authorized client");
             this.handleClientEnemyUpdates(data, conn.peer);
+          }
+          break;
+        
+        case 'clientDisconnect':
+          // Handle client disconnection gracefully (host only)
+          if (this.isHost && data.clientId) {
+            console.log(`Client ${data.clientId} is disconnecting gracefully`);
+            
+            // Remove the connection from our list
+            this.connections = this.connections.filter(c => c.peer !== conn.peer);
+            
+            // Notify that a player has left
+            if (this.onPlayerLeft) {
+              this.onPlayerLeft(conn.peer);
+            }
           }
           break;
         
@@ -1710,5 +1736,113 @@ export class P2PNetwork {
         this.gameEngine.endGame();
       }
     }
+  }
+  
+  /**
+   * Start a heartbeat interval to keep the connection alive
+   */
+  startHeartbeat() {
+    console.log("Starting connection heartbeat");
+    
+    // Clear any existing heartbeat
+    this.stopHeartbeat();
+    
+    // Start a new heartbeat interval
+    this._heartbeatInterval = setInterval(() => {
+      try {
+        // Send a ping to all connections
+        if (this.isHost && this.connections.length > 0) {
+          // For host, ping all clients
+          this.connections.forEach(conn => {
+            if (conn.open) {
+              conn.send({ type: 'ping', timestamp: Date.now() });
+            }
+          });
+        } else if (!this.isHost && this.hostConnection && this.hostConnection.open) {
+          // For clients, ping the host
+          this.hostConnection.send({ type: 'ping', timestamp: Date.now() });
+        }
+        
+        // Also check if peer connection is alive, reconnect if needed
+        if (this.peer && this.peer.disconnected) {
+          console.log("Heartbeat detected disconnected peer, attempting to reconnect...");
+          this.peer.reconnect();
+        }
+      } catch (error) {
+        console.error("Error in heartbeat:", error);
+      }
+    }, 30000); // Ping every 30 seconds
+  }
+  
+  /**
+   * Stop the heartbeat interval
+   */
+  stopHeartbeat() {
+    if (this._heartbeatInterval) {
+      clearInterval(this._heartbeatInterval);
+      this._heartbeatInterval = null;
+    }
+  }
+  
+  /**
+   * Disconnect from the P2P network
+   */
+  disconnect() {
+    console.log("Disconnecting from P2P network");
+    
+    // Stop heartbeat
+    this.stopHeartbeat();
+    
+    try {
+      // First emit a disconnect event to notify others that we're leaving
+      if (this.isConnected) {
+        if (this.isHost && this.connections.length > 0) {
+          // Let clients know we're disconnecting
+          this.broadcastToAll({
+            type: 'hostDisconnect',
+            message: 'Host is disconnecting'
+          });
+        } else if (!this.isHost && this.hostConnection && this.hostConnection.open) {
+          // Let host know we're leaving
+          this.hostConnection.send({
+            type: 'clientDisconnect',
+            clientId: this.clientId,
+            message: 'Client disconnecting'
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Error sending disconnect message:", e);
+    }
+    
+    // Close all connections
+    this.connections.forEach(conn => {
+      try {
+        if (conn.open) {
+          conn.close();
+        }
+      } catch (error) {
+        console.warn(`Error closing connection to ${conn.peer}:`, error);
+      }
+    });
+    
+    // Clear connection list
+    this.connections = [];
+    this.hostConnection = null;
+    
+    // Destroy the peer object
+    if (this.peer) {
+      try {
+        this.peer.destroy();
+      } catch (error) {
+        console.warn("Error destroying peer:", error);
+      }
+      this.peer = null;
+    }
+    
+    // Reset connection state
+    this.isConnected = false;
+    
+    console.log("P2P network disconnected");
   }
 } 

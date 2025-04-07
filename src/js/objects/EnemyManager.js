@@ -698,7 +698,7 @@ export class EnemyManager {
     }
     
     // Display the round announcement with title and subtitle
-    this.showRoundAnnouncement(message, subtitle);
+    this.displayRoundAnnouncement(message, subtitle);
   }
   
   /**
@@ -739,16 +739,16 @@ export class EnemyManager {
     }
     
     // Display the round announcement
-    this.showRoundAnnouncement(message, subtitle, true);
+    this.displayRoundAnnouncement(message, subtitle, true);
   }
 
   /**
-   * Show dramatic round announcement
+   * Display dramatic round announcement
    * @param {string} title - Main announcement text
    * @param {string} subtitle - Secondary text (optional)
    * @param {boolean} isComplete - Whether this is a round completion message
    */
-  showRoundAnnouncement(title, subtitle = '', isComplete = false) {
+  displayRoundAnnouncement(title, subtitle = '', isComplete = false) {
     // Create container for the announcement
     const container = document.createElement('div');
     container.style.position = 'absolute';
@@ -834,6 +834,16 @@ export class EnemyManager {
         }
       }, 1000);
     }, 3000);
+  }
+  
+  /**
+   * Alias method for backward compatibility
+   * @param {string} title - Main announcement text
+   * @param {string} subtitle - Secondary text (optional)
+   * @param {boolean} isComplete - Whether this is a round completion message
+   */
+  showRoundAnnouncement(title, subtitle = '', isComplete = false) {
+    return this.displayRoundAnnouncement(title, subtitle, isComplete);
   }
   
   /**
