@@ -1504,9 +1504,21 @@ export class PlayerControls {
     // Show damage effect
     this.showDamageEffect();
     
-    // Check if player has died
+    console.log(`Player took ${damageTaken} damage, health now: ${this.health}`);
+    
+    // Check if player has died - use strict equality to catch edge cases
     if (this.health <= 0) {
-      this.die();
+      console.log("Health reached 0 or less, triggering death");
+      // Force health to exactly 0 for consistency
+      this.health = 0;
+      // Update health display one last time
+      this.updateHealthDisplay();
+      // Call die with a small timeout to ensure other updates complete
+      setTimeout(() => {
+        if (!this.isDead) {
+          this.die();
+        }
+      }, 50);
     }
   }
 

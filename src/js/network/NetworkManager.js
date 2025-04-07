@@ -3112,8 +3112,30 @@ export class NetworkManager {
   enterSpectatorMode() {
     console.log("Entering spectator mode");
     
+    // Make sure we're not already in spectator mode
+    if (this.isSpectatorMode) {
+      console.log("Already in spectator mode, ignoring request");
+      return;
+    }
+    
+    // Double-check player is actually dead
+    if (!this.gameEngine.isLocalPlayerDead && this.gameEngine.controls && !this.gameEngine.controls.isDead) {
+      console.warn("Attempted to enter spectator mode but player is not dead, forcing dead state");
+      this.gameEngine.isLocalPlayerDead = true;
+      if (this.gameEngine.controls) {
+        this.gameEngine.controls.isDead = true;
+      }
+    }
+    
     // Mark spectator mode active
     this.isSpectatorMode = true;
+    
+    // Ensure player controls are disabled
+    if (this.gameEngine.controls) {
+      this.gameEngine.controls.canMove = false;
+      this.gameEngine.controls.canShoot = false;
+      this.gameEngine.controls.canInteract = false;
+    }
     
     // Show spectator UI
     this.showSpectatorUI();
@@ -3123,6 +3145,11 @@ export class NetworkManager {
       console.log("Host is dead but continuing game state broadcasts for clients");
       this.network.broadcastGameState(true); // Force immediate update
     }
+    
+    // Broadcast the player's death to ensure all clients know this player is dead
+    this.sendPlayerUpdate(true);
+    
+    console.log("Spectator mode initialized successfully");
   }
   
   /**

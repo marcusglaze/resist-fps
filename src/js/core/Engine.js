@@ -555,13 +555,23 @@ export class Engine {
         this.handleMultiplayerGameOver();
       } else {
         // Local player is dead but some remote players are still alive
-        console.log("Local player is dead but remote players are still alive - continuing game");
+        console.log("Local player is dead but remote players are still alive - entering spectator mode");
         
         // Handle local player death ui but don't end the game completely
         this.unlockControls();
         
+        // Make sure the player is marked as dead
+        if (this.controls) {
+          this.controls.isDead = true;
+        }
+        
         // Enter spectator mode for the local player
-        this.networkManager.enterSpectatorMode();
+        if (this.networkManager.enterSpectatorMode) {
+          console.log("Entering spectator mode");
+          this.networkManager.enterSpectatorMode();
+        } else {
+          console.error("enterSpectatorMode method not found in networkManager");
+        }
         
         // If we're the host, make sure the game state continues updating
         if (this.networkManager.isHost) {
