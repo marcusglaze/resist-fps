@@ -174,8 +174,8 @@ export class EnemyManager {
    * @param {number} deltaTime - Time elapsed since last update
    */
   update(deltaTime) {
-    // Skip if paused - but add special handling for multiplayer case
-    if (this.isPaused) {
+    // Skip if paused - but add special handling for multiplayer case or forced updates
+    if (this.isPaused && !this.forceContinueUpdates) {
       // In multiplayer, override the pause if there are living remote players
       let hasLivingRemotePlayers = false;
       
@@ -198,6 +198,16 @@ export class EnemyManager {
       }
     }
   
+    // Force a network game state broadcast if we're forcing updates
+    if (this.forceContinueUpdates && this.gameEngine && this.gameEngine.networkManager 
+        && this.gameEngine.networkManager.network) {
+      if (!this._lastForceBroadcastTime || (Date.now() - this._lastForceBroadcastTime > 1000)) {
+        console.log("EnemyManager: Forcing a game state broadcast for remote players");
+        this.gameEngine.networkManager.network.broadcastGameState(true);
+        this._lastForceBroadcastTime = Date.now();
+      }
+    }
+    
     // Check for enemy spawn
     this.checkEnemySpawn(deltaTime);
     
@@ -229,7 +239,7 @@ export class EnemyManager {
     }
     
     // Flag to force enemies to continue updating
-    const shouldForceUpdate = hasLivingRemotePlayers;
+    const shouldForceUpdate = hasLivingRemotePlayers || this.forceContinueUpdates;
     
     // Update all existing enemies
     this.enemies.forEach(enemy => {
@@ -237,6 +247,7 @@ export class EnemyManager {
       // 1. Enemy is flagged to force continue
       // 2. Host player is alive
       // 3. Host player is dead but there are living remote players
+      // 4. We're forcing updates from the engine
       if (enemy._forceContinueUpdating || 
           (enemy.player === this.player && !this.player.isDead) ||
           shouldForceUpdate) {

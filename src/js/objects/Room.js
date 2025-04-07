@@ -1069,6 +1069,10 @@ export class Room {
     
     // Update enemy manager
     if (this.enemyManager) {
+      // Pass the force continue updates flag if set by the Scene
+      if (this.forceContinueUpdates) {
+        this.enemyManager.forceContinueUpdates = true;
+      }
       this.enemyManager.update(deltaTime);
     }
     
