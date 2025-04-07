@@ -174,30 +174,30 @@ export class EnemyManager {
    * @param {number} deltaTime - Time elapsed since last update
    */
   update(deltaTime) {
-    // Skip update if paused
+    // Skip if paused - but add special handling for multiplayer case
     if (this.isPaused) {
-      return;
-    }
-    
-    // Add periodic position logging to diagnose rubber banding
-    const shouldLogPositions = Math.random() < 0.02; // 2% chance per frame
-    
-    if (shouldLogPositions) {
-      console.log(`========== HOST ENEMY POSITION SNAPSHOT ==========`);
-      console.log(`Total enemies: ${this.enemies.length}, Host player dead: ${this.player?.isDead}`);
+      // In multiplayer, override the pause if there are living remote players
+      let hasLivingRemotePlayers = false;
       
-      // Log a sample of enemy positions (up to 3)
-      const sampleSize = Math.min(3, this.enemies.length);
-      for (let i = 0; i < sampleSize; i++) {
-        const enemy = this.enemies[i];
-        if (enemy && enemy.instance) {
-          console.log(`Enemy ${enemy.id}: [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}], State: ${enemy.state}, Active: ${enemy._forceContinueUpdating ? 'forced' : (this.player && !this.player.isDead ? 'normal' : 'inactive')}`);
+      if (this.player && this.player.isDead && this.gameEngine && this.gameEngine.networkManager) {
+        const remotePlayers = this.gameEngine.networkManager.remotePlayers;
+        if (remotePlayers && remotePlayers.size > 0) {
+          remotePlayers.forEach(player => {
+            if (!player.isDead) {
+              hasLivingRemotePlayers = true;
+            }
+          });
         }
       }
       
-      console.log(`========== END ENEMY SNAPSHOT ==========`);
+      // If we're paused but there are living remote players, allow updates to continue
+      if (!hasLivingRemotePlayers) {
+        return; // Truly paused - no living players at all
+      } else {
+        console.log("EnemyManager is technically paused, but continuing updates for living remote players");
+      }
     }
-    
+  
     // Check for enemy spawn
     this.checkEnemySpawn(deltaTime);
     
@@ -224,57 +224,35 @@ export class EnemyManager {
       }
       
       if (hasLivingRemotePlayers) {
-        // Log occasionally to reduce spam
-        if (Math.random() < 0.01) { // 1% chance per frame
-          console.log("HOST PLAYER DEAD BUT REMOTE PLAYERS ALIVE: CONTINUING ENEMY UPDATES");
-        }
-        
-        // Make sure isSpectatorMode is set if we have living remote players
-        if (this.gameEngine && !this.gameEngine.isSpectatorMode) {
-          this.gameEngine.isSpectatorMode = true;
-        }
+        console.log("HOST PLAYER DEAD BUT REMOTE PLAYERS ALIVE: CONTINUING ENEMY UPDATES");
       }
     }
     
     // Flag to force enemies to continue updating
-    const shouldForceUpdate = hasLivingRemotePlayers || 
-                             (this.gameEngine && this.gameEngine.isSpectatorMode);
+    const shouldForceUpdate = hasLivingRemotePlayers;
     
     // Update all existing enemies
     this.enemies.forEach(enemy => {
-      try {
-        // Update if:
-        // 1. Enemy is flagged to force continue
-        // 2. Host player is alive
-        // 3. Host player is dead but there are living remote players
-        // 4. We're in spectator mode
-        if (enemy._forceContinueUpdating || 
-            (enemy.player === this.player && !this.player.isDead) ||
-            shouldForceUpdate) {
-          
-          // Flag the enemy to continue updating regardless of local player state
-          if (shouldForceUpdate) {
-            enemy._forceContinueUpdating = true;
-            
-            // If enemy is stuck in idle state, force it to move
-            if (enemy.state === 'idle' || !enemy.state) {
-              enemy.state = 'moving';
-              if (typeof enemy.startMoving === 'function') {
-                enemy.startMoving();
-              }
-            }
-          }
-          
-          // Ensure enemy has correct player reference
-          if (!enemy.player && this.player) {
-            enemy.setPlayer(this.player);
-          }
-          
-          // Update the enemy
-          enemy.update(deltaTime);
+      // Update if:
+      // 1. Enemy is flagged to force continue
+      // 2. Host player is alive
+      // 3. Host player is dead but there are living remote players
+      if (enemy._forceContinueUpdating || 
+          (enemy.player === this.player && !this.player.isDead) ||
+          shouldForceUpdate) {
+        
+        // Flag the enemy to continue updating regardless of local player state
+        if (shouldForceUpdate) {
+          enemy._forceContinueUpdating = true;
         }
-      } catch (error) {
-        console.error(`Error updating enemy: ${error.message}`, enemy);
+        
+        // Ensure enemy has correct player reference
+        if (!enemy.player && this.player) {
+          enemy.setPlayer(this.player);
+        }
+        
+        // Update the enemy
+        enemy.update(deltaTime);
       }
     });
     
@@ -1370,36 +1348,29 @@ export class EnemyManager {
     // Log state change
     console.log(`EnemyManager: Setting paused state to ${isPaused}`);
     
-    // If we're trying to pause but we're the host with living remote players,
-    // we should skip pausing to ensure the game continues for remote players
-    if (isPaused && this.player && this.player.isDead && 
-        this.gameEngine && this.gameEngine.networkManager) {
+    // Check if we're in multiplayer with living remote players
+    let hasLivingRemotePlayers = false;
+    if (this.gameEngine && this.gameEngine.networkManager) {
+      const networkManager = this.gameEngine.networkManager;
       
-      // Check if any remote players are alive
-      let hasLivingRemotePlayers = false;
-      const remotePlayers = this.gameEngine.networkManager.remotePlayers;
-      
-      if (remotePlayers && remotePlayers.size > 0) {
-        remotePlayers.forEach(player => {
+      if (networkManager.remotePlayers && networkManager.remotePlayers.size > 0) {
+        networkManager.remotePlayers.forEach(player => {
           if (!player.isDead) {
             hasLivingRemotePlayers = true;
           }
         });
       }
+    }
+    
+    // In multiplayer, if we're pausing but there are living remote players
+    if (isPaused && hasLivingRemotePlayers && this.gameEngine && this.gameEngine.networkManager) {
+      console.log("EnemyManager: Not fully pausing because there are living remote players");
       
-      // If remote players are alive, don't actually pause enemies
-      if (hasLivingRemotePlayers) {
-        console.log("EnemyManager: Not pausing enemies because there are living remote players");
-        
-        // Force a game state broadcast to ensure clients stay updated
-        if (this.gameEngine.networkManager.network && 
-            this.gameEngine.networkManager.network.broadcastGameState) {
-          this.gameEngine.networkManager.network.broadcastGameState(true);
-        }
-        
-        // Set isPaused but make sure enemies keep updating
-        this.isPaused = false;
-        return;
+      // Ensure game state continues to broadcast
+      if (this.gameEngine.networkManager.network && 
+          this.gameEngine.networkManager.network.broadcastGameState) {
+        console.log("EnemyManager: Forcing a game state broadcast to keep remote clients updated");
+        this.gameEngine.networkManager.network.broadcastGameState(true);
       }
     }
     

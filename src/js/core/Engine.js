@@ -548,8 +548,10 @@ export class Engine {
         
         // Make sure enemies are definitely UNPAUSED if there are remote players still alive
         if (this.scene && this.scene.room && this.scene.room.enemyManager) {
-          console.log("Explicitly unpausing enemies because there are still living remote players");
-          this.scene.room.enemyManager.setPaused(false);
+          if (this.scene.room.enemyManager.isPaused) {
+            console.log("Explicitly unpausing enemies because there are still living remote players");
+            this.scene.room.enemyManager.setPaused(false);
+          }
         }
       }
     }
@@ -882,15 +884,14 @@ export class Engine {
    * Show the spectate screen when the host is dead but other players are still alive
    */
   showMultiplayerSpectateScreen() {
-    // Create spectate overlay
+    // Create spectate container - use a smaller overlay instead of full screen
     const spectateContainer = document.createElement('div');
-    spectateContainer.id = 'spectate-overlay';
-    spectateContainer.style.position = 'fixed';
+    spectateContainer.id = 'spectate-overlay'; // Use a different ID
+    spectateContainer.className = 'spectate-overlay';
+    spectateContainer.style.position = 'absolute';
     spectateContainer.style.top = '0';
     spectateContainer.style.left = '0';
     spectateContainer.style.width = '100%';
-    spectateContainer.style.height = '100%';
-    spectateContainer.style.backgroundColor = 'transparent';
     spectateContainer.style.pointerEvents = 'none'; // Allow clicking through
     spectateContainer.style.display = 'flex';
     spectateContainer.style.flexDirection = 'column';
@@ -1041,8 +1042,7 @@ export class Engine {
       // Double-check that enemies are not paused
       if (this.scene.room.enemyManager.isPaused) {
         console.log("Found enemies paused during spectator mode - unpausing");
-        // Use the spectator mode flag (true)
-        this.scene.room.enemyManager.setPaused(false, true);
+        this.scene.room.enemyManager.setPaused(false);
       }
     }
     
@@ -1095,8 +1095,7 @@ export class Engine {
           Math.random() < 0.04) { // ~4% chance per frame (roughly every 2-3 seconds)
         if (this.scene.room.enemyManager.isPaused) {
           console.log("Enemies became paused during spectator mode - unpausing");
-          // Use the spectator mode flag (true)
-          this.scene.room.enemyManager.setPaused(false, true);
+          this.scene.room.enemyManager.setPaused(false);
         }
       }
     }, 50); // Update 20 times per second
@@ -1892,24 +1891,17 @@ export class Engine {
   }
   
   /**
-   * Pause the game
+   * Pause the game and show pause menu
    */
   pauseGame() {
     console.log("Game paused");
     
-    // Set paused flag
-    this.isPaused = true;
+    // Create and show pause menu first
+    this.showPauseMenu();
     
-    // Create and show pause menu (unless in spectator mode)
-    if (!this.isSpectatorMode) {
-      this.showPauseMenu();
-    }
-    
-    // Pause enemy spawning and movement
+    // Pause enemies
     if (this.scene && this.scene.room && this.scene.room.enemyManager) {
-      console.log("Pausing enemies due to game pause");
-      // Regular pause, not spectator mode
-      this.scene.room.enemyManager.setPaused(true, false);
+      this.scene.room.enemyManager.setPaused(true);
     }
     
     // Pause all audio
@@ -1943,19 +1935,16 @@ export class Engine {
     }
     
     // Unlock pointer last (after menu is already shown)
-    // But only if not in spectator mode
-    if (!this.isSpectatorMode) {
-      this.unlockPointer();
-    }
+    this.unlockPointer();
   }
   
   /**
-   * Resume the game
+   * Resume game from pause state
    */
   resumeGame() {
     console.log("Game resumed");
     
-    // Clear paused flag
+    // Ensure pause state is properly set
     this.isPaused = false;
     
     // Clear any pending pause-related UI
@@ -1973,31 +1962,6 @@ export class Engine {
       document.body.removeChild(pauseMenu);
     }
     
-    // Resume enemy spawning and movement
-    if (this.scene && this.scene.room && this.scene.room.enemyManager) {
-      // Check if we're in spectator mode
-      if (this.isSpectatorMode) {
-        console.log("Unpausing enemies with spectator mode flag");
-        // Unpause with spectator mode flag so enemies know to keep moving
-        this.scene.room.enemyManager.setPaused(false, true);
-      } else {
-        console.log("Unpausing enemies with regular flag");
-        // Regular unpause
-        this.scene.room.enemyManager.setPaused(false, false);
-        
-        // Reset player reference in enemy manager and all enemies
-        if (this.controls) {
-          const enemyManager = this.scene.room.enemyManager;
-          enemyManager.setPlayer(this.controls);
-          
-          // Explicitly update player reference for all existing enemies
-          enemyManager.enemies.forEach(enemy => {
-            enemy.setPlayer(this.controls);
-          });
-        }
-      }
-    }
-    
     // Resume audio
     if (this.controls) {
       // Resume background music
@@ -2011,11 +1975,30 @@ export class Engine {
       console.log(`Resuming game as ${this.networkManager.isHost ? 'host' : 'client'}`);
     }
     
+    // Unpause enemies and refresh player reference
+    if (this.scene && this.scene.room && this.scene.room.enemyManager) {
+      const enemyManager = this.scene.room.enemyManager;
+      console.log("Unpausing enemy manager");
+      
+      // Reset player reference in enemy manager and all enemies
+      if (this.controls) {
+        enemyManager.setPlayer(this.controls);
+        
+        // Explicitly update player reference for all existing enemies
+        enemyManager.enemies.forEach(enemy => {
+          enemy.setPlayer(this.controls);
+        });
+      }
+      
+      // Unpause enemy manager
+      enemyManager.setPaused(false);
+    }
+    
     // Show mobile controls if needed
     this.showMobileControlsIfNeeded();
     
-    // Lock pointer immediately - only if game is actually active and not in spectator mode
-    if (this.isGameStarted && !this.isPaused && !this.isGameOver && !this.isSpectatorMode) {
+    // Lock pointer immediately - only if game is actually active
+    if (this.isGameStarted && !this.isPaused && !this.isGameOver) {
       console.log("Locking pointer after resuming");
       // Force pointer lock
       this.lockPointer();
@@ -2023,8 +2006,7 @@ export class Engine {
       console.log("Not locking pointer: game state not appropriate", {
         isGameStarted: this.isGameStarted,
         isPaused: this.isPaused,
-        isGameOver: this.isGameOver,
-        isSpectatorMode: this.isSpectatorMode
+        isGameOver: this.isGameOver
       });
     }
   }

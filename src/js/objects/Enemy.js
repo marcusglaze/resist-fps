@@ -361,9 +361,8 @@ export class Enemy {
       if (this.player) {
         // If local player is dead, check for remote players to target
         if (this.player.isDead) {
-          // Try to find alive remote players (if we're the host)
+          // Try to find alive remote players
           let foundLivingTarget = false;
-          let targetPosition = null;
           
           // Look for network manager to find remote players
           if (this.manager && this.manager.gameEngine && 
@@ -372,61 +371,26 @@ export class Enemy {
             
             const remotePlayers = this.manager.gameEngine.networkManager.remotePlayers;
             
-            // Find any living remote player to target
+            // Log only if we have remote players
+            if (remotePlayers.size > 0) {
+              console.log(`Zombie ${this.id}: Local player dead, checking ${remotePlayers.size} remote players for targets`);
+            }
+            
             remotePlayers.forEach(player => {
               if (!player.isDead && player.position) {
                 foundLivingTarget = true;
-                targetPosition = player.position;
+                console.log(`Zombie ${this.id}: Found living remote player to target`);
               }
             });
           }
           
           // Either chase remote players or move randomly if none alive
-          if (foundLivingTarget && targetPosition) {
-            // Only log occasionally to reduce spam
-            if (Math.random() < 0.005) { // 0.5% chance per frame
-              console.log(`Zombie: Targeting remote player`);
-            }
-            
-            // Calculate direction to player (only on x and z axes)
-            const direction = new THREE.Vector3(
-              targetPosition.x - this.instance.position.x,
-              0, // Keep y movement flat
-              targetPosition.z - this.instance.position.z
-            ).normalize();
-            
-            // Move towards player
-            const step = this.speed * deltaTime;
-            this.instance.position.x += direction.x * step;
-            this.instance.position.z += direction.z * step;
-            
-            // Ensure y position is at floor level
-            this.instance.position.y = this.floorLevel;
-            
-            // Look at target
-            this.instance.lookAt(new THREE.Vector3(
-              targetPosition.x,
-              this.floorLevel,
-              targetPosition.z
-            ));
-            
-            // Enforce room boundaries
-            this.enforceRoomBoundaries();
-            
-            // Try to attack if close enough
-            const distSquared = Math.pow(this.instance.position.x - targetPosition.x, 2) + 
-                               Math.pow(this.instance.position.z - targetPosition.z, 2);
-            
-            if (distSquared < Math.pow(this.attackRange, 2)) {
-              // Attack the remote player - this updates animation and sends network event
-              const currentTime = performance.now() / 1000;
-              if (currentTime - this.lastAttackTime >= 1 / this.attackRate) {
-                this.lastAttackTime = currentTime;
-                this.playAttackAnimation();
-              }
-            }
+          if (foundLivingTarget || this._forceContinueUpdating) {
+            console.log(`Zombie ${this.id}: Continuing to chase remote players`);
+            this.chasePlayer(deltaTime);
+            this.tryAttackPlayer();
           } else {
-            // No players to target, move randomly
+            console.log(`Zombie ${this.id}: No living targets, moving randomly`);
             this.moveRandomly(deltaTime);
           }
         } else {
@@ -497,18 +461,6 @@ export class Enemy {
    * @param {number} deltaTime - Time elapsed since last update
    */
   moveTowardsWindow(deltaTime) {
-    // Log movement occasionally to diagnose rubber banding
-    const shouldLog = Math.random() < 0.05; // 5% chance per frame
-    let originalPosition = null;
-    
-    if (shouldLog) {
-      originalPosition = {
-        x: this.instance.position.x,
-        y: this.instance.position.y,
-        z: this.instance.position.z
-      };
-    }
-    
     // Calculate direction to window (only on x and z axes)
     const targetPointOnGround = new THREE.Vector3(
       this.targetPosition.x,
@@ -531,16 +483,6 @@ export class Enemy {
     
     // Look at target (on ground level)
     this.instance.lookAt(targetPointOnGround);
-    
-    // Log position change if enabled
-    if (shouldLog && originalPosition) {
-      console.log(`Enemy ${this.id} movement (moveTowardsWindow):
-        From: [${originalPosition.x.toFixed(2)}, ${originalPosition.y.toFixed(2)}, ${originalPosition.z.toFixed(2)}]
-        To: [${this.instance.position.x.toFixed(2)}, ${this.instance.position.y.toFixed(2)}, ${this.instance.position.z.toFixed(2)}]
-        Delta: [${(this.instance.position.x - originalPosition.x).toFixed(5)}, ${(this.instance.position.y - originalPosition.y).toFixed(5)}, ${(this.instance.position.z - originalPosition.z).toFixed(5)}]
-        Step size: ${step.toFixed(5)}, Direction: [${direction.x.toFixed(3)}, ${direction.y.toFixed(3)}, ${direction.z.toFixed(3)}]
-      `);
-    }
   }
 
   /**
@@ -850,60 +792,24 @@ export class Enemy {
    * @param {number} deltaTime - Time elapsed since last update
    */
   moveRandomly(deltaTime) {
-    // Log movement occasionally to diagnose rubber banding
-    const shouldLog = Math.random() < 0.02; // 2% chance per frame
-    let originalPosition = null;
-    
-    if (shouldLog) {
-      originalPosition = {
-        x: this.instance.position.x,
-        y: this.instance.position.y,
-        z: this.instance.position.z
-      };
-    }
-    
     // Simple random movement inside room
-    const currentTime = performance.now() / 1000;
+    const step = this.speed * 0.5 * deltaTime;
     
-    // Change direction every few seconds
-    if (!this.lastDirectionChange || currentTime - this.lastDirectionChange > 3) {
-      this.movementDirection = new THREE.Vector3(
-        Math.random() * 2 - 1, // -1 to 1
-        0,
-        Math.random() * 2 - 1  // -1 to 1
-      ).normalize();
-      
-      this.lastDirectionChange = currentTime;
+    // Random changes in direction
+    if (Math.random() < 0.05) {
+      this.instance.rotation.y += (Math.random() - 0.5) * Math.PI / 2;
     }
     
     // Move forward in facing direction
-    const step = this.speed * deltaTime * 0.5; // Slower random movement
-    this.instance.position.x += this.movementDirection.x * step;
-    this.instance.position.z += this.movementDirection.z * step;
+    const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(this.instance.quaternion);
+    this.instance.position.x += direction.x * step;
+    this.instance.position.z += direction.z * step;
     
     // Ensure y position is at floor level
     this.instance.position.y = this.floorLevel;
     
-    // Look in the movement direction
-    const lookAtPoint = new THREE.Vector3(
-      this.instance.position.x + this.movementDirection.x,
-      this.floorLevel,
-      this.instance.position.z + this.movementDirection.z
-    );
-    this.instance.lookAt(lookAtPoint);
-    
-    // Enforce room boundaries
+    // Keep inside room boundaries
     this.enforceRoomBoundaries();
-    
-    // Log position change if enabled
-    if (shouldLog && originalPosition) {
-      console.log(`Enemy ${this.id} movement (moveRandomly):
-        From: [${originalPosition.x.toFixed(2)}, ${originalPosition.y.toFixed(2)}, ${originalPosition.z.toFixed(2)}]
-        To: [${this.instance.position.x.toFixed(2)}, ${this.instance.position.y.toFixed(2)}, ${this.instance.position.z.toFixed(2)}]
-        Delta: [${(this.instance.position.x - originalPosition.x).toFixed(5)}, ${(this.instance.position.y - originalPosition.y).toFixed(5)}, ${(this.instance.position.z - originalPosition.z).toFixed(5)}]
-        Step size: ${step.toFixed(5)}, Direction: [${this.movementDirection.x.toFixed(3)}, ${this.movementDirection.y.toFixed(3)}, ${this.movementDirection.z.toFixed(3)}]
-      `);
-    }
   }
 
   /**
