@@ -741,11 +741,6 @@ export class P2PNetwork {
       return [];
     }
     
-    // Create a tracking timer to log performance
-    const startTime = performance.now();
-    
-    console.log("⏱️ ENEMY DATA GATHER START");
-    
     // Check if host is dead but there are living remote players
     const isHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
     let hasLivingRemotePlayers = false;
@@ -761,28 +756,7 @@ export class P2PNetwork {
       }
     }
     
-    // Detailed logging of host state
-    console.log(`Host state: Dead=${isHostDead}, Living remote players=${hasLivingRemotePlayers}, Total enemies=${this.gameEngine.scene.room.enemyManager.enemies.length}`);
-    
-    // Set up position cache detection
-    if (!this._enemyNetworkData) {
-      this._enemyNetworkData = {
-        lastSend: Date.now(),
-        positionHistories: new Map(),
-        staticEnemyCount: 0,
-        movingEnemyCount: 0
-      };
-    }
-    
-    const now = Date.now();
-    const timeSinceLastSend = now - this._enemyNetworkData.lastSend;
-    this._enemyNetworkData.lastSend = now;
-    
-    // Reset counters
-    this._enemyNetworkData.staticEnemyCount = 0;
-    this._enemyNetworkData.movingEnemyCount = 0;
-    
-    const enemyStates = this.gameEngine.scene.room.enemyManager.enemies.map(enemy => {
+    return this.gameEngine.scene.room.enemyManager.enemies.map(enemy => {
       // Get the position to send
       const position = {
         x: enemy.instance.position.x,
@@ -790,90 +764,42 @@ export class P2PNetwork {
         z: enemy.instance.position.z
       };
       
-      // Track position history
-      let history = this._enemyNetworkData.positionHistories.get(enemy.id);
-      if (!history) {
-        history = {
-          positions: [],
-          lastChanged: now,
-          staticCount: 0
-        };
-        this._enemyNetworkData.positionHistories.set(enemy.id, history);
-      }
-      
-      // Create position hash for quick comparison
-      const posHash = `${position.x.toFixed(5)},${position.y.toFixed(5)},${position.z.toFixed(5)}`;
-      
-      // Check if position is the same as last time
-      let isStatic = false;
-      if (history.positions.length > 0) {
-        const lastPosHash = history.positions[history.positions.length - 1].hash;
-        if (posHash === lastPosHash) {
-          isStatic = true;
-          history.staticCount++;
-          this._enemyNetworkData.staticEnemyCount++;
+      // Ensure we're sending non-frozen positions when host is dead
+      if (isHostDead && hasLivingRemotePlayers) {
+        // Make sure we're not sending the same position repeatedly
+        const enemyPositionKey = `enemy_${enemy.id}_lastPos`;
+        const lastSentPosition = this._lastSentPositions?.get(enemyPositionKey);
+        
+        if (lastSentPosition) {
+          // Check if position hasn't changed
+          const positionUnchanged = 
+            Math.abs(lastSentPosition.x - position.x) < 0.01 &&
+            Math.abs(lastSentPosition.z - position.z) < 0.01;
           
-          // Log if enemy has been static for too long
-          if (history.staticCount % 10 === 0) { // Every 10 frames
-            console.warn(`⚠️ Enemy ${enemy.id} has been static for ${history.staticCount} frames`);
-          }
-          
-          // If static for a while and we're in spectator mode, make a slight adjustment
-          if (history.staticCount > 3 && (isHostDead && hasLivingRemotePlayers)) {
-            // Add a small movement in a random direction to prevent client-side rubberbanding
+          if (positionUnchanged) {
+            // Position is frozen - add a small movement
+            if (Math.random() < 0.05) { // Log occasionally (5% chance)
+              console.log(`Detected frozen enemy ${enemy.id} position: [${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}]`);
+            }
+            
+            // Add a small movement in a random direction
             const angle = Math.random() * Math.PI * 2;
-            const distance = 0.1 + Math.random() * 0.2; // Small random movement
+            const distance = 0.05 + Math.random() * 0.1; // Small random movement (0.05-0.15 units)
             
             position.x += Math.cos(angle) * distance;
             position.z += Math.sin(angle) * distance;
             
-            console.log(`🔄 Adding movement to static enemy ${enemy.id}: [${position.x.toFixed(3)}, ${position.y.toFixed(3)}, ${position.z.toFixed(3)}]`);
-          }
-        } else {
-          // Position changed
-          history.staticCount = 0;
-          history.lastChanged = now;
-          this._enemyNetworkData.movingEnemyCount++;
-          
-          // Log movement
-          if (Math.random() < 0.1) { // 10% chance to log
-            const lastPos = history.positions[history.positions.length - 1].pos;
-            console.log(`🏃 Enemy ${enemy.id} movement: [${lastPos.x.toFixed(2)}, ${lastPos.y.toFixed(2)}, ${lastPos.z.toFixed(2)}] → [${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}]`);
+            if (Math.random() < 0.05) { // Log occasionally
+              console.log(`Applied movement to frozen enemy: [${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}]`);
+            }
           }
         }
-      } else {
-        // First position record
-        this._enemyNetworkData.movingEnemyCount++;
-      }
-      
-      // Store this position
-      history.positions.push({
-        pos: {...position},
-        hash: posHash,
-        time: now
-      });
-      
-      // Keep history bounded
-      if (history.positions.length > 10) {
-        history.positions.shift();
-      }
-      
-      // If enemy is inside the room, it's clearly not at initial position
-      if (enemy.insideRoom) {
-        // Log this
-        if (Math.random() < 0.05) { // 5% chance to log
-          console.log(`🏠 Enemy ${enemy.id} is inside room at [${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}]`);
+        
+        // Store this position for next comparison
+        if (!this._lastSentPositions) {
+          this._lastSentPositions = new Map();
         }
-      }
-      
-      // Log if this enemy is static and near origin
-      const isNearOrigin = 
-        Math.abs(position.x) < 0.2 && 
-        Math.abs(position.y) < 0.2 && 
-        Math.abs(position.z) < 0.2;
-      
-      if (isStatic && isNearOrigin) {
-        console.warn(`⚠️ WARNING: Enemy ${enemy.id} is static at origin: [${position.x.toFixed(3)}, ${position.y.toFixed(3)}, ${position.z.toFixed(3)}]`);
+        this._lastSentPositions.set(enemyPositionKey, {...position});
       }
       
       return {
@@ -888,14 +814,6 @@ export class P2PNetwork {
         insideRoom: enemy.insideRoom || false
       };
     });
-    
-    // Log performance and statistics
-    const endTime = performance.now();
-    const duration = (endTime - startTime).toFixed(2);
-    
-    console.log(`⏱️ ENEMY DATA GATHER COMPLETE: ${duration}ms, Moving: ${this._enemyNetworkData.movingEnemyCount}, Static: ${this._enemyNetworkData.staticEnemyCount}`);
-    
-    return enemyStates;
   }
   
   /**

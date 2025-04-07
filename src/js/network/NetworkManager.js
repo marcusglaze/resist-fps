@@ -5,9 +5,9 @@
 import * as THREE from 'three';
 import { P2PNetwork } from './P2PNetwork.js';
 import { Enemy } from '../objects/Enemy.js';
+import { CrawlingZombie } from '../objects/CrawlingZombie.js';
 import { RunnerZombie } from '../objects/RunnerZombie.js';
 import { SpitterZombie } from '../objects/SpitterZombie.js';
-import { CrawlingZombie } from '../objects/CrawlingZombie.js';
 
 export class NetworkManager {
   constructor(gameEngine) {
@@ -296,579 +296,376 @@ export class NetworkManager {
   updateGameState(state) {
     if (!this.isConnected || this.isHost) return;
     
-    const now = Date.now();
-    const deltaTime = (now - (this._lastUpdateTime || now)) / 1000;
-    this._lastUpdateTime = now;
-
-    // Check if host is dead and we're alive - critical for position handling
-    const isHostDead = this._isHostDead(state);
-    const clientIsAlive = this.gameEngine && this.gameEngine.controls && !this.gameEngine.controls.isDead;
-    
-    // Initialize movement simulation system when host is dead
-    if (!this._enemySimulation && isHostDead) {
-      this._enemySimulation = {
-        enabled: true,
-        lastFullUpdate: now,
-        enemyState: new Map(), // Track state of each enemy
-        navPoints: [], // Navigation points for zombies to follow
-        initialized: false
-      };
-      
-      console.log("🎮 ENEMY SIMULATION SYSTEM INITIALIZED - Host is dead, taking over enemy movement");
-      
-      // Generate navigation points around the room when initialized
-      if (this.gameEngine && this.gameEngine.scene && this.gameEngine.scene.room) {
-        // Get room dimensions
-        const room = this.gameEngine.scene.room;
-        const roomWidth = room.roomWidth || 10;
-        const roomDepth = room.roomDepth || 10;
-        
-        // Create navigation points around the perimeter and inside the room
-        for (let i = 0; i < 15; i++) {
-          // Create some points around the perimeter
-          this._enemySimulation.navPoints.push({
-            x: (Math.random() - 0.5) * roomWidth * 0.8,
-            y: 0,
-            z: (Math.random() - 0.5) * roomDepth * 0.8
-          });
+    // Update remote player positions
+    if (state.playerPositions) {
+      Object.entries(state.playerPositions).forEach(([playerId, position]) => {
+        if (playerId !== this.network.clientId) {
+          this.updateRemotePlayerPosition(playerId, position);
+          
+          // If this is the host player and they're dead, log it to help with debugging
+          if (playerId === this.network.hostId && position.isDead) {
+            console.log("Host player is dead, but continuing to process game state updates");
+          }
         }
-        
-        this._enemySimulation.initialized = true;
-        console.log("🧭 Generated navigation points for enemy simulation");
-      }
+      });
     }
     
-    // Process enemy data
-    if (state.enemies && state.enemies.length > 0) {
-      // USE COMPLETELY DIFFERENT LOGIC WHEN HOST IS DEAD
-      if (isHostDead && clientIsAlive && this._enemySimulation && this._enemySimulation.initialized) {
-        // Complete override - ignore host data except for registration of new enemies
-        console.log(`🎮 USING SIMULATED ENEMY POSITIONS - Host is dead, we are alive, ${state.enemies.length} enemies`);
+    // Update game status (pause, game over, etc.)
+    if (state.gameStatus) {
+      this.updateGameStatus(state.gameStatus);
+    }
+    
+    // Update enemy state if needed (for client-side visualization)
+    if (state.enemies && this.gameEngine.scene && this.gameEngine.scene.room && 
+        this.gameEngine.scene.room.enemyManager) {
+      
+      const enemyManager = this.gameEngine.scene.room.enemyManager;
+      
+      // Enhanced enemy synchronization
+      if (Array.isArray(state.enemies)) {
+        console.log(`========== CLIENT RECEIVING ENEMY UPDATES ==========`);
+        console.log(`Syncing ${state.enemies.length} enemies from host`);
         
-        // Process each enemy, but completely replace position data with our simulation
+        // IMPORTANT: Debug the raw position data from host, before any client processing
+        console.log("RAW ENEMY DATA RECEIVED FROM HOST (BEFORE ANY CLIENT PROCESSING):");
         state.enemies.forEach((enemyData, index) => {
-          if (!this.gameEngine.scene?.room?.enemies) {
-            return; // Skip if room or enemies not initialized
-          }
-          
-          // Find the local enemy instance
-          let enemy = this.gameEngine.scene.room.enemies.find(e => e.id === enemyData.id);
-          
-          // Register new enemy if we don't have it yet
-          if (!enemy) {
-            this.registerEnemy(enemyData);
-            enemy = this.gameEngine.scene.room.enemies.find(e => e.id === enemyData.id);
-            if (!enemy) return;
-          }
-          
-          // Get or initialize this enemy's simulation state
-          let simState = this._enemySimulation.enemyState.get(enemyData.id);
-          if (!simState) {
-            // Pick a random navigation point as initial target
-            const randomNavPoint = this._enemySimulation.navPoints[
-              Math.floor(Math.random() * this._enemySimulation.navPoints.length)
-            ];
-            
-            simState = {
-              targetPoint: randomNavPoint,
-              speed: 1.0 + Math.random() * 1.0, // Random speed between 1-2
-              lastUpdate: now,
-              position: {
-                x: enemy.instance.position.x,
-                y: enemy.instance.position.y,
-                z: enemy.instance.position.z
-              }
-            };
-            this._enemySimulation.enemyState.set(enemyData.id, simState);
-          }
-          
-          // Update the enemy's position based on our simulation
-          const timeSinceLastUpdate = (now - simState.lastUpdate) / 1000;
-          simState.lastUpdate = now;
-          
-          // Calculate vector to target
-          const directionX = simState.targetPoint.x - simState.position.x;
-          const directionZ = simState.targetPoint.z - simState.position.z;
-          const distance = Math.sqrt(directionX * directionX + directionZ * directionZ);
-          
-          // Check if we've reached the target
-          if (distance < 0.5) {
-            // Pick a new random target
-            simState.targetPoint = this._enemySimulation.navPoints[
-              Math.floor(Math.random() * this._enemySimulation.navPoints.length)
-            ];
-            console.log(`🔄 Enemy ${enemyData.id} reached target, choosing new target point`);
+          if (enemyData && enemyData.position) {
+            // Log with full precision to check for any truncation
+            console.log(`Enemy ${enemyData.id}: RAW POSITION FROM HOST [${enemyData.position.x}, ${enemyData.position.y}, ${enemyData.position.z}], State: ${enemyData.state}`);
           } else {
-            // Move towards the target
-            const normalizedDirX = directionX / distance;
-            const normalizedDirZ = directionZ / distance;
-            
-            simState.position.x += normalizedDirX * simState.speed * timeSinceLastUpdate;
-            simState.position.z += normalizedDirZ * simState.speed * timeSinceLastUpdate;
-            
-            // Update the enemy's position immediately
-            enemy.instance.position.x = simState.position.x;
-            enemy.instance.position.z = simState.position.z;
-            
-            // Set rotation to face direction of movement
-            enemy.instance.lookAt(
-              new THREE.Vector3(simState.targetPoint.x, enemy.instance.position.y, simState.targetPoint.z)
-            );
-            
-            // Also update the enemy.position property
-            if (enemy.position) {
-              enemy.position.copy(enemy.instance.position);
-            }
-            
-            // Occasionally log
-            if (Math.random() < 0.005) {
-              console.log(`🧠 Simulating enemy ${enemyData.id} movement: [${simState.position.x.toFixed(2)}, ${simState.position.y.toFixed(2)}, ${simState.position.z.toFixed(2)}] → ${simState.targetPoint ? `[${simState.targetPoint.x.toFixed(2)}, ${simState.targetPoint.y.toFixed(2)}, ${simState.targetPoint.z.toFixed(2)}]` : 'no target'}`);
-            }
-          }
-          
-          // Copy other properties like health, but NOT position which we're controlling
-          enemy.health = enemyData.health;
-          if (enemyData.state) enemy.state = enemyData.state;
-          if (enemyData.insideRoom !== undefined) enemy.insideRoom = enemyData.insideRoom;
-        });
-        
-        // Don't process enemies with normal logic below
-        return;
-      }
-      
-      // STANDARD HANDLING WHEN HOST IS ALIVE (or when we're dead)
-      // Use the sampling log system
-      this.sampleAndLogEnemyData(state.enemies);
-      
-      // CRITICAL: Log raw enemy data
-      if (state.enemies && state.enemies.length > 0) {
-        console.log("****** RAW ENEMY DATA SAMPLER ******");
-        // Get a sample of enemies to log (max 2 to avoid spam)
-        const enemySample = state.enemies.slice(0, 2);
-        
-        // Check if we have previous data to compare
-        if (!this._previousEnemyData) {
-          this._previousEnemyData = new Map();
-        }
-        
-        // Check for repeated identical positions
-        enemySample.forEach(enemy => {
-          // Get current position hash
-          const posHash = `${enemy.position.x},${enemy.position.y},${enemy.position.z}`;
-          
-          // Get previous position data for this enemy
-          const prevData = this._previousEnemyData.get(enemy.id);
-          
-          if (prevData) {
-            // Check if position is exactly the same
-            if (prevData.posHash === posHash) {
-              prevData.repeatCount++;
-              console.warn(`IDENTICAL POSITION DETECTED for enemy ${enemy.id}: [${enemy.position.x.toFixed(2)}, ${enemy.position.y.toFixed(2)}, ${enemy.position.z.toFixed(2)}] repeated ${prevData.repeatCount} times`);
-            } else {
-              // Position changed, reset counter
-              prevData.posHash = posHash;
-              prevData.repeatCount = 1;
-              console.log(`Enemy ${enemy.id} position changed: [${enemy.position.x.toFixed(2)}, ${enemy.position.y.toFixed(2)}, ${enemy.position.z.toFixed(2)}]`);
-            }
-          } else {
-            // First time seeing this enemy
-            this._previousEnemyData.set(enemy.id, {
-              posHash,
-              repeatCount: 1
-            });
+            console.log(`WARNING: Enemy data at index ${index} missing position:`, enemyData);
           }
         });
         
-        console.log("****** END RAW ENEMY DATA SAMPLER ******");
-      }
-      
-      // Update remote player positions
-      if (state.playerPositions) {
-        Object.entries(state.playerPositions).forEach(([playerId, position]) => {
-          if (playerId !== this.network.clientId) {
-            this.updateRemotePlayerPosition(playerId, position);
-            
-            // If this is the host player and they're dead, log it to help with debugging
-            if (playerId === this.network.hostId && position.isDead) {
-              console.log("Host player is dead, but continuing to process game state updates");
-            }
-          }
-        });
-      }
-      
-      // Update game status (pause, game over, etc.)
-      if (state.gameStatus) {
-        this.updateGameStatus(state.gameStatus);
-      }
-      
-      // Update enemy state if needed (for client-side visualization)
-      if (state.enemies && this.gameEngine.scene && this.gameEngine.scene.room && 
-          this.gameEngine.scene.room.enemyManager) {
-        
-        const enemyManager = this.gameEngine.scene.room.enemyManager;
-        
-        // Enhanced enemy synchronization
-        if (Array.isArray(state.enemies)) {
-          console.log(`========== CLIENT RECEIVING ENEMY UPDATES ==========`);
-          console.log(`Syncing ${state.enemies.length} enemies from host`);
-          
-          // IMPORTANT: Debug the raw position data from host, before any client processing
-          console.log("RAW ENEMY DATA RECEIVED FROM HOST (BEFORE ANY CLIENT PROCESSING):");
-          state.enemies.forEach((enemyData, index) => {
-            if (enemyData && enemyData.position) {
-              // Log with full precision to check for any truncation
-              console.log(`Enemy ${enemyData.id}: RAW POSITION FROM HOST [${enemyData.position.x}, ${enemyData.position.y}, ${enemyData.position.z}], State: ${enemyData.state}`);
-            } else {
-              console.log(`WARNING: Enemy data at index ${index} missing position:`, enemyData);
-            }
-          });
-          
-          // If host has no enemies, clear client enemies
-          if (state.enemies.length === 0 && enemyManager.enemies.length > 0) {
-            console.log("Host has no enemies, clearing client enemies");
-            enemyManager.despawnAllEnemies();
-            return;
-          }
-          
-          // If client has no enemies but host does, force a spawn on the client
-          if (enemyManager.enemies.length === 0 && state.enemies.length > 0) {
-            console.log("Spawning initial enemies from host data");
-            
-            // Spawn missing enemies
-            state.enemies.forEach(enemyData => {
-              // Only create if we don't already have this enemy
-              if (!enemyManager.enemies.some(e => e.id === enemyData.id)) {
-                this.spawnEnemyFromData(enemyData, enemyManager);
-              }
-            });
-          } else {
-            // Update positions and states of existing enemies
-            // Log a sample of received enemy positions
-            const sampleSize = Math.min(3, state.enemies.length);
-            const sampleEnemies = state.enemies.slice(0, sampleSize);
-            console.log(`Sample of received enemy positions (${sampleSize}/${state.enemies.length}):`);
-            sampleEnemies.forEach(enemyData => {
-              console.log(`Enemy ${enemyData.id}: [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}], State: ${enemyData.state}`);
-            });
-            
-            // Track how many enemies were actually updated
-            let updatedCount = 0;
-            let missingCount = 0;
-            
-            state.enemies.forEach(enemyData => {
-              const enemy = enemyManager.enemies.find(e => e.id === enemyData.id);
-              if (enemy && enemy.instance) {
-                // Log previous position for a sample of enemies
-                if (Math.random() < 0.05) {
-                  console.log(`Updating enemy ${enemyData.id} position: 
-                    From: [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}] 
-                    To: [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}]
-                    Delta: [${(enemyData.position.x - enemy.instance.position.x).toFixed(2)}, ${(enemyData.position.y - enemy.instance.position.y).toFixed(2)}, ${(enemyData.position.z - enemy.instance.position.z).toFixed(2)}]
-                    State: ${enemy.state} -> ${enemyData.state}`);
-                }
-                
-                // CRITICAL FIX: Check for suspicious position resets to near-origin
-                const isPositionReset = 
-                  Math.abs(enemyData.position.x) < 0.1 && 
-                  Math.abs(enemyData.position.y) < 0.1 && 
-                  Math.abs(enemyData.position.z - 0.01) < 0.1;
-                
-                // Get position data for this enemy
-                if (!this._previousEnemyData) {
-                  this._previousEnemyData = new Map();
-                }
-                const prevData = this._previousEnemyData.get(enemyData.id);
-                
-                // Check for repeated identical positions
-                const currentPosHash = `${enemyData.position.x},${enemyData.position.y},${enemyData.position.z}`;
-                const isRepeatedPosition = prevData && prevData.posHash === currentPosHash && prevData.repeatCount > 5;
-                  
-                if ((isPositionReset && 
-                    (Math.abs(enemy.instance.position.x) > 0.5 || 
-                     Math.abs(enemy.instance.position.z) > 0.5))) {
-                  console.warn(`⚠️ PREVENTED POSITION RESET for ${enemyData.id}: Ignoring suspicious reset to [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}]`);
-                  
-                  // DO NOT update position to prevent rubberbanding
-                  // Instead, maintain current position and only update other properties
-                  
-                  // Make sure we synchronize the enemy.position property with the instance position
-                  if (enemy.position) {
-                    enemy.position.copy(enemy.instance.position);
-                  }
-                } else if (isRepeatedPosition) {
-                  // Completely ignore repeated identical positions beyond a threshold
-                  console.warn(`🔄 IGNORING REPEATED POSITION for ${enemyData.id}: [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}] (repeated ${prevData.repeatCount} times)`);
-                  
-                  // Instead, make the enemy continue moving on its path
-                  this.continueEnemyMovement(enemy, deltaTime);
-                } else {
-                  // Apply a normal position update with a smoothing factor
-                  // Instead of directly setting the position, move it part of the way there
-                  const smoothingFactor = 0.5; // Adjust between 0-1 (1 = instant, 0.5 = halfway)
-                  
-                  const targetX = enemyData.position.x;
-                  const targetY = enemyData.position.y;
-                  const targetZ = enemyData.position.z;
-                  
-                  // Calculate smoothed position
-                  enemy.instance.position.x += (targetX - enemy.instance.position.x) * smoothingFactor;
-                  enemy.instance.position.y += (targetY - enemy.instance.position.y) * smoothingFactor;
-                  enemy.instance.position.z += (targetZ - enemy.instance.position.z) * smoothingFactor;
-                  
-                  // Also update the enemy.position property to match instance position
-                  if (enemy.position) {
-                    enemy.position.copy(enemy.instance.position);
-                  }
-                }
-                
-                // Check if enemy is stuck at the same position for too long
-                // Track the position of each enemy over time to detect stuck enemies
-                const enemyKey = `enemy_${enemy.id}_pos`;
-                if (!this._enemyPositionHistory) {
-                  this._enemyPositionHistory = new Map();
-                }
-                
-                // Get position history for this enemy
-                let posHistory = this._enemyPositionHistory.get(enemyKey);
-                if (!posHistory) {
-                  posHistory = {
-                    positions: [],
-                    lastMoved: Date.now(),
-                    stuckCount: 0
-                  };
-                  this._enemyPositionHistory.set(enemyKey, posHistory);
-                }
-                
-                // Record current position
-                const currentPos = {
-                  x: enemy.instance.position.x,
-                  y: enemy.instance.position.y,
-                  z: enemy.instance.position.z,
-                  time: Date.now()
-                };
-                
-                // Keep only last few positions
-                posHistory.positions.push(currentPos);
-                if (posHistory.positions.length > 5) {
-                  posHistory.positions.shift(); // Remove oldest position
-                }
-                
-                // Check if enemy has moved significantly in last 3 seconds
-                if (posHistory.positions.length >= 2) {
-                  const oldestPos = posHistory.positions[0];
-                  const distanceX = Math.abs(currentPos.x - oldestPos.x);
-                  const distanceZ = Math.abs(currentPos.z - oldestPos.z);
-                  const totalDistance = Math.sqrt(distanceX * distanceX + distanceZ * distanceZ);
-                  const timeElapsed = (currentPos.time - oldestPos.time) / 1000; // in seconds
-                  
-                  if (totalDistance < 0.1 && timeElapsed > 3) {
-                    // Enemy hasn't moved in 3 seconds - might be stuck
-                    posHistory.stuckCount++;
-                    
-                    if (posHistory.stuckCount >= 3) { // If stuck for 3 consecutive checks
-                      console.log(`Client detected stuck enemy ${enemy.id} - forcing movement`);
-                      
-                      // Apply a small random movement to the enemy
-                      const angle = Math.random() * Math.PI * 2;
-                      const distance = 0.1 + Math.random() * 0.2;
-                      
-                      enemy.instance.position.x += Math.cos(angle) * distance;
-                      enemy.instance.position.z += Math.sin(angle) * distance;
-                      
-                      // Reset stuck counter
-                      posHistory.stuckCount = 0;
-                      posHistory.lastMoved = Date.now();
-                      
-                      // Update position property
-                      if (enemy.position) {
-                        enemy.position.copy(enemy.instance.position);
-                      }
-                    }
-                  } else {
-                    // Enemy is moving - reset stuck counter
-                    posHistory.stuckCount = 0;
-                    posHistory.lastMoved = Date.now();
-                  }
-                }
-                
-                // Update health and state
-                enemy.health = enemyData.health;
-                enemy.state = enemyData.state;
-                enemy.insideRoom = enemyData.insideRoom || enemy.insideRoom;
-                
-                // Make sure enemy retains its functionality, especially if host is dead
-                if (!enemy.active && enemy.state !== 'dying') {
-                  enemy.active = true;
-                }
-                
-                // Ensure enemies are properly moving/animated based on state
-                if (enemyData.state === 'moving' && enemy.state !== 'moving') {
-                  if (typeof enemy.startMoving === 'function') enemy.startMoving();
-                } else if (enemyData.state === 'attacking' && enemy.state !== 'attacking') {
-                  if (typeof enemy.startAttacking === 'function') enemy.startAttacking();
-                } else if (enemyData.state === 'dying' && enemy.state !== 'dying') {
-                  if (typeof enemy.die === 'function') enemy.die();
-                }
-                
-                updatedCount++;
-              } else {
-                // Enemy doesn't exist on client, create it
-                console.log(`Creating missing enemy ${enemyData.id} from host data`);
-                this.spawnEnemyFromData(enemyData, enemyManager);
-                missingCount++;
-              }
-            });
-            
-            console.log(`Updated ${updatedCount} existing enemies, created ${missingCount} missing enemies`);
-            
-            // Remove enemies that don't exist on host anymore
-            const enemiesToRemove = enemyManager.enemies.filter(enemy => 
-              !state.enemies.some(e => e.id === enemy.id)
-            );
-            
-            if (enemiesToRemove.length > 0) {
-              console.log(`Removing ${enemiesToRemove.length} enemies that don't exist on host`);
-              enemiesToRemove.forEach(enemy => {
-                if (enemy.instance) {
-                  if (typeof enemy.die === 'function') {
-                    enemy.die();
-                    // Force remove after a short delay
-                    setTimeout(() => {
-                      if (enemy.instance && this.gameEngine.scene.instance && typeof this.gameEngine.scene.instance.remove === 'function') {
-                        this.gameEngine.scene.instance.remove(enemy.instance);
-                      }
-                    }, 500);
-                  } else {
-                    if (this.gameEngine.scene.instance && typeof this.gameEngine.scene.instance.remove === 'function') {
-                      this.gameEngine.scene.instance.remove(enemy.instance);
-                    }
-                  }
-                }
-              });
-              
-              // Update enemies array
-              enemyManager.enemies = enemyManager.enemies.filter(enemy => 
-                state.enemies.some(e => e.id === enemy.id)
-              );
-            }
-          }
-          
-          console.log(`========== CLIENT FINISHED ENEMY UPDATES ==========`);
-        }
-      }
-      
-      // Update round info
-      if (state.round && this.gameEngine.scene && this.gameEngine.scene.room && 
-          this.gameEngine.scene.room.enemyManager) {
-        const enemyManager = this.gameEngine.scene.room.enemyManager;
-        enemyManager.currentRound = state.round.round;
-        enemyManager.zombiesRemaining = state.round.zombiesRemaining;
-        enemyManager.roundActive = state.round.roundActive;
-        
-        // Update UI elements for round info
-        if (this.gameEngine.uiManager) {
-          this.gameEngine.uiManager.updateRoundInfo(
-            state.round.round, 
-            state.round.zombiesRemaining
-          );
+        // If host has no enemies, clear client enemies
+        if (state.enemies.length === 0 && enemyManager.enemies.length > 0) {
+          console.log("Host has no enemies, clearing client enemies");
+          enemyManager.despawnAllEnemies();
+          return;
         }
         
-        // If round active state changed, handle round transitions
-        if (enemyManager.roundActive !== state.round.roundActive) {
-          if (state.round.roundActive) {
-            console.log(`Client syncing: Round ${state.round.round} started`);
-            // Host started a new round, sync it
-            enemyManager.roundActive = true;
-          } else {
-            console.log(`Client syncing: Round ${state.round.round} ended`);
-            // Host ended a round, sync it
-            enemyManager.roundActive = false;
-          }
-        }
-      }
-      
-      // Update window states if necessary
-      if (state.windows && this.gameEngine.scene && this.gameEngine.scene.room) {
-        const room = this.gameEngine.scene.room;
-        if (Array.isArray(room.windows) && Array.isArray(state.windows)) {
-          console.log(`Updating window states from host data: Host sent ${state.windows.length} windows, local has ${room.windows.length}`);
+        // If client has no enemies but host does, force a spawn on the client
+        if (enemyManager.enemies.length === 0 && state.enemies.length > 0) {
+          console.log("Spawning initial enemies from host data");
           
-          state.windows.forEach((windowData, index) => {
-            // Ensure window exists at this index
-            if (index >= room.windows.length) {
-              console.error(`Window index ${index} out of bounds (local has ${room.windows.length} windows)`);
-              return;
-            }
-            
-            if (room.windows[index]) {
-              const window = room.windows[index];
-              
-              // Set windowIndex if not already set
-              if (window.windowIndex === undefined) {
-                console.log(`Setting missing windowIndex ${index} on window`);
-                window.windowIndex = index;
-              }
-              
-              // Use the updateFromHostData method if available to respect pending actions
-              if (typeof window.updateFromHostData === 'function') {
-                window.updateFromHostData(windowData);
-              } else {
-                // Otherwise fallback to manual update
-                if (windowData.isOpen && !window.isOpen) {
-                  console.log(`Window ${index} is now open (broken)`);
-                  window.breakWindow();
-                }
-                
-                // Update board count - Add or remove boards to match host state
-                if (window.boardsCount !== windowData.boardsCount) {
-                  console.log(`Syncing window ${index} boards: local=${window.boardsCount}, host=${windowData.boardsCount}`);
-                  
-                  // If we have fewer boards than the host, add boards
-                  while (window.boardsCount < windowData.boardsCount) {
-                    console.log(`Adding board ${window.boardsCount + 1} to window ${index}`);
-                    window.addBoard();
-                  }
-                  
-                  // If we have more boards than the host, remove boards
-                  while (window.boardsCount > windowData.boardsCount) {
-                    console.log(`Removing board ${window.boardsCount} from window ${index}`);
-                    window.removeBoard();
-                  }
-                }
-                
-                // Update board health values if provided
-                if (Array.isArray(windowData.health) && window.boardHealths) {
-                  // Make sure arrays have same length
-                  const oldHealths = [...window.boardHealths];
-                  window.boardHealths = windowData.health.slice(0, window.boardsCount);
-                  
-                  console.log(`Updated window ${index} board health: ${JSON.stringify(oldHealths)} -> ${JSON.stringify(window.boardHealths)}`);
-                  
-                  // Update board appearance based on health
-                  window.boardHealths.forEach((health, boardIndex) => {
-                    if (window.updateBoardAppearance) {
-                      window.updateBoardAppearance(boardIndex);
-                    }
-                  });
-                }
-              }
-            } else {
-              console.error(`Window at index ${index} is null or undefined`);
+          // Spawn missing enemies
+          state.enemies.forEach(enemyData => {
+            // Only create if we don't already have this enemy
+            if (!enemyManager.enemies.some(e => e.id === enemyData.id)) {
+              this.spawnEnemyFromData(enemyData, enemyManager);
             }
           });
         } else {
-          console.error("Cannot update windows: arrays not available", {
-            roomWindows: Array.isArray(room.windows),
-            stateWindows: Array.isArray(state.windows)
+          // Update positions and states of existing enemies
+          // Log a sample of received enemy positions
+          const sampleSize = Math.min(3, state.enemies.length);
+          const sampleEnemies = state.enemies.slice(0, sampleSize);
+          console.log(`Sample of received enemy positions (${sampleSize}/${state.enemies.length}):`);
+          sampleEnemies.forEach(enemyData => {
+            console.log(`Enemy ${enemyData.id}: [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}], State: ${enemyData.state}`);
           });
+          
+          // Track how many enemies were actually updated
+          let updatedCount = 0;
+          let missingCount = 0;
+          
+          state.enemies.forEach(enemyData => {
+            const enemy = enemyManager.enemies.find(e => e.id === enemyData.id);
+            if (enemy && enemy.instance) {
+              // Log previous position for a sample of enemies
+              if (Math.random() < 0.05) {
+                console.log(`Updating enemy ${enemyData.id} position: 
+                  From: [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}] 
+                  To: [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}]
+                  Delta: [${(enemyData.position.x - enemy.instance.position.x).toFixed(2)}, ${(enemyData.position.y - enemy.instance.position.y).toFixed(2)}, ${(enemyData.position.z - enemy.instance.position.z).toFixed(2)}]
+                  State: ${enemy.state} -> ${enemyData.state}`);
+              }
+              
+              // CRITICAL FIX: Check for suspicious position resets to near-origin
+              const isPositionReset = 
+                Math.abs(enemyData.position.x) < 0.1 && 
+                Math.abs(enemyData.position.y) < 0.1 && 
+                Math.abs(enemyData.position.z - 0.01) < 0.1;
+                
+              if (isPositionReset && 
+                  (Math.abs(enemy.instance.position.x) > 0.5 || 
+                   Math.abs(enemy.instance.position.z) > 0.5)) {
+                console.warn(`⚠️ PREVENTED POSITION RESET for ${enemyData.id}: Ignoring suspicious reset to [${enemyData.position.x.toFixed(2)}, ${enemyData.position.y.toFixed(2)}, ${enemyData.position.z.toFixed(2)}]`);
+                
+                // DO NOT update position to prevent rubberbanding
+                // Instead, maintain current position and only update other properties
+                
+                // Make sure we synchronize the enemy.position property with the instance position
+                if (enemy.position) {
+                  enemy.position.copy(enemy.instance.position);
+                }
+              } else {
+                // Apply a normal position update with a smoothing factor
+                // Instead of directly setting the position, move it part of the way there
+                const smoothingFactor = 0.5; // Adjust between 0-1 (1 = instant, 0.5 = halfway)
+                
+                const targetX = enemyData.position.x;
+                const targetY = enemyData.position.y;
+                const targetZ = enemyData.position.z;
+                
+                // Calculate smoothed position
+                enemy.instance.position.x += (targetX - enemy.instance.position.x) * smoothingFactor;
+                enemy.instance.position.y += (targetY - enemy.instance.position.y) * smoothingFactor;
+                enemy.instance.position.z += (targetZ - enemy.instance.position.z) * smoothingFactor;
+                
+                // Also update the enemy.position property to match instance position
+                if (enemy.position) {
+                  enemy.position.copy(enemy.instance.position);
+                }
+              }
+              
+              // Check if enemy is stuck at the same position for too long
+              // Track the position of each enemy over time to detect stuck enemies
+              const enemyKey = `enemy_${enemy.id}_pos`;
+              if (!this._enemyPositionHistory) {
+                this._enemyPositionHistory = new Map();
+              }
+              
+              // Get position history for this enemy
+              let posHistory = this._enemyPositionHistory.get(enemyKey);
+              if (!posHistory) {
+                posHistory = {
+                  positions: [],
+                  lastMoved: Date.now(),
+                  stuckCount: 0
+                };
+                this._enemyPositionHistory.set(enemyKey, posHistory);
+              }
+              
+              // Record current position
+              const currentPos = {
+                x: enemy.instance.position.x,
+                y: enemy.instance.position.y,
+                z: enemy.instance.position.z,
+                time: Date.now()
+              };
+              
+              // Keep only last few positions
+              posHistory.positions.push(currentPos);
+              if (posHistory.positions.length > 5) {
+                posHistory.positions.shift(); // Remove oldest position
+              }
+              
+              // Check if enemy has moved significantly in last 3 seconds
+              if (posHistory.positions.length >= 2) {
+                const oldestPos = posHistory.positions[0];
+                const distanceX = Math.abs(currentPos.x - oldestPos.x);
+                const distanceZ = Math.abs(currentPos.z - oldestPos.z);
+                const totalDistance = Math.sqrt(distanceX * distanceX + distanceZ * distanceZ);
+                const timeElapsed = (currentPos.time - oldestPos.time) / 1000; // in seconds
+                
+                if (totalDistance < 0.1 && timeElapsed > 3) {
+                  // Enemy hasn't moved in 3 seconds - might be stuck
+                  posHistory.stuckCount++;
+                  
+                  if (posHistory.stuckCount >= 3) { // If stuck for 3 consecutive checks
+                    console.log(`Client detected stuck enemy ${enemy.id} - forcing movement`);
+                    
+                    // Apply a small random movement to the enemy
+                    const angle = Math.random() * Math.PI * 2;
+                    const distance = 0.1 + Math.random() * 0.2;
+                    
+                    enemy.instance.position.x += Math.cos(angle) * distance;
+                    enemy.instance.position.z += Math.sin(angle) * distance;
+                    
+                    // Reset stuck counter
+                    posHistory.stuckCount = 0;
+                    posHistory.lastMoved = Date.now();
+                    
+                    // Update position property
+                    if (enemy.position) {
+                      enemy.position.copy(enemy.instance.position);
+                    }
+                  }
+                } else {
+                  // Enemy is moving - reset stuck counter
+                  posHistory.stuckCount = 0;
+                  posHistory.lastMoved = Date.now();
+                }
+              }
+              
+              // Update health and state
+              enemy.health = enemyData.health;
+              enemy.state = enemyData.state;
+              enemy.insideRoom = enemyData.insideRoom || enemy.insideRoom;
+              
+              // Make sure enemy retains its functionality, especially if host is dead
+              if (!enemy.active && enemy.state !== 'dying') {
+                enemy.active = true;
+              }
+              
+              // Ensure enemies are properly moving/animated based on state
+              if (enemyData.state === 'moving' && enemy.state !== 'moving') {
+                if (typeof enemy.startMoving === 'function') enemy.startMoving();
+              } else if (enemyData.state === 'attacking' && enemy.state !== 'attacking') {
+                if (typeof enemy.startAttacking === 'function') enemy.startAttacking();
+              } else if (enemyData.state === 'dying' && enemy.state !== 'dying') {
+                if (typeof enemy.die === 'function') enemy.die();
+              }
+              
+              updatedCount++;
+            } else {
+              // Enemy doesn't exist on client, create it
+              console.log(`Creating missing enemy ${enemyData.id} from host data`);
+              this.spawnEnemyFromData(enemyData, enemyManager);
+              missingCount++;
+            }
+          });
+          
+          console.log(`Updated ${updatedCount} existing enemies, created ${missingCount} missing enemies`);
+          
+          // Remove enemies that don't exist on host anymore
+          const enemiesToRemove = enemyManager.enemies.filter(enemy => 
+            !state.enemies.some(e => e.id === enemy.id)
+          );
+          
+          if (enemiesToRemove.length > 0) {
+            console.log(`Removing ${enemiesToRemove.length} enemies that don't exist on host`);
+            enemiesToRemove.forEach(enemy => {
+              if (enemy.instance) {
+                if (typeof enemy.die === 'function') {
+                  enemy.die();
+                  // Force remove after a short delay
+                  setTimeout(() => {
+                    if (enemy.instance && this.gameEngine.scene.instance && typeof this.gameEngine.scene.instance.remove === 'function') {
+                      this.gameEngine.scene.instance.remove(enemy.instance);
+                    }
+                  }, 500);
+                } else {
+                  if (this.gameEngine.scene.instance && typeof this.gameEngine.scene.instance.remove === 'function') {
+                    this.gameEngine.scene.instance.remove(enemy.instance);
+                  }
+                }
+              }
+            });
+            
+            // Update enemies array
+            enemyManager.enemies = enemyManager.enemies.filter(enemy => 
+              state.enemies.some(e => e.id === enemy.id)
+            );
+          }
         }
+        
+        console.log(`========== CLIENT FINISHED ENEMY UPDATES ==========`);
+      }
+    }
+    
+    // Update round info
+    if (state.round && this.gameEngine.scene && this.gameEngine.scene.room && 
+        this.gameEngine.scene.room.enemyManager) {
+      const enemyManager = this.gameEngine.scene.room.enemyManager;
+      enemyManager.currentRound = state.round.round;
+      enemyManager.zombiesRemaining = state.round.zombiesRemaining;
+      enemyManager.roundActive = state.round.roundActive;
+      
+      // Update UI elements for round info
+      if (this.gameEngine.uiManager) {
+        this.gameEngine.uiManager.updateRoundInfo(
+          state.round.round, 
+          state.round.zombiesRemaining
+        );
+      }
+      
+      // If round active state changed, handle round transitions
+      if (enemyManager.roundActive !== state.round.roundActive) {
+        if (state.round.roundActive) {
+          console.log(`Client syncing: Round ${state.round.round} started`);
+          // Host started a new round, sync it
+          enemyManager.roundActive = true;
+        } else {
+          console.log(`Client syncing: Round ${state.round.round} ended`);
+          // Host ended a round, sync it
+          enemyManager.roundActive = false;
+        }
+      }
+    }
+    
+    // Update window states if necessary
+    if (state.windows && this.gameEngine.scene && this.gameEngine.scene.room) {
+      const room = this.gameEngine.scene.room;
+      if (Array.isArray(room.windows) && Array.isArray(state.windows)) {
+        console.log(`Updating window states from host data: Host sent ${state.windows.length} windows, local has ${room.windows.length}`);
+        
+        state.windows.forEach((windowData, index) => {
+          // Ensure window exists at this index
+          if (index >= room.windows.length) {
+            console.error(`Window index ${index} out of bounds (local has ${room.windows.length} windows)`);
+            return;
+          }
+          
+          if (room.windows[index]) {
+            const window = room.windows[index];
+            
+            // Set windowIndex if not already set
+            if (window.windowIndex === undefined) {
+              console.log(`Setting missing windowIndex ${index} on window`);
+              window.windowIndex = index;
+            }
+            
+            // Use the updateFromHostData method if available to respect pending actions
+            if (typeof window.updateFromHostData === 'function') {
+              window.updateFromHostData(windowData);
+            } else {
+              // Otherwise fallback to manual update
+              if (windowData.isOpen && !window.isOpen) {
+                console.log(`Window ${index} is now open (broken)`);
+                window.breakWindow();
+              }
+              
+              // Update board count - Add or remove boards to match host state
+              if (window.boardsCount !== windowData.boardsCount) {
+                console.log(`Syncing window ${index} boards: local=${window.boardsCount}, host=${windowData.boardsCount}`);
+                
+                // If we have fewer boards than the host, add boards
+                while (window.boardsCount < windowData.boardsCount) {
+                  console.log(`Adding board ${window.boardsCount + 1} to window ${index}`);
+                  window.addBoard();
+                }
+                
+                // If we have more boards than the host, remove boards
+                while (window.boardsCount > windowData.boardsCount) {
+                  console.log(`Removing board ${window.boardsCount} from window ${index}`);
+                  window.removeBoard();
+                }
+              }
+              
+              // Update board health values if provided
+              if (Array.isArray(windowData.health) && window.boardHealths) {
+                // Make sure arrays have same length
+                const oldHealths = [...window.boardHealths];
+                window.boardHealths = windowData.health.slice(0, window.boardsCount);
+                
+                console.log(`Updated window ${index} board health: ${JSON.stringify(oldHealths)} -> ${JSON.stringify(window.boardHealths)}`);
+                
+                // Update board appearance based on health
+                window.boardHealths.forEach((health, boardIndex) => {
+                  if (window.updateBoardAppearance) {
+                    window.updateBoardAppearance(boardIndex);
+                  }
+                });
+              }
+            }
+          } else {
+            console.error(`Window at index ${index} is null or undefined`);
+          }
+        });
       } else {
-        console.warn("Missing data for window updates:", {
-          stateWindows: !!state.windows,
-          scene: !!this.gameEngine.scene,
-          room: !!(this.gameEngine.scene && this.gameEngine.scene.room)
+        console.error("Cannot update windows: arrays not available", {
+          roomWindows: Array.isArray(room.windows),
+          stateWindows: Array.isArray(state.windows)
         });
       }
+    } else {
+      console.warn("Missing data for window updates:", {
+        stateWindows: !!state.windows,
+        scene: !!this.gameEngine.scene,
+        room: !!(this.gameEngine.scene && this.gameEngine.scene.room)
+      });
     }
   }
   
@@ -3060,158 +2857,5 @@ export class NetworkManager {
     });
     
     return anyAlive;
-  }
-  
-  /**
-   * Make an enemy continue moving along its current path instead of rubber banding
-   * @param {Object} enemy - The enemy object
-   * @param {number} deltaTime - Time elapsed since last update
-   */
-  continueEnemyMovement(enemy, deltaTime) {
-    // Simple movement in the direction the enemy is already facing
-    const forward = new THREE.Vector3(0, 0, 1);
-    forward.applyQuaternion(enemy.instance.quaternion);
-    forward.normalize();
-    
-    // Apply a small movement
-    const moveSpeed = 0.5; // Reduced speed
-    enemy.instance.position.x += forward.x * moveSpeed * deltaTime;
-    enemy.instance.position.z += forward.z * moveSpeed * deltaTime;
-    
-    // Also update the enemy.position property
-    if (enemy.position) {
-      enemy.position.copy(enemy.instance.position);
-    }
-    
-    // Occasionally log that we're continuing movement
-    if (Math.random() < 0.1) {
-      console.log(`🚶 Continuing movement for enemy ${enemy.id}: [${enemy.instance.position.x.toFixed(2)}, ${enemy.instance.position.y.toFixed(2)}, ${enemy.instance.position.z.toFixed(2)}]`);
-    }
-  }
-  
-  /**
-   * Check if the host is dead based on game state
-   * @param {Object} state - The game state
-   * @returns {boolean} - Whether the host is dead
-   * @private
-   */
-  _isHostDead(state) {
-    if (!state) return false;
-    
-    // Check if there's a direct indicator in the state
-    if (state.hostIsDead !== undefined) {
-      return state.hostIsDead;
-    }
-    
-    // Check for host player in the state
-    if (state.players && this.network.hostId) {
-      const hostState = state.players.find(p => p.id === this.network.hostId);
-      if (hostState && hostState.isDead) {
-        return true;
-      }
-    }
-    
-    // Check our local knowledge of the host
-    if (this.remotePlayers && this.network.hostId) {
-      const hostPlayer = this.remotePlayers.get(this.network.hostId);
-      if (hostPlayer && hostPlayer.isDead) {
-        return true;
-      }
-    }
-    
-    return false;
-  }
-  
-  /**
-   * Register a new enemy from network data
-   * @param {Object} enemyData - Enemy data from network
-   * @returns {Enemy|null} - The created enemy or null if failed
-   * @private
-   */
-  registerEnemy(enemyData) {
-    if (!this.gameEngine || !this.gameEngine.scene || !this.gameEngine.scene.room) {
-      console.error("Cannot register enemy: game engine, scene, or room is not available");
-      return null;
-    }
-    
-    // Ensure the enemies array exists on the room object
-    if (!this.gameEngine.scene.room.enemies) {
-      this.gameEngine.scene.room.enemies = [];
-    }
-    
-    // Skip if enemy already exists
-    const existingEnemy = this.gameEngine.scene.room.enemies.find(e => e.id === enemyData.id);
-    if (existingEnemy) {
-      return existingEnemy;
-    }
-    
-    // Create new enemy instance based on data
-    try {
-      // Determine type of enemy to spawn
-      const enemyType = enemyData.type || "standard";
-      
-      // Create the enemy instance
-      let enemy;
-      
-      // Use the enemy factory to create the right type
-      if (enemyType === "standard") {
-        enemy = new Enemy(null); // No target window yet
-      } else if (enemyType === "runner") {
-        enemy = new RunnerZombie(null);
-      } else if (enemyType === "crawler") {
-        enemy = new CrawlingZombie(null);
-      } else if (enemyType === "spitter") {
-        enemy = new SpitterZombie(null);
-      } else {
-        // Fallback to standard enemy
-        enemy = new Enemy(null);
-      }
-      
-      // Set properties from network data
-      enemy.id = enemyData.id;
-      enemy.health = enemyData.health || 100;
-      enemy.position = new THREE.Vector3(
-        enemyData.position.x,
-        enemyData.position.y,
-        enemyData.position.z
-      );
-      
-      // Set inside room flag if provided
-      if (enemyData.insideRoom !== undefined) {
-        enemy.insideRoom = enemyData.insideRoom;
-      }
-      
-      // Set state if provided
-      if (enemyData.state) {
-        enemy.state = enemyData.state;
-      }
-      
-      // Initialize the enemy
-      enemy.init();
-      
-      // Set the enemy's position from the network data
-      enemy.instance.position.copy(enemy.position);
-      
-      // Set target window if provided
-      if (enemyData.targetWindow !== null && enemyData.targetWindow !== undefined) {
-        const windowIndex = enemyData.targetWindow.index;
-        if (windowIndex >= 0 && windowIndex < this.gameEngine.scene.room.windows.length) {
-          enemy.targetWindow = this.gameEngine.scene.room.windows[windowIndex];
-        }
-      }
-      
-      // Add enemy to the scene
-      this.gameEngine.scene.instance.add(enemy.instance);
-      
-      // Add to the room's enemies array
-      this.gameEngine.scene.room.enemies.push(enemy);
-      
-      console.log(`🧟 Registered new enemy ${enemy.id} of type ${enemyType} at position [${enemy.position.x.toFixed(2)}, ${enemy.position.y.toFixed(2)}, ${enemy.position.z.toFixed(2)}]`);
-      
-      return enemy;
-    } catch (error) {
-      console.error("Error registering enemy:", error);
-      return null;
-    }
   }
 } 
