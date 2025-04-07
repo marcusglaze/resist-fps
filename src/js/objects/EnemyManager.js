@@ -222,6 +222,7 @@ export class EnemyManager {
     
     // Check if there are living remote players when the host player is dead
     let hasLivingRemotePlayers = false;
+    let isClientControlActive = false;
     
     if (this.player && this.player.isDead && this.gameEngine && this.gameEngine.networkManager) {
       const remotePlayers = this.gameEngine.networkManager.remotePlayers;
@@ -236,6 +237,11 @@ export class EnemyManager {
       if (hasLivingRemotePlayers) {
         console.log("HOST PLAYER DEAD BUT REMOTE PLAYERS ALIVE: CONTINUING ENEMY UPDATES");
       }
+      
+      // Check if client control takeover is active
+      if (this.gameEngine.networkManager.network && this.gameEngine.networkManager.network._deadHostClientTakeover) {
+        isClientControlActive = true;
+      }
     }
     
     // Flag to force enemies to continue updating
@@ -243,6 +249,17 @@ export class EnemyManager {
     
     // Update all existing enemies
     this.enemies.forEach(enemy => {
+      // Special case for client-controlled enemies
+      if (enemy._clientControlled && isClientControlActive) {
+        // Limited update - don't change position, just update internal state
+        if (enemy.updateHealthBar) {
+          enemy.updateHealthBar();
+        }
+        
+        // Skip all movement updates - the client will control this enemy
+        return;
+      }
+      
       // Update if:
       // 1. Enemy is flagged to force continue
       // 2. Host player is alive
