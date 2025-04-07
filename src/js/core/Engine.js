@@ -545,19 +545,11 @@ export class Engine {
       if (hasLivingRemotePlayers) {
         console.log("Not pausing enemies because there are still living remote players");
         shouldPauseEnemies = false;
-        
-        // Make sure enemies are definitely UNPAUSED if there are remote players still alive
-        if (this.scene && this.scene.room && this.scene.room.enemyManager) {
-          if (this.scene.room.enemyManager.isPaused) {
-            console.log("Explicitly unpausing enemies because there are still living remote players");
-            this.scene.room.enemyManager.setPaused(false);
-          }
-        }
       }
     }
     
     // Pause all enemies if needed
-    if (shouldPauseEnemies && this.scene && this.scene.room && this.scene.room.enemyManager) {
+    if (shouldPauseEnemies && this.scene.room && this.scene.room.enemyManager) {
       console.log("Pausing all enemies - no living players remaining");
       this.scene.room.enemyManager.setPaused(true);
     }
@@ -593,46 +585,10 @@ export class Engine {
       if (allPlayersDead) {
         console.log("Host: All players are dead, showing game over screen");
         this.showMultiplayerHostGameOverScreen();
-        
-        // Force an immediate game state update to clients to ensure they know all players are dead
-        if (this.networkManager.network && this.networkManager.network.broadcastGameState) {
-          console.log("Host: Broadcasting final game state with allPlayersDead=true");
-          this.networkManager.network.broadcastGameState(true);
-        }
       } else {
         // Not all players dead - show spectate screen
         console.log("Host: Not all players dead, showing spectate screen");
         this.showMultiplayerSpectateScreen();
-        
-        // Set a timer to periodically check if all players become dead while in spectator mode
-        if (!this._gameOverCheckInterval) {
-          this._gameOverCheckInterval = setInterval(() => {
-            // Skip if we're no longer in spectator mode or game is already fully over
-            if (!this.isSpectatorMode || !this.isGameOver) {
-              clearInterval(this._gameOverCheckInterval);
-              this._gameOverCheckInterval = null;
-              return;
-            }
-            
-            // Check again if all players are now dead
-            const nowAllDead = this.checkAllPlayersDead();
-            if (nowAllDead) {
-              console.log("Host: All players are now dead (delayed check), showing game over screen");
-              // Clear the interval
-              clearInterval(this._gameOverCheckInterval);
-              this._gameOverCheckInterval = null;
-              
-              // Switch to game over screen
-              this.disableSpectatorMode();
-              this.showMultiplayerHostGameOverScreen();
-              
-              // Force an immediate game state update to clients
-              if (this.networkManager.network && this.networkManager.network.broadcastGameState) {
-                this.networkManager.network.broadcastGameState(true);
-              }
-            }
-          }, 1000); // Check every second
-        }
       }
     } else {
       // For clients, check if all players are dead according to latest game state
@@ -663,35 +619,6 @@ export class Engine {
         // Not all players dead - show spectate screen
         console.log("Client: Not all players dead, showing spectate screen");
         this.showMultiplayerSpectateScreen();
-        
-        // Set a timer to periodically check if all players become dead while in spectator mode
-        if (!this._gameOverCheckInterval) {
-          this._gameOverCheckInterval = setInterval(() => {
-            // Skip if we're no longer in spectator mode or game is already showing game over
-            if (!this.isSpectatorMode || document.getElementById('game-over-menu')) {
-              clearInterval(this._gameOverCheckInterval);
-              this._gameOverCheckInterval = null;
-              return;
-            }
-            
-            // Recheck if all players are now dead
-            const localDead = this.controls && this.controls.isDead;
-            const hostDead = this.networkManager.getHostPlayerState()?.isDead || false;
-            const otherAlive = this.networkManager.isAnyRemotePlayerAlive();
-            const nowAllDead = localDead && hostDead && !otherAlive;
-            
-            if (nowAllDead) {
-              console.log("Client: All players are now dead (delayed check), showing game over screen");
-              // Clear the interval
-              clearInterval(this._gameOverCheckInterval);
-              this._gameOverCheckInterval = null;
-              
-              // Switch to game over screen
-              this.disableSpectatorMode();
-              this.networkManager.showMultiplayerGameOverScreen(true);
-            }
-          }, 1000); // Check every second
-        }
       }
     }
   }
@@ -703,29 +630,17 @@ export class Engine {
   checkAllPlayersDead() {
     if (!this.networkManager) return true;
     
-    // First check if local player is alive
-    const localPlayerDead = this.controls && this.controls.isDead;
-    
-    if (!localPlayerDead) {
-      console.log("Local player is still alive");
-      return false; // Local player is still alive, not all players are dead
-    }
-    
-    console.log("Local player is dead, checking remote players");
-    
-    // Then check remote players
+    // The local player is dead (since endGame was called)
     let anyPlayersAlive = false;
     
+    // Check remote players
     this.networkManager.remotePlayers.forEach(player => {
       if (!player.isDead) {
         anyPlayersAlive = true;
-        console.log(`Remote player is still alive`);
       }
     });
     
-    const allDead = !anyPlayersAlive;
-    console.log(`All players dead check result: ${allDead}`);
-    return allDead;
+    return !anyPlayersAlive;
   }
   
   /**
@@ -992,12 +907,6 @@ export class Engine {
     // Add to the document
     document.body.appendChild(spectateContainer);
     
-    // IMPORTANT: Make sure enemies are not paused when in spectator mode
-    if (this.scene && this.scene.room && this.scene.room.enemyManager) {
-      console.log("Explicitly unpausing enemies for spectator mode");
-      this.scene.room.enemyManager.setPaused(false);
-    }
-    
     // Enable spectator camera to follow surviving players
     this.enableSpectatorMode();
   }
@@ -1036,15 +945,6 @@ export class Engine {
     
     // Hide UI elements that shouldn't be visible in spectator mode
     this.hidePlayerUI();
-    
-    // Ensure enemies are not paused while spectating
-    if (this.scene && this.scene.room && this.scene.room.enemyManager) {
-      // Double-check that enemies are not paused
-      if (this.scene.room.enemyManager.isPaused) {
-        console.log("Found enemies paused during spectator mode - unpausing");
-        this.scene.room.enemyManager.setPaused(false);
-      }
-    }
     
     // Set up an interval to update the spectator camera position
     this.spectatorInterval = setInterval(() => {
@@ -1087,15 +987,6 @@ export class Engine {
         // Set camera rotation to match player's looking direction
         if (targetPlayer.position.rotationY !== undefined) {
           this.controls.camera.rotation.y = targetPlayer.position.rotationY;
-        }
-      }
-      
-      // Periodically check if enemies are still unpaused (every 2 seconds)
-      if (this.scene && this.scene.room && this.scene.room.enemyManager && 
-          Math.random() < 0.04) { // ~4% chance per frame (roughly every 2-3 seconds)
-        if (this.scene.room.enemyManager.isPaused) {
-          console.log("Enemies became paused during spectator mode - unpausing");
-          this.scene.room.enemyManager.setPaused(false);
         }
       }
     }, 50); // Update 20 times per second

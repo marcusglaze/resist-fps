@@ -757,93 +757,150 @@ export class NetworkManager {
   
   /**
    * Update a remote player's position
-   * @param {string} playerId - The player ID
-   * @param {Object} position - The position data
+   * @param {string} playerId - The ID of the player to update
+   * @param {Object} position - The new position data
    */
   updateRemotePlayerPosition(playerId, position) {
-    // Check if we have a player object for this ID already
-    if (!this.remotePlayers.has(playerId)) {
-      console.log(`Creating new remote player for ${playerId}`);
-      this.createRemotePlayer(playerId);
+    // Get the player data
+    let playerData = this.remotePlayers.get(playerId);
+    
+    // If this is a new player, add them
+    if (!playerData) {
+      this.addRemotePlayer(playerId);
+      playerData = this.remotePlayers.get(playerId);
     }
     
-    const player = this.remotePlayers.get(playerId);
-    
-    // Detect and handle death state changes
-    if (position.isDead !== undefined && player.isDead !== position.isDead) {
-      console.log(`Remote player ${playerId} death state changed: ${position.isDead}`);
-      player.isDead = position.isDead;
+    // Check for significant position changes (to detect teleporting or other issues)
+    if (playerData.position && position.x !== undefined) {
+      const distance = Math.sqrt(
+        Math.pow(position.x - playerData.position.x, 2) +
+        Math.pow(position.y - playerData.position.y, 2) +
+        Math.pow(position.z - playerData.position.z, 2)
+      );
       
-      // If player died, handle special effects
-      if (position.isDead) {
-        // Play death sound or show effect if needed
+      // Log larger movements to help with debugging
+      if (distance > 10) {
+        console.log(`Large player movement detected for ${playerId}: ${distance.toFixed(2)} units`);
+      }
+    }
+    
+    // Update the player's position and weapon info
+    playerData.position = position;
+    playerData.lastUpdate = Date.now();
+    
+    // Update health and status if provided
+    if (position.health !== undefined) {
+      playerData.health = position.health;
+    }
+    
+    // Track death state changes explicitly with logging
+    if (position.isDead !== undefined) {
+      const wasDeadBefore = playerData.isDead;
+      playerData.isDead = position.isDead;
+      
+      // Log state changes
+      if (wasDeadBefore !== position.isDead) {
+        console.log(`Remote player ${playerId} death state changed: isDead=${position.isDead}`);
         
-        // Check if all players are now dead (both local and all remote)
-        if (this.gameEngine.controls.isDead) {
-          // Check if we're the host
-          if (this.network.isHost) {
-            const allDead = this.network.areAllPlayersDead();
-            console.log(`Host player is dead, remote player died, all players dead check: ${allDead}`);
-            if (allDead) {
-              // Show game over screen
-              this.gameEngine.showMultiplayerHostGameOverScreen();
-            }
-          } else {
-            // We're a client and we're dead, and someone else just died
-            // Check if the host is dead too
-            let hostIsDead = false;
-            this.remotePlayers.forEach((player, id) => {
-              if (id === this.network.hostId && player.isDead) {
-                hostIsDead = true;
-              }
-            });
-            
-            // Check if any other players are still alive
-            let anyPlayersAlive = false;
-            this.remotePlayers.forEach((player, id) => {
-              if (id !== this.network.hostId && !player.isDead) {
-                anyPlayersAlive = true;
-              }
-            });
-            
-            console.log(`Client death check: I'm dead, host is ${hostIsDead ? 'dead' : 'alive'}, anyPlayersAlive=${anyPlayersAlive}`);
-            
-            // If our client is dead, and the host is dead, and no other players are alive
-            // Then all players are dead and we should show the game over screen
-            if (hostIsDead && !anyPlayersAlive) {
-              console.log("CLIENT DETECTED ALL PLAYERS DEAD - showing game over screen");
-              this.showMultiplayerGameOverScreen(true);
+        // If player was dead but is now alive, ensure health is reset to full
+        if (wasDeadBefore && !position.isDead) {
+          console.log(`Remote player ${playerId} respawned, resetting health to 100`);
+          playerData.health = 100;
+          
+          // Publish debug message to confirm respawn
+          if (this.gameEngine && this.gameEngine.ui && typeof this.gameEngine.ui.showDebugMessage === 'function') {
+            this.gameEngine.ui.showDebugMessage(`Player ${playerId} respawned`, 3000);
+          }
+        }
+      }
+      
+      // If the player just died, update their model to show death state
+      if (position.isDead && !playerData.wasDeadLastUpdate) {
+        console.log(`Player ${playerId} died, updating visual state`);
+        this.updatePlayerDeathState(playerId, true);
+      } else if (!position.isDead && playerData.wasDeadLastUpdate) {
+        // Player was respawned
+        console.log(`Player ${playerId} respawned, updating visual state`);
+        this.updatePlayerDeathState(playerId, false);
+      }
+      
+      playerData.wasDeadLastUpdate = position.isDead;
+    }
+    
+    // Save weapon info if provided
+    if (position.weapon) {
+      playerData.weapon = position.weapon;
+    }
+    
+    // Update the player's model
+    const model = this.playerModels.get(playerId);
+    if (model) {
+      // Update position and rotation
+      model.position.set(position.x, position.y, position.z);
+      model.rotation.y = position.rotationY;
+      
+      // If player was recently respawned, double-check that the visual state is correct
+      if (playerData.wasDeadLastUpdate === false && playerData.isDead === false) {
+        // Ensure the player is visually shown as alive
+        this.updatePlayerDeathState(playerId, false);
+      }
+      
+      // Update weapon visualization if weapon info is available
+      if (position.weapon && position.weapon.type) {
+        // Find the gun mesh
+        const gun = model.children.find(child => child.userData && child.userData.type === 'gun');
+        if (gun) {
+          // Update gun appearance based on weapon type
+          switch (position.weapon.type) {
+            case 'ASSAULT_RIFLE':
+              gun.scale.set(0.1, 0.1, 0.8); // Longer for rifle
+              break;
+            case 'SHOTGUN':
+              gun.scale.set(0.12, 0.12, 0.6); // Thicker for shotgun
+              break;
+            default: // PISTOL
+              gun.scale.set(0.1, 0.1, 0.5); // Default size
+          }
+          
+          // Show firing effect if the player is firing
+          if (position.weapon.isFiring) {
+            if (!gun.userData.muzzleFlash) {
+              // Create muzzle flash if it doesn't exist
+              const muzzleGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+              const muzzleMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xffff00,
+                transparent: true,
+                opacity: 0.8
+              });
+              const muzzleFlash = new THREE.Mesh(muzzleGeometry, muzzleMaterial);
+              muzzleFlash.position.z = gun.scale.z + 0.1; // Position at end of gun
+              gun.add(muzzleFlash);
+              gun.userData.muzzleFlash = muzzleFlash;
+              
+              // Hide after a short time
+              setTimeout(() => {
+                if (gun.userData.muzzleFlash) {
+                  gun.userData.muzzleFlash.visible = false;
+                }
+              }, 100);
+            } else {
+              // Make existing muzzle flash visible
+              gun.userData.muzzleFlash.visible = true;
+              
+              // Hide after a short time
+              setTimeout(() => {
+                if (gun.userData.muzzleFlash) {
+                  gun.userData.muzzleFlash.visible = false;
+                }
+              }, 100);
             }
           }
         }
       }
     }
     
-    // Update the player's position, health, etc.
-    player.position = position;
-    
-    // Update player health
-    if (position.health !== undefined) {
-      player.health = position.health;
-    }
-    
-    // Update player visual representation if it exists
-    if (player.model) {
-      // Update model position
-      player.model.position.set(position.x, position.y, position.z);
-      
-      // Update model rotation if available
-      if (position.rotationY !== undefined) {
-        player.model.rotation.y = position.rotationY;
-      }
-      
-      // Show/hide player model based on death state
-      if (position.isDead && player.model.visible) {
-        player.model.visible = false;
-      } else if (!position.isDead && !player.model.visible) {
-        player.model.visible = true;
-      }
-    }
+    // Update any enemies targeting this player
+    this.updateEnemyTargeting(playerId, position, playerData.isDead);
   }
   
   /**
@@ -1956,11 +2013,6 @@ export class NetworkManager {
           console.log("All other players are dead, but client is still alive");
         }
       }
-    } else if (status.allPlayersDead && !this.gameEngine.isGameOver) {
-      // Special case: if host sends allPlayersDead=true but we haven't processed isGameOver yet
-      // This helps in the scenario where both host and client die in close succession
-      console.log("All players dead signal received, showing game over screen");
-      this.showMultiplayerGameOverScreen(true);
     }
     
     // Handle pause state
@@ -2631,33 +2683,35 @@ export class NetworkManager {
   }
   
   /**
-   * Get the host player's state
-   * @returns {Object|null} The host player state, or null if not found
+   * Get the host player's current state
+   * @returns {Object|null} The host player's state or null if not found
    */
   getHostPlayerState() {
-    if (!this.network || !this.network.hostId || !this.remotePlayers) {
+    if (!this.network || !this.network.hostId) {
+      console.log("Cannot get host player state: network or hostId not available");
       return null;
     }
     
     // If we are the host, return our own state
-    if (this.network.isHost) {
+    if (this.isHost) {
       return {
-        isDead: this.gameEngine.controls.isDead,
         health: this.gameEngine.controls.health,
-        position: {
-          x: this.gameEngine.controls.camera.position.x,
-          y: this.gameEngine.controls.camera.position.y,
-          z: this.gameEngine.controls.camera.position.z
-        }
+        isDead: this.gameEngine.controls.isDead
       };
     }
     
-    // Otherwise find the host in remote players
-    return this.remotePlayers.get(this.network.hostId) || null;
+    // Otherwise look for the host in remotePlayers
+    const hostData = this.remotePlayers.get(this.network.hostId);
+    if (!hostData) {
+      console.log(`Host player data not found for ID: ${this.network.hostId}`);
+      return null;
+    }
+    
+    return hostData;
   }
   
   /**
-   * Check if any remote player is alive
+   * Check if any remote player (excluding host) is alive
    * @returns {boolean} True if any remote player is alive
    */
   isAnyRemotePlayerAlive() {
@@ -2666,11 +2720,13 @@ export class NetworkManager {
     }
     
     let anyAlive = false;
+    const hostId = this.network ? this.network.hostId : null;
     
-    this.remotePlayers.forEach((player, id) => {
-      // Skip the host player when checking for "other" alive players
-      if (!player.isDead && id !== this.network.hostId) {
+    this.remotePlayers.forEach((player, playerId) => {
+      // Skip the host player in this check
+      if (playerId !== hostId && !player.isDead) {
         anyAlive = true;
+        console.log(`Found alive remote player: ${playerId}`);
       }
     });
     
