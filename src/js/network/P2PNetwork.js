@@ -16,21 +16,8 @@ export class P2PNetwork {
     this.onGameStateUpdate = null;
     this.onError = null;
     this.lastStateSent = 0;
-    this.lastStateSentLog = 0; // For throttling log messages
-    this.stateUpdateInterval = 1000; // Send updates every second
+    this.stateUpdateInterval = 50; // ms between state updates
     this.peerJSLoaded = false;
-    
-    // Direct reference to the host connection (for clients)
-    this.hostConnection = null;
-    
-    // Add debounce mechanism for client actions
-    this.lastClientActionTime = 0;
-    this.clientActionDebounceTime = 500; // ms to wait after client action before broadcasting state
-    
-    // Tracking for reliable action delivery
-    this._pendingActions = {};
-    this._maxActionRetries = 5;
-    this._actionRetryInterval = 150; // ms
     
     // Add window close handler to ensure proper cleanup
     window.addEventListener('beforeunload', this._handleWindowClose.bind(this));
@@ -41,8 +28,6 @@ export class P2PNetwork {
     } else {
       this.peerJSLoaded = true;
     }
-    
-    console.log("NETWORK: P2PNetwork constructor initialized");
   }
   
   /**
@@ -366,10 +351,6 @@ export class P2PNetwork {
           conn.on('open', () => {
             console.log('Connected to host:', hostId);
             this.connections.push(conn);
-            
-            // Store a direct reference to the host connection for easier access
-            this.hostConnection = conn;
-            
             this.isConnected = true;
             
             // Set up event handlers
@@ -379,7 +360,6 @@ export class P2PNetwork {
               console.log('Disconnected from host');
               this.isConnected = false;
               this.connections = [];
-              this.hostConnection = null; // Clear the host connection reference
               
               if (this.onPlayerLeft) {
                 this.onPlayerLeft(hostId);
@@ -448,211 +428,85 @@ export class P2PNetwork {
   handleData(data, conn) {
     console.log('Received data:', data.type);
     
-    if (!data || !data.type) {
-      console.warn('Invalid data received, missing type:', data);
-      return;
-    }
-    
-    try {
-      switch(data.type) {
-        case 'gameState':
-          // Received a game state update from the host
-          if (!this.isHost && this.gameEngine && this.onGameStateUpdate) {
-            this.onGameStateUpdate(data.state);
-          }
-          break;
+    switch (data.type) {
+      case 'gameState':
+        // Update game state with data from host
+        if (this.onGameStateUpdate) {
+          this.onGameStateUpdate(data.state);
+        }
+        break;
+        
+      case 'playerAction':
+        // Handle a player action (shooting, movement, etc.)
+        this.handlePlayerAction(data.action, conn.peer);
+        break;
+        
+      case 'playerPosition':
+        // Update a remote player's position
+        this.updatePlayerPosition(data.position, conn.peer);
+        break;
+        
+      case 'chat':
+        // Handle chat messages
+        if (data.message && data.sender) {
+          this.handleChatMessage(data.message, data.sender);
+        }
+        break;
+        
+      case 'hostAction':
+        // Host is performing an action like pausing or restarting
+        this.handleHostAction(data.action);
+        break;
+        
+      case 'respawnPlayer':
+        // Host is respawning a player
+        if (data.playerId && this.isConnected && !this.isHost && 
+            data.playerId === this.clientId) {
+          this.handleRespawn();
+        }
+        break;
+        
+      case 'hostDisconnect':
+        // Host is disconnecting, clean up
+        console.log("Host is disconnecting:", data.message);
+        if (!this.isHost) {
+          // If we're a client and the host is disconnecting, we should disconnect too
+          this.disconnect();
           
-        case 'playerAction':
-          // Handle a player action (host only)
-          if (this.isHost && data.clientId && data.actionType && data.actionData) {
-            this.handlePlayerAction(data.clientId, data);
+          // Show a message to the player
+          if (this.gameEngine && this.gameEngine.ui) {
+            this.gameEngine.ui.showMessage("Host disconnected", "The game host has left the game.");
           }
-          break;
-          
-        case 'actionResult':
-          // Handle the result of an action (success/failure)
-          if (!this.isHost && data.actionId) {
-            console.log(`NETWORK: Received result for action ${data.actionId}: ${data.result}`);
-            
-            // Process any specific result data
-            if (data.actionType === 'damageEnemy') {
-              // Handle enemy damage result
-              this.handleEnemyDamageConfirmation(data.resultData);
-            } else if (data.actionType === 'addWindowBoard') {
-              // Handle window boarding result
-              console.log("NETWORK: Received window boarding result", data.resultData);
-              if (this.gameEngine && this.gameEngine.scene && this.gameEngine.scene.room) {
-                const room = this.gameEngine.scene.room;
-                
-                // Find the window and update it with result data
-                if (data.resultData && data.resultData.windowIndex !== undefined) {
-                  const windowIndex = data.resultData.windowIndex;
-                  if (room.windows && room.windows[windowIndex]) {
-                    console.log(`NETWORK: Updating window ${windowIndex} with result data`);
-                    const window = room.windows[windowIndex];
-                    if (typeof window.handleActionResult === 'function') {
-                      window.handleActionResult(data.resultData);
-                    } else {
-                      console.warn("NETWORK: Window doesn't have handleActionResult method");
-                    }
-                  }
-                }
-              }
-            }
-          }
-          break;
-          
-        case 'actionAck':
-          // Handle acknowledgment for a player action
-          if (!this.isHost && data.actionId) {
-            console.log(`NETWORK: Received acknowledgment for action ${data.actionId}`);
-            this.confirmAction(data.actionId);
-          }
-          break;
+        }
+        break;
         
-        case 'playerPosition':
-          // Update a remote player's position
-          this.updatePlayerPosition(data.position, conn.peer);
-          break;
-        
-        case 'chat':
-          // Handle chat messages
-          if (data.message && data.sender) {
-            this.handleChatMessage(data.message, data.sender);
-          }
-          break;
-        
-        case 'hostAction':
-          // Host is performing an action like pausing or restarting
-          this.handleHostAction(data.action);
-          break;
-        
-        case 'respawnPlayer':
-          // Host is respawning a player
-          if (data.playerId && this.isConnected && !this.isHost && 
-              data.playerId === this.clientId) {
-            this.handleRespawn();
-          }
-          break;
-        
-        case 'enemyDamageConfirmed':
-          // Host confirmed damage to an enemy
-          if (!this.isHost && this.gameEngine) {
-            this.handleEnemyDamageConfirmation(data);
-          }
-          break;
-        
-        case 'enemyDamageError':
-          // Host reported error with enemy damage
-          if (!this.isHost) {
-            console.warn(`Error damaging enemy: ${data.error} (Enemy ID: ${data.enemyId})`);
-          }
-          break;
-        
-        case 'windowUpdated':
-          // Handle window update event
-          if (!this.isHost && this.gameEngine && this.gameEngine.networkManager) {
-            console.log("Received window update event, forwarding to NetworkManager");
-            this.gameEngine.networkManager.handleWindowUpdate(data);
-          }
-          break;
-        
-        case 'gameRestart':
-          // Game is being restarted by the host
-          console.log("Received game restart message from host");
-          if (!this.isHost && this.gameEngine) {
-            this.handleGameRestart(data);
-          }
-          break;
-        
-        case 'hostDisconnect':
-          // Host is disconnecting, clean up
-          console.log("Host is disconnecting:", data.message);
-          if (!this.isHost) {
-            // If we're a client and the host is disconnecting, we should disconnect too
-            this.disconnect();
-            
-            // Show a message to the player
-            if (this.gameEngine && this.gameEngine.ui) {
-              this.gameEngine.ui.showMessage("Host disconnected", "The game host has left the game.");
-            }
-          }
-          break;
-        
-        default:
-          console.warn('Unknown data type received:', data.type);
-      }
-    } catch (error) {
-      console.error('Error handling received data:', error);
+      default:
+        console.warn('Unknown data type received:', data.type);
     }
   }
   
   /**
    * Handle a player action
-   * @param {string} playerId - The player ID
-   * @param {Object} data - The action data
+   * @param {Object} action - The action data
+   * @param {string} playerId - The ID of the player who performed the action
    */
-  handlePlayerAction(playerId, data) {
-    // Log all received actions clearly with distinctive markers
-    console.log("⭐⭐⭐ HOST RECEIVED PLAYER ACTION ⭐⭐⭐");
-    console.log(`Action type: ${data.actionType}, from player: ${playerId}`);
-    console.log("Action data:", data.actionData);
+  handlePlayerAction(action, playerId) {
+    // This would be implemented based on the game mechanics
+    console.log(`Player ${playerId} performed action:`, action);
     
-    if (!this.isHost) {
-      console.warn("Received player action but not host - ignoring");
-      return;
+    // Handle specific action types
+    if (action.type === 'damageEnemy' && this.isHost) {
+      // Apply damage to the enemy if we're the host
+      this.applyEnemyDamage(action.data, playerId);
     }
     
-    try {
-      // Process the action based on type
-      let result = null;
-      
-      switch (data.actionType) {
-        case 'damageEnemy':
-          result = this.applyEnemyDamage(data.actionData, playerId);
-          break;
-          
-        case 'addWindowBoard':
-          console.log("HOST: Processing window boarding action from client", data.actionData);
-          result = this.applyWindowBoarding(data.actionData, playerId);
-          
-          if (result) {
-            console.log("HOST: Window boarding successful, sending confirmation", result);
-          } else {
-            console.warn("HOST: Window boarding failed, sending failure notification");
-          }
-          break;
-          
-        case 'damageWindowBoard':
-          result = this.applyWindowBoardDamage(data.actionData, playerId);
-          break;
-          
-        // ... other action types ...
-          
-        default:
-          console.warn(`Unknown player action type: ${data.actionType}`);
-      }
-      
-      // Send confirmation to the client that their action was processed
-      if (data.actionId) {
-        // Find the connection for this player
-        const playerConn = this.connections.find(conn => conn.peer === playerId);
-        
-        if (playerConn) {
-          const confirmationMessage = {
-            type: 'actionResult',
-            actionId: data.actionId,
-            actionType: data.actionType,
-            result: result ? 'success' : 'failure',
-            resultData: result
-          };
-          
-          console.log(`Sending action confirmation to player ${playerId}:`, confirmationMessage);
-          playerConn.send(confirmationMessage);
-        }
-      }
-    } catch (error) {
-      console.error("Error handling player action:", error);
+    // If we're the host, broadcast this to all other clients
+    if (this.isHost) {
+      this.broadcastToOthers({
+        type: 'playerAction',
+        action: action,
+        playerId: playerId
+      }, playerId);
     }
   }
   
@@ -660,279 +514,43 @@ export class P2PNetwork {
    * Apply damage to an enemy from a client request (host only)
    * @param {Object} damageData - The damage data
    * @param {string} playerId - The ID of the player who did the damage
-   * @returns {Object|null} Result data for the action, or null if failed
    */
   applyEnemyDamage(damageData, playerId) {
     if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
         !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
       console.warn("Cannot apply enemy damage: not host or game scene not fully initialized");
-      return null;
+      return;
     }
     
-    // Record the time of this client action to prevent immediate state overrides
-    this.lastClientActionTime = Date.now();
-    
     try {
-      const { enemyId, damage, isHeadshot, originalHealth, newHealth, isDead, timestamp } = damageData;
-      
-      if (!enemyId) {
-        console.error("Invalid enemy damage data: missing enemyId", damageData);
-        return null;
-      }
-      
-      console.log(`NETWORK: Host applying damage from client ${playerId}: ${damage} to enemy ${enemyId} (headshot: ${isHeadshot}, client health: ${newHealth}, timestamp: ${timestamp})`);
+      const { enemyId, damage, isHeadshot } = damageData;
+      console.log(`Host applying damage from client ${playerId}: ${damage} to enemy ${enemyId} (headshot: ${isHeadshot})`);
       
       // Find the enemy by ID
       const enemyManager = this.gameEngine.scene.room.enemyManager;
-      
-      // Log info about all available enemies to help with debugging
-      console.log(`Current enemies: ${enemyManager.enemies.length}`, 
-                  enemyManager.enemies.map(e => e.id).join(', '));
-      
       const enemy = enemyManager.enemies.find(e => e.id === enemyId);
       
       if (enemy) {
-        // Store health before damage for comparison
-        const healthBefore = enemy.health;
-        
         // Apply damage to the enemy
         enemy.takeDamage(damage);
-        
-        // Calculate actual damage applied (in case of limits or other factors)
-        const actualDamage = healthBefore - enemy.health;
-        
-        console.log(`NETWORK: Applied ${actualDamage} damage to enemy ${enemyId}, health changed from ${healthBefore} to ${enemy.health}`);
-        
-        // Create result data
-        const resultData = {
-          enemyId: enemyId,
-          damage: actualDamage,
-          health: enemy.health,
-          isDead: enemy.health <= 0,
-          isHeadshot: isHeadshot,
-          timestamp: timestamp || Date.now(),
-          // Add comparison with client data
-          clientHealth: newHealth,
-          healthDifference: newHealth - enemy.health,
-          clientIsDead: isDead
-        };
-        
-        // Send confirmation of damage back to ALL clients
-        // This ensures everyone sees consistent enemy health
-        this.broadcastToAll({
-          type: 'enemyDamageConfirmed',
-          ...resultData
-        });
+        console.log(`Applied ${damage} damage to enemy ${enemyId}, health now: ${enemy.health}`);
         
         // Ensure immediate state update to all clients
         if (enemy.health <= 0) {
-          console.log(`NETWORK: Enemy ${enemyId} killed by client ${playerId}`);
+          console.log(`Enemy ${enemyId} killed by client ${playerId}`);
           
-          // Force a game state update after the debounce period
+          // Force a game state update after a short delay to ensure death is synchronized
           setTimeout(() => {
             if (this.broadcastGameState) {
               this.broadcastGameState(true); // Force immediate update
             }
-          }, this.clientActionDebounceTime + 50); // Delayed update
-        } else {
-          // Even if the enemy isn't dead, still update all clients after a hit
-          // This keeps all clients updated with the enemy's current health
-          setTimeout(() => {
-            if (this.broadcastGameState) {
-              this.broadcastGameState(true); // Force update for any damage
-            }
-          }, this.clientActionDebounceTime + 50); // Delayed update
+          }, 100);
         }
-        
-        return resultData;
       } else {
-        console.warn(`NETWORK: Enemy with ID ${enemyId} not found. Available IDs: ${enemyManager.enemies.map(e => e.id).join(', ')}`);
-        // Send error back to client
-        this.sendToPlayer(playerId, {
-          type: 'enemyDamageError',
-          enemyId: enemyId,
-          error: 'Enemy not found'
-        });
-        return null;
+        console.warn(`Enemy with ID ${enemyId} not found`);
       }
     } catch (error) {
       console.error("Error applying enemy damage:", error);
-      return null;
-    }
-  }
-  
-  /**
-   * Apply window boarding action from client (host only)
-   * @param {Object} boardData - The window boarding data
-   * @param {string} playerId - The ID of the player who placed the board
-   * @returns {Object|null} Result data with window state, or null if failed
-   */
-  applyWindowBoarding(boardData, playerId) {
-    if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
-        !this.gameEngine.scene.room) {
-      console.warn("NETWORK: Cannot apply window boarding: not host or game scene not fully initialized");
-      return null;
-    }
-    
-    try {
-      const { windowIndex, boardsCount, boardHealths, timestamp } = boardData;
-      console.log(`NETWORK: Host applying window board action from ${playerId} for window ${windowIndex}`);
-      
-      // Validate window index
-      const room = this.gameEngine.scene.room;
-      
-      if (!room.windows || 
-          !Array.isArray(room.windows) || 
-          windowIndex < 0 || 
-          windowIndex >= room.windows.length) {
-        console.warn(`NETWORK: Invalid window index: ${windowIndex}`);
-        return null;
-      }
-      
-      const window = room.windows[windowIndex];
-      
-      if (!window) {
-        console.warn(`NETWORK: Window at index ${windowIndex} not found`);
-        return null;
-      }
-      
-      console.log(`NETWORK: Found window at index ${windowIndex}, current boards: ${window.boardsCount}, adding board...`);
-      
-      // Update the window state by adding a board
-      const boardsBeforeAdd = window.boardsCount;
-      const result = window.addBoard();
-      console.log(`NETWORK: Board add result: ${result ? 'success' : 'failed'}, new count: ${window.boardsCount}`);
-      
-      // Check if the board was actually added
-      if (result && window.boardsCount > boardsBeforeAdd) {
-        // Update board health values if provided
-        if (Array.isArray(boardHealths) && boardHealths.length > 0) {
-          // Copy health values (slice to match current board count)
-          window.boardHealths = [...boardHealths].slice(0, window.boardsCount);
-          console.log(`NETWORK: Updated board health values: ${window.boardHealths.join(', ')}`);
-        }
-        
-        // Create result data
-        const resultData = {
-          windowIndex: windowIndex,
-          boardsCount: window.boardsCount,
-          boardHealths: [...window.boardHealths],
-          isOpen: window.isOpen,
-          timestamp: timestamp || Date.now()
-        };
-        
-        // Force a game state update to all clients AFTER the debounce period
-        setTimeout(() => {
-          if (this.broadcastGameState) {
-            console.log("NETWORK: Broadcasting updated game state to all clients (after window boarding)");
-            this.broadcastGameState(true); // Force immediate update
-          }
-        }, this.clientActionDebounceTime + 50);
-        
-        // Send a specific window update event immediately
-        this.broadcastToAll({
-          type: 'windowUpdated',
-          ...resultData
-        });
-        
-        return resultData;
-      } else {
-        console.warn(`NETWORK: Failed to add board to window ${windowIndex}, current count: ${window.boardsCount}, max: ${window.maxBoards}`);
-        return null;
-      }
-    } catch (error) {
-      console.error("NETWORK: Error applying window boarding:", error);
-      return null;
-    }
-  }
-  
-  /**
-   * Apply window board removal action from client (host only)
-   * @param {Object} boardData - The window board removal data
-   * @param {string} playerId - The ID of the player who removed the board
-   */
-  applyWindowBoardRemoval(boardData, playerId) {
-    if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
-        !this.gameEngine.scene.room) {
-      console.warn("Cannot apply window board removal: not host or game scene not fully initialized");
-      return;
-    }
-    
-    try {
-      const { windowIndex, boardsCount, boardHealths } = boardData;
-      console.log(`Host applying window board removal from client ${playerId}: window ${windowIndex}, boards ${boardsCount}`);
-      
-      // Get the window by index
-      const room = this.gameEngine.scene.room;
-      const window = room.windows[windowIndex];
-      
-      if (window) {
-        // Update the window state by removing a board
-        window.removeBoard();
-        
-        // Force a game state update to all clients
-        setTimeout(() => {
-          if (this.broadcastGameState) {
-            this.broadcastGameState(true); // Force immediate update
-          }
-        }, 50);
-      } else {
-        console.warn(`Window with index ${windowIndex} not found`);
-      }
-    } catch (error) {
-      console.error("Error applying window board removal:", error);
-    }
-  }
-  
-  /**
-   * Apply window board damage action from client (host only)
-   * @param {Object} boardData - The window board damage data
-   * @param {string} playerId - The ID of the player or entity who damaged the board
-   */
-  applyWindowBoardDamage(boardData, playerId) {
-    if (!this.isHost || !this.gameEngine || !this.gameEngine.scene || 
-        !this.gameEngine.scene.room) {
-      console.warn("Cannot apply window board damage: not host or game scene not fully initialized");
-      return;
-    }
-    
-    try {
-      const { windowIndex, boardsCount, boardHealths, boardsRemoved } = boardData;
-      console.log(`Host applying window board damage from ${playerId}: window ${windowIndex}, boards ${boardsCount}`);
-      
-      // Get the window by index
-      const room = this.gameEngine.scene.room;
-      const window = room.windows[windowIndex];
-      
-      if (window) {
-        // Update the window state by syncing the health values
-        window.boardHealths = [...boardHealths];
-        
-        // If any boards were removed due to damage, remove them on the host side too
-        if (boardsRemoved && boardsRemoved > 0) {
-          for (let i = 0; i < boardsRemoved; i++) {
-            window.removeBoard();
-          }
-        }
-        
-        // Update board appearances
-        window.boardHealths.forEach((health, boardIndex) => {
-          if (window.updateBoardAppearance) {
-            window.updateBoardAppearance(boardIndex);
-          }
-        });
-        
-        // Force a game state update to all clients
-        setTimeout(() => {
-          if (this.broadcastGameState) {
-            this.broadcastGameState(true); // Force immediate update
-          }
-        }, 50);
-      } else {
-        console.warn(`Window with index ${windowIndex} not found`);
-      }
-    } catch (error) {
-      console.error("Error applying window board damage:", error);
     }
   }
   
@@ -1059,40 +677,6 @@ export class P2PNetwork {
   }
   
   /**
-   * Send data to a specific player
-   * @param {string} playerId - The ID of the player to send data to
-   * @param {Object} data - The data to send
-   * @returns {boolean} True if sent successfully, false otherwise
-   */
-  sendToPlayer(playerId, data) {
-    if (!this.isConnected) {
-      console.debug("Cannot send to player: Not connected");
-      return false;
-    }
-    
-    // Find the connection for this player
-    const conn = this.connections.find(c => c.peer === playerId);
-    
-    if (!conn) {
-      console.warn(`No connection found for player ${playerId}`);
-      return false;
-    }
-    
-    if (!conn.open) {
-      console.warn(`Connection to player ${playerId} is not open`);
-      return false;
-    }
-    
-    try {
-      conn.send(data);
-      return true;
-    } catch (err) {
-      console.error(`Error sending data to player ${playerId}:`, err);
-      return false;
-    }
-  }
-  
-  /**
    * Get the current game state
    * @returns {Object} The game state object
    */
@@ -1157,62 +741,22 @@ export class P2PNetwork {
       return [];
     }
     
-    const enemies = this.gameEngine.scene.room.enemyManager.enemies;
-    const isLocalPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
-    let hasLivingRemotePlayers = false;
-    
-    // Check if any remote players are alive - this is important for enemy targeting
-    if (isLocalPlayerDead && this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
-      this.gameEngine.networkManager.remotePlayers.forEach(player => {
-        if (!player.isDead) {
-          hasLivingRemotePlayers = true;
-        }
-      });
-      
-      // Log this information when host is dead but remote players are alive
-      if (hasLivingRemotePlayers) {
-        console.log(`Host player is dead but there are living remote players. Sending enemy states to clients.`);
-      }
-    }
-    
-    // If there are any enemies to report
-    if (enemies && enemies.length > 0) {
-      // Generate enemy states for all enemies
-      return enemies.map(enemy => {
-        // Ensure each enemy has a consistent unique ID without modifying the original
-        if (!enemy.id) {
-          console.warn("Enemy without ID found, this should not happen", enemy);
-          // Give it a permanent ID rather than re-generating each time
-          enemy.id = `enemy_${Math.random().toString(36).substring(2, 15)}_${Date.now().toString(36)}`;
-        }
-        
-        // If the local player is dead but there are living remote players,
-        // make sure enemies are still in a valid state for targeting
-        if (isLocalPlayerDead && hasLivingRemotePlayers && enemy.state === 'idle') {
-          // Force enemies to be in moving state so they'll target remote players
-          enemy.state = 'moving';
-        }
-        
-        return {
-          id: enemy.id,
-          position: {
-            x: enemy.instance.position.x,
-            y: enemy.instance.position.y,
-            z: enemy.instance.position.z
-          },
-          health: enemy.health,
-          type: enemy.type || 'standard', // Include zombie type for proper spawning
-          state: enemy.state || 'moving', // idle, attacking, dying, etc.
-          targetWindow: enemy.targetWindow ? {
-            index: this.gameEngine.scene.room.windows.indexOf(enemy.targetWindow)
-          } : null, // Include target window information
-          insideRoom: enemy.insideRoom || false
-        };
-      });
-    }
-    
-    // Return empty array if no enemies
-    return [];
+    // Example implementation
+    return this.gameEngine.scene.room.enemyManager.enemies.map(enemy => ({
+      id: enemy.id || (enemy.id = Math.random().toString(36).substring(2, 15)), // Ensure each enemy has a unique ID
+      position: {
+        x: enemy.instance.position.x,
+        y: enemy.instance.position.y,
+        z: enemy.instance.position.z
+      },
+      health: enemy.health,
+      type: enemy.type || 'standard', // Include zombie type for proper spawning
+      state: enemy.state || 'idle', // idle, attacking, dying, etc.
+      targetWindow: enemy.targetWindow ? {
+        index: this.gameEngine.scene.room.windows.indexOf(enemy.targetWindow)
+      } : null, // Include target window information
+      insideRoom: enemy.insideRoom || false
+    }));
   }
   
   /**
@@ -1237,44 +781,20 @@ export class P2PNetwork {
    */
   getWindowsState() {
     if (!this.gameEngine.scene || !this.gameEngine.scene.room) {
-      console.warn("Cannot get window states: scene or room not available");
       return [];
     }
     
-    const windows = this.gameEngine.scene.room.windows;
-    if (!windows || !Array.isArray(windows) || windows.length === 0) {
-      console.warn("No windows array found in room");
-      return [];
-    }
-    
-    console.log(`Getting state of ${windows.length} windows`);
-    
-    // Prepare window states
-    const windowStates = windows.map((window, index) => {
-      // Check if windowIndex is set, if not set it now
-      if (window.windowIndex === undefined) {
-        console.log(`Setting missing windowIndex ${index} on window before sending state`);
-        window.windowIndex = index;
-      }
-      
-      const state = {
-        windowIndex: window.windowIndex,
-        position: {
-          x: window.instance.position.x,
-          y: window.instance.position.y,
-          z: window.instance.position.z
-        },
-        boardsCount: window.boardsCount,
-        isOpen: window.isOpen,
-        health: window.boardHealths // Array of health values for each board
-      };
-      
-      console.log(`Window ${index} state: ${window.boardsCount} boards, isOpen=${window.isOpen}`);
-      
-      return state;
-    });
-    
-    return windowStates;
+    // Example implementation
+    return this.gameEngine.scene.room.windows.map(window => ({
+      position: {
+        x: window.instance.position.x,
+        y: window.instance.position.y,
+        z: window.instance.position.z
+      },
+      boardsCount: window.boardsCount,
+      isOpen: window.isOpen,
+      health: window.boardHealths // Array of health values for each board
+    }));
   }
   
   /**
@@ -1284,76 +804,37 @@ export class P2PNetwork {
   getGameStatus() {
     if (!this.gameEngine) return {};
     
-    // Determine if all players are dead by checking both local and remote players
-    const allPlayersDead = this.areAllPlayersDead();
-    
-    // Check if the local player is dead (separate from global game over)
-    const isLocalPlayerDead = this.gameEngine.isLocalPlayerDead || false;
-    
-    // Important: isGameOver should only be true when ALL players are dead
-    // isLocalPlayerDead tracks just the local player's death state
     return {
       isPaused: this.gameEngine.isPaused || false,
       isGameOver: this.gameEngine.isGameOver || false,
-      isLocalPlayerDead: isLocalPlayerDead,
-      allPlayersDead: allPlayersDead,
-      
-      // Add additional fields to help clients understand the game state
-      hasLivingRemotePlayers: this.hasLivingRemotePlayers(),
-      
-      // Include this timestamp to help debugging network state sync issues
-      statusTimestamp: Date.now()
+      allPlayersDead: this.areAllPlayersDead()
     };
   }
   
   /**
-   * Check if all players are dead (both local and remote)
+   * Check if all players are dead
    * @returns {boolean} True if all players are dead
    */
   areAllPlayersDead() {
-    // Check if the local player is dead using the Engine's tracking property
-    // This is more reliable than checking controls.isDead which might be in a different state
-    const localPlayerDead = this.gameEngine.isLocalPlayerDead || false;
+    // Check local player
+    const localPlayerDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
     
-    // Log local player state
-    console.log(`DEATH STATE CHECK: Local player is ${localPlayerDead ? 'dead' : 'alive'}`);
+    // If the local player (host) is alive, then not all players are dead
+    if (!localPlayerDead) return false;
     
-    // If local player is alive, not all players are dead - can return early
-    if (!localPlayerDead) {
-      return false;
+    // Check remote players
+    let allRemotePlayersDead = true;
+    
+    if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers.size > 0) {
+      this.gameEngine.networkManager.remotePlayers.forEach(player => {
+        if (!player.isDead) {
+          allRemotePlayersDead = false;
+        }
+      });
     }
     
-    // Local player is dead, now check remote players
-    return !this.hasLivingRemotePlayers();
-  }
-  
-  /**
-   * Check if any remote players are still alive
-   * @returns {boolean} True if any remote players are alive
-   */
-  hasLivingRemotePlayers() {
-    // If we don't have network manager or remote players, then no living remote players
-    if (!this.gameEngine || !this.gameEngine.networkManager || 
-        !this.gameEngine.networkManager.remotePlayers || 
-        this.gameEngine.networkManager.remotePlayers.size === 0) {
-      return false;
-    }
-    
-    // Check each remote player
-    let hasLivingPlayers = false;
-    let remotePlayerCount = this.gameEngine.networkManager.remotePlayers.size;
-    
-    this.gameEngine.networkManager.remotePlayers.forEach((player, playerId) => {
-      if (!player.isDead) {
-        hasLivingPlayers = true;
-        console.log(`DEATH STATE CHECK: Remote player ${playerId} is alive`);
-      } else {
-        console.log(`DEATH STATE CHECK: Remote player ${playerId} is dead`);
-      }
-    });
-    
-    console.log(`DEATH STATE CHECK: ${remotePlayerCount} remote players, any living remote players: ${hasLivingPlayers}`);
-    return hasLivingPlayers;
+    // If host is dead but at least one remote player is alive, return false
+    return allRemotePlayersDead;
   }
   
   /**
@@ -1408,17 +889,11 @@ export class P2PNetwork {
     
     // Only respawn if player is dead
     if (this.gameEngine.controls.isDead) {
-      // Use the comprehensive respawn method
-      if (typeof this.gameEngine.controls.respawn === 'function') {
-        this.gameEngine.controls.respawn();
-      } else {
-        // Fallback to basic reset if respawn method doesn't exist
-        console.warn("Respawn method not found, falling back to basic health reset");
-        this.gameEngine.controls.resetHealth();
-        this.gameEngine.controls.isDead = false;
-      }
+      // Reset player state
+      this.gameEngine.controls.resetHealth();
+      this.gameEngine.controls.isDead = false;
       
-      // Re-lock pointer to regain control
+      // Re-lock pointer
       document.body.requestPointerLock();
       
       // Hide game over screen if visible
@@ -1427,23 +902,12 @@ export class P2PNetwork {
         gameOverMenu.remove();
       }
       
-      // Hide spectator UI if visible
-      const spectatorOverlay = document.getElementById('spectator-overlay');
-      if (spectatorOverlay) {
-        spectatorOverlay.remove();
-      }
-      
       // Unpause game if it was paused
       if (this.gameEngine.isPaused) {
         this.gameEngine.resumeGame();
       }
       
-      // Reset gameEngine state flags
-      if (this.gameEngine.isLocalPlayerDead) {
-        this.gameEngine.isLocalPlayerDead = false;
-      }
-      
-      // Send an immediate position update to broadcast the new alive state
+      // Send an immediate position update to broadcast the new death state
       // This ensures that other clients update the visual state correctly
       this.sendPlayerPosition();
       
@@ -1460,8 +924,6 @@ export class P2PNetwork {
       setTimeout(sendAdditionalUpdates, 1000);
       
       console.log('Player respawned successfully');
-    } else {
-      console.log('Player is not dead, ignoring respawn command');
     }
   }
   
@@ -1501,123 +963,24 @@ export class P2PNetwork {
   }
   
   /**
-   * Send a player action to the host (client -> host)
+   * Send a player action (shooting, reloading, etc.)
    * @param {string} actionType - The type of action
-   * @param {Object} actionData - The action data
-   * @returns {string|null} The action ID if sent, null if error
+   * @param {Object} actionData - Additional data for the action
    */
   sendPlayerAction(actionType, actionData) {
-    console.log("NETWORK: *** SENDING PLAYER ACTION ***", actionType, actionData);
-    // Add a more visible console log with large stars at beginning and end
-    console.log("********************************************************************************");
-    console.log(`* NETWORK DEBUG: Sending action ${actionType} with data:`, actionData);
-    console.log("********************************************************************************");
+    if (!this.isConnected) return;
     
-    if (!this.isConnected) {
-      console.error("Cannot send player action: not connected (isConnected is false)");
-      return null;
-    }
+    const action = {
+      type: actionType,
+      data: actionData,
+      timestamp: Date.now()
+    };
     
-    try {
-      // Generate a unique action ID for tracking
-      const actionId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-      
-      // Create the message with a timestamp for debouncing
-      const message = {
-        type: 'playerAction',
-        actionType: actionType,
-        actionData: actionData,
-        timestamp: Date.now(),
-        actionId: actionId,
-        clientId: this.clientId
-      };
-      
-      // If we're the host, process locally
-      if (this.isHost) {
-        console.log("NETWORK: Host processing own action locally:", actionType);
-        this.handlePlayerAction(this.clientId, message);
-        return actionId;
-      }
-      
-      // Detailed connection debugging
-      console.log("NETWORK: Connection details:", {
-        peerExists: !!this.peer,
-        hostConnectionExists: !!this.hostConnection,
-        clientId: this.clientId, 
-        hostId: this.hostId,
-        connectionState: this.peer ? 'exists' : 'no peer connection',
-        hostConnectionState: this.hostConnection ? 'exists' : 'missing'
-      });
-      
-      // Send to host
-      if (this.peer && this.hostConnection) {
-        console.log(`NETWORK: Client sending action '${actionType}' to host`);
-        this.hostConnection.send(message);
-        return actionId;
-      } else {
-        console.error("No connection to host to send action - check if hostConnection is properly established");
-        return null;
-      }
-    } catch (error) {
-      console.error("Error sending player action:", error);
-      return null;
-    }
-  }
-  
-  /**
-   * Check if an action has been confirmed and retry if needed
-   * @param {string} actionId - The ID of the action to check
-   * @private
-   */
-  _checkActionConfirmation(actionId) {
-    const pendingAction = this._pendingActions[actionId];
-    
-    if (!pendingAction) {
-      // Action already confirmed or expired
-      return;
-    }
-    
-    // Check if we should retry
-    if (pendingAction.retries < this._maxActionRetries) {
-      pendingAction.retries++;
-      console.log(`NETWORK: Retrying action ${actionId} (attempt ${pendingAction.retries}/${this._maxActionRetries})`);
-      
-      // Retry sending the action
-      if (this.connections.length > 0) {
-        try {
-          // Send only to the host (first connection for clients)
-          const hostConn = this.connections[0];
-          hostConn.send({
-            type: 'playerAction',
-            action: pendingAction.action,
-            requiresAck: true,
-            playerId: this.clientId,
-            isRetry: true,
-            retryCount: pendingAction.retries
-          });
-          
-          // Check again after the retry interval
-          setTimeout(() => this._checkActionConfirmation(actionId), this._actionRetryInterval);
-        } catch (error) {
-          console.error("Error retrying player action:", error);
-        }
-      }
-    } else {
-      // Max retries reached, action failed
-      console.error(`NETWORK: Action ${actionId} failed after ${this._maxActionRetries} retries`);
-      delete this._pendingActions[actionId];
-    }
-  }
-  
-  /**
-   * Confirm that an action was received and processed
-   * @param {string} actionId - The ID of the action to confirm
-   */
-  confirmAction(actionId) {
-    if (this._pendingActions[actionId]) {
-      console.log(`NETWORK: Action ${actionId} confirmed`);
-      delete this._pendingActions[actionId];
-    }
+    this.broadcastToAll({
+      type: 'playerAction',
+      action: action,
+      playerId: this.isHost ? this.hostId : this.clientId
+    });
   }
   
   /**
@@ -1696,16 +1059,6 @@ export class P2PNetwork {
       }
     }
     
-    // Close the host connection specifically
-    if (this.hostConnection) {
-      try {
-        this.hostConnection.close();
-      } catch (err) {
-        console.error("Error closing host connection:", err);
-      }
-      this.hostConnection = null;
-    }
-    
     // Close the peer connection
     if (this.peer) {
       try {
@@ -1733,9 +1086,9 @@ export class P2PNetwork {
     // Reset state
     this.connections = [];
     this.isHost = false;
-    this.isConnected = false;
-    this.clientId = null;
     this.hostId = null;
+    this.clientId = null;
+    this.isConnected = false;
     
     console.log("P2P network disconnected");
     
@@ -1877,19 +1230,13 @@ export class P2PNetwork {
   
   /**
    * Broadcast the current game state to all connected clients
-   * @param {boolean} force - Whether to force a broadcast regardless of timing
+   * @param {boolean} force - Whether to force sending regardless of time since last update
    * @returns {boolean} True if broadcast was sent, false otherwise
    */
   broadcastGameState(force = false) {
     if (!this.isHost || !this.isConnected) return false;
     
     const now = Date.now();
-    
-    // Don't send updates if we recently received a client action (unless forced)
-    if (!force && now - this.lastClientActionTime < this.clientActionDebounceTime) {
-      console.log(`Skipping state broadcast during client action debounce period (${this.clientActionDebounceTime - (now - this.lastClientActionTime)}ms remaining)`);
-      return false;
-    }
     
     // Rate limit state updates unless forced
     if (!force && now - this.lastStateSent < this.stateUpdateInterval) {
@@ -1899,95 +1246,14 @@ export class P2PNetwork {
     // Get current game state
     const gameState = this.getGameState();
     
-    // Check if host player is dead but there are living remote players
-    const isHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
-    let hasLivingRemotePlayers = false;
-    
-    // Explicitly check the allPlayersDead status
-    const allPlayersDead = gameState.gameStatus?.allPlayersDead || false;
-    
-    // If host is dead, explicitly check for living remote players
-    if (isHostDead && this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
-      this.gameEngine.networkManager.remotePlayers.forEach(player => {
-        if (!player.isDead) {
-          hasLivingRemotePlayers = true;
-        }
-      });
-      
-      // When host is dead but remote players are alive, force updates to continue
-      if (hasLivingRemotePlayers) {
-        console.log("HOST IS DEAD BUT REMOTE PLAYERS ALIVE: FORCING GAME STATE UPDATES");
-        
-        // If we don't already have a more frequent update interval for dead host state,
-        // set one up to improve remote player experience
-        if (!this._deadHostUpdateInterval) {
-          // First clear any existing interval to avoid duplicates
-          if (this._stateUpdateInterval) {
-            clearInterval(this._stateUpdateInterval);
-            this._stateUpdateInterval = null;
-          }
-          
-          // Setup new faster update interval for dead host case
-          const fasterInterval = this.stateUpdateInterval / 2; // Twice as frequent
-          console.log(`Setting up faster state update interval: ${fasterInterval}ms for dead host case`);
-          
-          this._deadHostUpdateInterval = setInterval(() => {
-            try {
-              // Check if we should still be in this state
-              const stillHostDead = this.gameEngine.controls && this.gameEngine.controls.isDead;
-              let stillLivingRemotes = false;
-              
-              if (this.gameEngine.networkManager && this.gameEngine.networkManager.remotePlayers) {
-                this.gameEngine.networkManager.remotePlayers.forEach(player => {
-                  if (!player.isDead) {
-                    stillLivingRemotes = true;
-                  }
-                });
-              }
-              
-              if (stillHostDead && stillLivingRemotes) {
-                // Still valid state, continue with forced updates
-                this.broadcastGameState(true);
-              } else {
-                // State has changed, revert to normal interval
-                console.log("Host state or remote player state changed, reverting to normal interval");
-                this.resetUpdateIntervals();
-              }
-            } catch (error) {
-              console.error("Error in dead host game state update:", error);
-            }
-          }, fasterInterval);
-        }
-        
-        // Force all enemies to be in moving state to ensure they keep functioning
-        if (gameState.enemies && gameState.enemies.length > 0) {
-          gameState.enemies.forEach(enemy => {
-            if (enemy.state === 'idle') {
-              enemy.state = 'moving';
-            }
-            
-            // Mark enemies to continue updating
-            enemy._forceContinueUpdating = true;
-          });
-        }
-      } else if (this._deadHostUpdateInterval) {
-        // No more living remote players, clean up the special interval
-        this.resetUpdateIntervals();
-      }
-    } else if (this._deadHostUpdateInterval) {
-      // Host is no longer dead, clean up the special interval
-      this.resetUpdateIntervals();
-    }
-    
     // Log state updates if forced or significant changes
-    if (force || isHostDead || (now - this.lastStateSentLog > 5000)) {
-      console.log(`Game state broadcast [Force:${force}, HostDead:${isHostDead}, HasLivingRemotes:${hasLivingRemotePlayers}, AllPlayersDead:${allPlayersDead}]:`, {
+    if (force) {
+      console.log("Forced game state broadcast:", {
         playerCount: Object.keys(gameState.playerPositions || {}).length,
         enemyCount: (gameState.enemies || []).length,
         round: gameState.round?.round,
         windowCount: (gameState.windows || []).length
       });
-      this.lastStateSentLog = now;
     }
     
     // Send to all connected peers
@@ -2013,220 +1279,6 @@ export class P2PNetwork {
     
     return broadcastSuccess;
   }
-  
-  /**
-   * Reset update intervals to their default state
-   */
-  resetUpdateIntervals() {
-    // Clear any dead host special interval
-    if (this._deadHostUpdateInterval) {
-      clearInterval(this._deadHostUpdateInterval);
-      this._deadHostUpdateInterval = null;
-    }
-    
-    // Clear any regular interval
-    if (this._stateUpdateInterval) {
-      clearInterval(this._stateUpdateInterval);
-      this._stateUpdateInterval = null;
-    }
-    
-    // Setup regular interval if needed
-    if (this.isHost && this.isConnected) {
-      this._stateUpdateInterval = setInterval(() => {
-        try {
-          this.broadcastGameState();
-        } catch (error) {
-          console.error("Error in regular game state update:", error);
-        }
-      }, this.stateUpdateInterval);
-    }
-  }
-  
-  /**
-   * Handle enemy damage confirmation from host (client only)
-   * @param {Object} data - The damage confirmation data
-   */
-  handleEnemyDamageConfirmation(data) {
-    if (this.isHost || !this.gameEngine || !this.gameEngine.scene || 
-        !this.gameEngine.scene.room || !this.gameEngine.scene.room.enemyManager) {
-      return;
-    }
-    
-    try {
-      const { enemyId, health, isDead, timestamp } = data;
-      console.log(`Client received damage confirmation for enemy ${enemyId}: health=${health}, isDead=${isDead}, timestamp=${timestamp}`);
-      
-      // Find the enemy in the client's game
-      const enemyManager = this.gameEngine.scene.room.enemyManager;
-      
-      // Log info about available enemies to help with debugging
-      console.log(`Client has ${enemyManager.enemies.length} enemies with IDs: ${enemyManager.enemies.map(e => e.id).join(', ')}`);
-      
-      const enemy = enemyManager.enemies.find(e => e.id === enemyId);
-      
-      if (enemy) {
-        // Check if this is a stale update (happened before our most recent local action)
-        const now = Date.now();
-        if (enemy.lastDamageTime && (now - enemy.lastDamageTime < this.clientActionDebounceTime)) {
-          console.log(`Skipping enemy health update because local damage was applied recently (${now - enemy.lastDamageTime}ms ago)`);
-          return;
-        }
-        
-        // Update the enemy's health locally to match the host's value
-        const oldHealth = enemy.health;
-        enemy.health = health;
-        console.log(`Updated enemy ${enemyId} health from ${oldHealth} to ${health}`);
-        
-        // Update health bar if it exists
-        if (typeof enemy.updateHealthBar === 'function') {
-          enemy.updateHealthBar();
-        }
-        
-        // If the enemy is dead according to the host, kill it locally
-        if (isDead && enemy.health > 0) {
-          console.log(`Enemy ${enemyId} was killed by host, forcing death locally`);
-          enemy.health = 0;
-          if (typeof enemy.die === 'function') {
-            enemy.die();
-          }
-        }
-      } else {
-        console.warn(`Client could not find enemy with ID ${enemyId} to apply damage confirmation`);
-      }
-    } catch (error) {
-      console.error("Error handling enemy damage confirmation:", error);
-    }
-  }
-  
-  /**
-   * Handle game restart from host
-   * @param {Object} data - The restart data
-   */
-  handleGameRestart(data) {
-    console.log("Received game restart command from host");
-    
-    if (!this.gameEngine) {
-      console.error("Cannot handle game restart: game engine not available");
-      return;
-    }
-    
-    // Clear any game over or spectator UI
-    const gameOverScreen = document.getElementById('game-over-screen');
-    if (gameOverScreen) {
-      gameOverScreen.remove();
-    }
-    
-    const spectatorOverlay = document.getElementById('spectator-overlay');
-    if (spectatorOverlay) {
-      spectatorOverlay.remove();
-    }
-    
-    // Reset game state
-    console.log("Resetting game state from host command");
-    
-    // Reset flags
-    this.gameEngine.isGameOver = false;
-    this.gameEngine.isLocalPlayerDead = false;
-    
-    // Reset player
-    if (this.gameEngine.controls) {
-      console.log("Resetting player state");
-      
-      // Reset health and death status
-      this.gameEngine.controls.isDead = false;
-      this.gameEngine.controls.health = 100;
-      
-      // Reset position
-      if (typeof this.gameEngine.controls.resetPosition === 'function') {
-        this.gameEngine.controls.resetPosition();
-      }
-      
-      // Re-enable movement
-      this.gameEngine.controls.canMove = true;
-      
-      // Reset weapon if needed
-      if (this.gameEngine.weaponManager) {
-        this.gameEngine.weaponManager.reset();
-      }
-    }
-    
-    // Reset room and enemies if available
-    if (this.gameEngine.scene && this.gameEngine.scene.room) {
-      console.log("Resetting room state");
-      if (typeof this.gameEngine.scene.room.reset === 'function') {
-        this.gameEngine.scene.room.reset();
-      }
-    }
-    
-    // Force a position update to broadcast our alive state
-    this.sendPlayerPosition();
-    
-    // Show notification to player
-    this.showTemporaryMessage("Game Restarted", 3000);
-  }
-  
-  /**
-   * Show a temporary message to the player
-   * @param {string} message - The message to show
-   * @param {number} duration - How long to show the message (ms)
-   */
-  showTemporaryMessage(message, duration = 3000) {
-    // Remove any existing temporary messages
-    const existingMsg = document.getElementById('temporary-message');
-    if (existingMsg) {
-      existingMsg.remove();
-    }
-    
-    // Create message element
-    const msgElement = document.createElement('div');
-    msgElement.id = 'temporary-message';
-    msgElement.style.position = 'absolute';
-    msgElement.style.top = '100px';
-    msgElement.style.left = '50%';
-    msgElement.style.transform = 'translateX(-50%)';
-    msgElement.style.padding = '10px 20px';
-    msgElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-    msgElement.style.color = '#fff';
-    msgElement.style.borderRadius = '5px';
-    msgElement.style.zIndex = '1000';
-    msgElement.style.fontFamily = 'Arial, sans-serif';
-    msgElement.style.fontSize = '18px';
-    msgElement.style.textAlign = 'center';
-    msgElement.style.transition = 'opacity 0.5s ease';
-    
-    // Set message
-    msgElement.textContent = message;
-    
-    // Add to DOM
-    document.body.appendChild(msgElement);
-    
-    // Remove after duration
-    setTimeout(() => {
-      if (msgElement.parentNode) {
-        // Fade out
-        msgElement.style.opacity = '0';
-        
-        // Remove after fade
-        setTimeout(() => {
-          if (msgElement.parentNode) {
-            msgElement.parentNode.removeChild(msgElement);
-          }
-        }, 500);
-      }
-    }, duration);
-  }
-
-  broadcastPlayerUpdate(playerData) {
-    if (!this.isHost) return;
-
-    const update = {
-      type: 'playerUpdate',
-      playerId: this.peer.id,
-      data: playerData
-    };
-
-    this.broadcast(update);
-  }
 
   handlePlayerUpdate(data) {
     const { playerId, data: playerData } = data;
@@ -2236,9 +1288,38 @@ export class P2PNetwork {
     const remotePlayer = this.remotePlayers.get(playerId);
     if (!remotePlayer) return;
 
+    // Check if player just died
+    const wasAlive = !remotePlayer.isDead;
+    const isNowDead = playerData.isDead === true;
+    
     // Update remote player's death state
     if (playerData.isDead !== undefined) {
         remotePlayer.isDead = playerData.isDead;
+    }
+
+    // If player just died, trigger death animation
+    if (wasAlive && isNowDead) {
+        console.log(`Remote player ${playerId} died, triggering death animation`);
+        if (remotePlayer.model) {
+            // Stop any existing animations
+            if (remotePlayer.mixer) {
+                remotePlayer.mixer.stopAllAction();
+            }
+            
+            // Play death animation
+            if (remotePlayer.animations && remotePlayer.animations.die) {
+                const deathAction = remotePlayer.mixer.clipAction(remotePlayer.animations.die);
+                deathAction.reset();
+                deathAction.setLoop(THREE.LoopOnce);
+                deathAction.clampWhenFinished = true;
+                deathAction.play();
+            }
+            
+            // Disable movement controls
+            if (remotePlayer.controls) {
+                remotePlayer.controls.enabled = false;
+            }
+        }
     }
 
     // Update position and rotation
@@ -2263,24 +1344,5 @@ export class P2PNetwork {
 
     // Check if all players are dead
     this.checkAllPlayersDead();
-  }
-
-  checkAllPlayersDead() {
-    // Check local player
-    if (!this.gameEngine.controls.isDead) {
-        return false;
-    }
-
-    // Check all remote players
-    for (const [_, player] of this.remotePlayers) {
-        if (!player.isDead) {
-            return false;
-        }
-    }
-
-    // If we get here, all players are dead
-    console.log("All players are dead, showing game over screen");
-    this.gameEngine.showMultiplayerGameOverScreen();
-    return true;
   }
 } 

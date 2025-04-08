@@ -913,109 +913,140 @@ export class Engine {
    * Enable spectator mode to follow surviving players
    */
   enableSpectatorMode() {
-    if (!this.networkManager) return;
+    if (this.isSpectatorMode) return;
     
-    // Flag that we're in spectator mode
+    console.log("Enabling spectator mode");
     this.isSpectatorMode = true;
     
-    // Find a surviving player to spectate
-    let targetPlayerId = null;
+    // Find the first living remote player
     let targetPlayer = null;
-    
-    this.networkManager.remotePlayers.forEach((player, id) => {
-      if (!player.isDead) {
-        targetPlayerId = id;
-        targetPlayer = player;
-      }
-    });
-    
-    if (!targetPlayerId || !targetPlayer) {
-      console.warn("No surviving players to spectate");
-      return;
+    if (this.networkManager && this.networkManager.remotePlayers) {
+        for (const [_, player] of this.networkManager.remotePlayers) {
+            if (!player.isDead) {
+                targetPlayer = player;
+                break;
+            }
+        }
     }
     
-    console.log(`Spectating player: ${targetPlayerId}`);
-    
-    // Hide local player hands/weapons
-    if (this.controls && this.controls.modelContainer) {
-      this.controls.modelContainer.visible = false;
-    }
-    
-    // Hide UI elements that shouldn't be visible in spectator mode
-    this.hidePlayerUI();
-    
-    // Set up an interval to update the spectator camera position
-    this.spectatorInterval = setInterval(() => {
-      // Check if we should still be in spectator mode
-      if (!this.isSpectatorMode || !this.networkManager) {
+    // If we found a living player, snap camera to their position
+    if (targetPlayer) {
+        console.log("Found living player to spectate:", targetPlayer);
+        
+        // Store original camera position and rotation
+        this._originalCameraPosition = this.camera.position.clone();
+        this._originalCameraRotation = this.camera.rotation.clone();
+        
+        // Snap camera to target player's position and rotation
+        this.camera.position.copy(targetPlayer.position);
+        this.camera.rotation.copy(targetPlayer.rotation);
+        
+        // Create spectator UI overlay
+        const spectatorOverlay = document.createElement('div');
+        spectatorOverlay.id = 'spectator-overlay';
+        spectatorOverlay.style.position = 'absolute';
+        spectatorOverlay.style.top = '0';
+        spectatorOverlay.style.left = '0';
+        spectatorOverlay.style.width = '100%';
+        spectatorOverlay.style.height = '100%';
+        spectatorOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+        spectatorOverlay.style.zIndex = '1000';
+        spectatorOverlay.style.display = 'flex';
+        spectatorOverlay.style.flexDirection = 'column';
+        spectatorOverlay.style.alignItems = 'center';
+        spectatorOverlay.style.justifyContent = 'center';
+        spectatorOverlay.style.color = 'white';
+        spectatorOverlay.style.fontFamily = 'Arial, sans-serif';
+        
+        // Add spectator text
+        const spectatorText = document.createElement('div');
+        spectatorText.style.fontSize = '24px';
+        spectatorText.style.marginBottom = '20px';
+        spectatorText.textContent = 'SPECTATOR MODE';
+        spectatorOverlay.appendChild(spectatorText);
+        
+        // Add player name
+        const playerName = document.createElement('div');
+        playerName.style.fontSize = '18px';
+        playerName.style.marginBottom = '10px';
+        playerName.textContent = `Spectating: ${targetPlayer.name || 'Player'}`;
+        spectatorOverlay.appendChild(playerName);
+        
+        // Add controls info
+        const controlsInfo = document.createElement('div');
+        controlsInfo.style.fontSize = '14px';
+        controlsInfo.style.opacity = '0.7';
+        controlsInfo.textContent = 'Press ESC to exit spectator mode';
+        spectatorOverlay.appendChild(controlsInfo);
+        
+        document.body.appendChild(spectatorOverlay);
+        
+        // Update camera position every frame to follow the player
+        this._spectatorUpdate = () => {
+            if (targetPlayer && !targetPlayer.isDead) {
+                this.camera.position.copy(targetPlayer.position);
+                this.camera.rotation.copy(targetPlayer.rotation);
+            } else {
+                // Find a new living player to spectate
+                for (const [_, player] of this.networkManager.remotePlayers) {
+                    if (!player.isDead) {
+                        targetPlayer = player;
+                        playerName.textContent = `Spectating: ${player.name || 'Player'}`;
+                        break;
+                    }
+                }
+                
+                // If no living players found, exit spectator mode
+                if (!targetPlayer || targetPlayer.isDead) {
+                    this.disableSpectatorMode();
+                }
+            }
+        };
+        
+        // Add the update function to the animation loop
+        this.animationLoop.add(this._spectatorUpdate);
+    } else {
+        console.log("No living players to spectate");
         this.disableSpectatorMode();
-        return;
-      }
-      
-      // Update spectated player if needed (e.g. if current one died)
-      if (targetPlayer.isDead) {
-        // Find a new player to spectate
-        let foundNewTarget = false;
-        this.networkManager.remotePlayers.forEach((player, id) => {
-          if (!player.isDead) {
-            targetPlayerId = id;
-            targetPlayer = player;
-            foundNewTarget = true;
-            console.log(`Switching spectator view to player: ${targetPlayerId}`);
-          }
-        });
-        
-        if (!foundNewTarget) {
-          // No more players to spectate, all dead
-          console.log("All players are now dead");
-          this.disableSpectatorMode();
-          return;
-        }
-      }
-      
-      // Update camera position to match the spectated player's position
-      if (this.controls && this.controls.camera && targetPlayer.position) {
-        // Position camera at player position
-        this.controls.camera.position.set(
-          targetPlayer.position.x,
-          targetPlayer.position.y,
-          targetPlayer.position.z
-        );
-        
-        // Set camera rotation to match player's looking direction
-        if (targetPlayer.position.rotationY !== undefined) {
-          this.controls.camera.rotation.y = targetPlayer.position.rotationY;
-        }
-      }
-    }, 50); // Update 20 times per second
+    }
   }
   
   /**
    * Disable spectator mode
    */
   disableSpectatorMode() {
-    // Clear the spectator interval
-    if (this.spectatorInterval) {
-      clearInterval(this.spectatorInterval);
-      this.spectatorInterval = null;
+    if (!this.isSpectatorMode) return;
+    
+    console.log("Disabling spectator mode");
+    this.isSpectatorMode = false;
+    
+    // Remove the spectator update from the animation loop
+    if (this._spectatorUpdate) {
+        this.animationLoop.remove(this._spectatorUpdate);
+        this._spectatorUpdate = null;
     }
     
-    // Reset the flag
-    this.isSpectatorMode = false;
+    // Restore original camera position and rotation if they were stored
+    if (this._originalCameraPosition && this._originalCameraRotation) {
+        this.camera.position.copy(this._originalCameraPosition);
+        this.camera.rotation.copy(this._originalCameraRotation);
+        this._originalCameraPosition = null;
+        this._originalCameraRotation = null;
+    }
+    
+    // Remove the spectator overlay if it exists
+    const spectatorOverlay = document.getElementById('spectator-overlay');
+    if (spectatorOverlay) {
+        document.body.removeChild(spectatorOverlay);
+    }
     
     // Show local player hands/weapons again
     if (this.controls && this.controls.modelContainer) {
-      this.controls.modelContainer.visible = true;
+        this.controls.modelContainer.visible = true;
     }
     
-    // Show UI elements that were hidden
+    // Restore UI elements
     this.showPlayerUI();
-    
-    // Remove the spectator overlay if it exists
-    const spectateOverlay = document.getElementById('spectate-overlay');
-    if (spectateOverlay) {
-      document.body.removeChild(spectateOverlay);
-    }
   }
   
   /**
