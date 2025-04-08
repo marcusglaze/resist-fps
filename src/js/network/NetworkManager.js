@@ -143,6 +143,7 @@ export class NetworkManager {
     this.isHost = false;
     this.hostId = hostId;
     this.hostDeclaredGameOver = false; // Track if host considered game over
+    this.isSpectatorMode = false; // Ensure spectator mode is disabled initially
     
     console.log("Network settings after update:", {
       gameMode: this.gameMode,
@@ -183,8 +184,26 @@ export class NetworkManager {
       console.log("Starting the game as a client");
       this.gameEngine.startGame();
       
+      // Ensure player is alive and has full health when joining
+      if (this.gameEngine.controls) {
+        console.log("Resetting player state for new client join");
+        this.gameEngine.controls.respawn();
+        this.gameEngine.controls.isDead = false;
+        this.gameEngine.isLocalPlayerDead = false;
+        
+        // Enable temporary invincibility for 5 seconds
+        console.log("Enabling temporary invincibility for new client");
+        this.gameEngine.controls.enableTemporaryInvincibility(5000);
+      }
+      
       // Start position updates as soon as connected
       this.startPositionUpdates();
+      
+      // Make sure spectator overlay is removed if it exists
+      const spectatorOverlay = document.getElementById('spectator-overlay');
+      if (spectatorOverlay) {
+        spectatorOverlay.remove();
+      }
       
       this.updateConnectionStatus(`Connected to ${this.truncateId(hostId)}`);
     } catch (err) {
@@ -2015,8 +2034,8 @@ export class NetworkManager {
     
     // Handle game over state
     if (status.isGameOver !== undefined && status.isGameOver !== this.gameEngine.isGameOver) {
-      // Only show game over screen if all players are dead or if the local player is dead
-      if (status.isGameOver && (status.allPlayersDead || this.gameEngine.controls.isDead)) {
+      // Only show game over screen if all players are dead, including this client
+      if (status.isGameOver && status.allPlayersDead && this.gameEngine.controls.isDead) {
         // Show multiplayer game over screen with "waiting for host" message
         this.showMultiplayerGameOverScreen(status.allPlayersDead);
       } else if (this.gameEngine.isGameOver) {
@@ -2028,6 +2047,10 @@ export class NetworkManager {
         
         // Reset game state
         this.gameEngine.isGameOver = false;
+      } else if (status.isGameOver && this.gameEngine.controls.isDead) {
+        // Host considers game over and client is also dead
+        this.hostDeclaredGameOver = true;
+        this.showMultiplayerGameOverScreen(false);
       } else if (status.isGameOver) {
         // Host died but client is still alive - store this state but don't show screen yet
         console.log("Host died but client is still alive - continuing play");
@@ -2847,6 +2870,12 @@ export class NetworkManager {
    * Enter spectator mode when the local player has died
    */
   enterSpectatorMode() {
+    // Only enter spectator mode if the player is actually dead
+    if (!this.gameEngine || !this.gameEngine.controls || !this.gameEngine.controls.isDead) {
+      console.log("Not entering spectator mode - player is not dead");
+      return;
+    }
+    
     console.log("Entering spectator mode");
     
     // Mark spectator mode active
@@ -2859,6 +2888,27 @@ export class NetworkManager {
     if (this.isHost && this.network && this.network.broadcastGameState) {
       console.log("Host is dead but continuing game state broadcasts for clients");
       this.network.broadcastGameState(true); // Force immediate update
+    }
+  }
+  
+  /**
+   * Exit spectator mode (for respawn or mode correction)
+   */
+  exitSpectatorMode() {
+    console.log("Exiting spectator mode");
+    
+    // Remove the spectator flag
+    this.isSpectatorMode = false;
+    
+    // Remove the spectator UI
+    const spectatorOverlay = document.getElementById('spectator-overlay');
+    if (spectatorOverlay) {
+      spectatorOverlay.remove();
+    }
+    
+    // Restore player UI if needed
+    if (this.gameEngine) {
+      this.gameEngine.showPlayerUI();
     }
   }
   

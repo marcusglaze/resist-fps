@@ -119,6 +119,10 @@ export class PlayerControls {
     this.regenerationDelay = 3; // seconds before health starts regenerating
     this.isRegenerating = false;
     
+    // Invincibility
+    this.godMode = false;
+    this.invincibilityOverlay = null;
+    
     // Score system
     this.score = 0;
     this.scoreDisplay = null;
@@ -3952,6 +3956,102 @@ export class PlayerControls {
     // Update ammo display
     this.updateAmmoDisplay();
     
+    // Enable temporary invincibility for 3 seconds
+    this.enableTemporaryInvincibility(3000);
+    
     console.log("Player respawn complete");
+  }
+
+  /**
+   * Enable temporary invincibility with visual effect
+   * @param {number} duration - Duration in milliseconds
+   */
+  enableTemporaryInvincibility(duration = 5000) {
+    console.log(`Enabling temporary invincibility for ${duration}ms`);
+    
+    // Set god mode
+    this.godMode = true;
+    
+    // Create invincibility overlay if it doesn't exist
+    if (!this.invincibilityOverlay) {
+      const overlay = document.createElement('div');
+      overlay.className = 'invincibility-overlay';
+      overlay.style.position = 'absolute';
+      overlay.style.top = '0';
+      overlay.style.left = '0';
+      overlay.style.width = '100%';
+      overlay.style.height = '100%';
+      overlay.style.backgroundColor = 'rgba(0, 200, 255, 0.15)';
+      overlay.style.borderRadius = '50%'; 
+      overlay.style.boxShadow = '0 0 20px 10px rgba(0, 200, 255, 0.3) inset';
+      overlay.style.pointerEvents = 'none';
+      overlay.style.opacity = '0.5';
+      overlay.style.animation = 'pulse 2s infinite';
+      overlay.style.zIndex = '998'; // Below UI but above game
+      
+      // Add pulsing animation
+      const style = document.createElement('style');
+      style.textContent = `
+        @keyframes pulse {
+          0% { opacity: 0.2; }
+          50% { opacity: 0.4; }
+          100% { opacity: 0.2; }
+        }
+      `;
+      document.head.appendChild(style);
+      
+      document.body.appendChild(overlay);
+      this.invincibilityOverlay = overlay;
+    } else {
+      this.invincibilityOverlay.style.display = 'block';
+    }
+    
+    // Add a "shield" text indicator
+    const shieldIndicator = document.createElement('div');
+    shieldIndicator.textContent = 'SHIELD ACTIVE';
+    shieldIndicator.style.position = 'absolute';
+    shieldIndicator.style.top = '60px';
+    shieldIndicator.style.left = '50%';
+    shieldIndicator.style.transform = 'translateX(-50%)';
+    shieldIndicator.style.color = '#00ccff';
+    shieldIndicator.style.fontFamily = 'monospace, Arial';
+    shieldIndicator.style.fontSize = '18px';
+    shieldIndicator.style.fontWeight = 'bold';
+    shieldIndicator.style.textShadow = '0 0 5px #00ccff';
+    shieldIndicator.style.zIndex = '999';
+    shieldIndicator.style.pointerEvents = 'none';
+    shieldIndicator.id = 'shield-indicator';
+    document.body.appendChild(shieldIndicator);
+    
+    // Keep track of remaining time
+    let timeLeft = Math.floor(duration / 1000);
+    shieldIndicator.textContent = `SHIELD ACTIVE (${timeLeft}s)`;
+    
+    // Update countdown timer
+    const countdownInterval = setInterval(() => {
+      timeLeft--;
+      if (timeLeft > 0) {
+        shieldIndicator.textContent = `SHIELD ACTIVE (${timeLeft}s)`;
+      }
+    }, 1000);
+    
+    // Disable after duration
+    setTimeout(() => {
+      this.godMode = false;
+      if (this.invincibilityOverlay) {
+        this.invincibilityOverlay.style.display = 'none';
+      }
+      
+      // Remove shield indicator
+      const indicator = document.getElementById('shield-indicator');
+      if (indicator) {
+        indicator.remove();
+      }
+      
+      // Clear interval
+      clearInterval(countdownInterval);
+      
+      console.log("Temporary invincibility ended");
+    }, duration);
   }
 } 
