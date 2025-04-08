@@ -548,7 +548,7 @@ export class Engine {
         // Pause all enemies when all players are dead
         if (this.scene && this.scene.room && this.scene.room.enemyManager) {
           console.log("Pausing all enemies - all players are dead");
-          this.scene.room.enemyManager.pauseAllEnemies();
+          this.scene.room.enemyManager.setPaused(true);
         }
         
         // Show multiplayer game over screen
@@ -579,7 +579,7 @@ export class Engine {
       
       // Pause all enemies
       if (this.scene && this.scene.room && this.scene.room.enemyManager) {
-        this.scene.room.enemyManager.pauseAllEnemies();
+        this.scene.room.enemyManager.setPaused(true);
       }
       
       // Display game over UI
@@ -1396,19 +1396,28 @@ export class Engine {
     // Reset game state
     this.resetGameState();
     
-    // Reset player
+    // Reset player first (100 HP, 0 score, pistol start)
     if (this.controls) {
-      this.controls.reset();
+      // Use the respawn method which properly resets all player stats
+      this.controls.respawn();
     }
     
-    // Respawn player
+    // Fully reset room (no boards on windows)
     if (this.scene && this.scene.room) {
-      // Reset room and enemy manager
-      this.scene.room.reset();
+      // Use resetRoom which handles windows and other room elements
+      this.scene.room.resetRoom();
       
-      // Respawn player at starting position
-      if (this.controls) {
-        this.controls.respawn();
+      // Make sure enemy manager is set up for a new round 1
+      if (this.scene.room.enemyManager) {
+        // The most important part is to trigger the enemy spawning system
+        this.scene.room.enemyManager.spawnEnabled = true;
+        
+        // Force start round 1 after a short delay (let the player get ready)
+        setTimeout(() => {
+          if (this.scene.room.enemyManager.currentRound === 0) {
+            this.scene.room.enemyManager.startNextRound();
+          }
+        }, 2000);
       }
     }
     
@@ -1421,6 +1430,9 @@ export class Engine {
     if (this.networkManager && this.networkManager.isConnected) {
       this.networkManager.notifyGameRestart();
     }
+    
+    // Make sure player UI is visible
+    this.showPlayerUI();
   }
   
   /**
@@ -2682,18 +2694,37 @@ export class Engine {
   }
 
   /**
-   * Reset all game state when returning to the menu
+   * Reset all game state when returning to the menu or restarting
    */
   resetGameState() {
-    console.log("Resetting game state flags");
+    console.log("Resetting all game state");
+    
+    // Reset game flags
     this.isGameOver = false;
     this.isLocalPlayerDead = false;
     this.isPaused = false;
     
     // Reset scene objects
     if (this.scene && this.scene.room) {
-      this.scene.room.reset();
+      // Reset room first (this also resets windows)
+      this.scene.room.resetRoom();
+      
+      // Make sure enemy manager starts a new round when game begins
+      if (this.scene.room.enemyManager) {
+        this.scene.room.enemyManager.clearEnemies();
+        this.scene.room.enemyManager.currentRound = 0;
+        this.scene.room.enemyManager.zombiesRemaining = 0;
+        this.scene.room.enemyManager.zombiesSpawned = 0;
+        this.scene.room.enemyManager.roundActive = false;
+        this.scene.room.enemyManager.spawnEnabled = true;
+        this.scene.room.enemyManager.setPaused(false);
+        this.scene.room.enemyManager.killCount = 0;
+        console.log("Enemy manager fully reset - will start at round 1");
+      }
     }
+    
+    // Show notification for restart
+    this.showNotification("Game Reset", 2000);
   }
 
   /**

@@ -1091,7 +1091,7 @@ export class PlayerControls {
                 } else {
                   enemy.clientTakeDamage(bodyDamage, false, networkManager);
                   console.log("SHOOTING: Applied body shot damage:", bodyDamage);
-                  this.displayDamageNumber(this.hitResult.point, bodyDamage, false);
+                  this.showDamageNumber(this.hitResult.point, bodyDamage, false);
                 }
               }
             } else {
